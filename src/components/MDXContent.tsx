@@ -1,23 +1,34 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { createRoot } from "react-dom/client";
 import hljs from "highlight.js";
 import "highlight.js/styles/github-dark.css";
+import PythonRunner from "./PythonRunner";
 
 export default function MDXContent({ content }: { content: string }) {
   const rootRef = useRef<HTMLDivElement>(null);
 
-  // 语法高亮 + 语言标签
+  // 语法高亮
   useEffect(() => {
     if (!rootRef.current) return;
     rootRef.current.querySelectorAll("pre code").forEach((block) => {
       hljs.highlightElement(block as HTMLElement);
+    });
+  }, [content]);
 
-      // 添加语言标签
-      const pre = block.parentElement;
-      if (!pre || pre.querySelector(".lang-label")) return;
-      const lang = (block.className.match(/language-(\w+)/) || [])[1] || "";
-      if (lang) {
+  // 复制按钮 + Python 运行按钮
+  useEffect(() => {
+    if (!rootRef.current) return;
+    const root = rootRef.current;
+
+    root.querySelectorAll("pre").forEach((pre) => {
+      const code = pre.querySelector("code");
+      const lang = (code?.className.match(/language-(\w+)/) || [])[1] || "";
+      const isPython = ["python", "py"].includes(lang);
+
+      // ── 语言标签 ──
+      if (lang && !pre.querySelector(".lang-label")) {
         const label = document.createElement("span");
         label.className = "lang-label";
         label.textContent = lang;
@@ -35,31 +46,22 @@ export default function MDXContent({ content }: { content: string }) {
         pre.style.position = "relative";
         pre.appendChild(label);
       }
-    });
-  }, [content]);
 
-  // 复制按钮
-  useEffect(() => {
-    if (!rootRef.current) return;
-    const root = rootRef.current;
-
-    const addCopyButtons = () => {
-      root.querySelectorAll("pre").forEach((pre) => {
-        if (pre.querySelector(".copy-btn")) return;
-
+      // ── 运行按钮 (仅 Python) ──
+      if (isPython && !pre.querySelector(".run-btn")) {
         const btn = document.createElement("button");
-        btn.className = "copy-btn";
-        btn.textContent = "复制";
+        btn.className = "run-btn";
+        btn.textContent = "▶ 运行";
         Object.assign(btn.style, {
           position: "absolute",
           top: "8px",
-          right: "8px",
+          right: "64px",
           padding: "4px 10px",
           fontSize: "12px",
           borderRadius: "6px",
-          border: "1px solid rgba(255,255,255,0.1)",
-          background: "rgba(255,255,255,0.08)",
-          color: "#999",
+          border: "1px solid rgba(35,134,54,0.3)",
+          background: "rgba(35,134,54,0.15)",
+          color: "#4ade80",
           cursor: "pointer",
           opacity: "0",
           transition: "opacity 0.2s",
@@ -69,22 +71,74 @@ export default function MDXContent({ content }: { content: string }) {
         pre.appendChild(btn);
 
         pre.addEventListener("mouseenter", () => { btn.style.opacity = "1"; });
-        pre.addEventListener("mouseleave", () => { btn.style.opacity = "0"; });
+        pre.addEventListener("mouseleave", () => {
+          btn.style.opacity = "0";
+        });
 
         btn.addEventListener("click", async () => {
-          const code = pre.querySelector("code")?.textContent || "";
-          await navigator.clipboard.writeText(code);
-          btn.textContent = "已复制!";
-          btn.style.color = "#4ade80";
-          setTimeout(() => {
-            btn.textContent = "复制";
-            btn.style.color = "#999";
-          }, 2000);
-        });
-      });
-    };
+          const codeText = code?.textContent || "";
 
-    addCopyButtons();
+          // Check if runner panel already exists
+          const existing = pre.nextElementSibling;
+          if (existing && existing.classList.contains("python-runner-wrap")) {
+            existing.remove();
+            btn.textContent = "▶ 运行";
+            return;
+          }
+
+          btn.textContent = "运行中...";
+
+          // Create container and mount PythonRunner
+          const container = document.createElement("div");
+          container.className = "python-runner-wrap";
+          pre.parentNode?.insertBefore(container, pre.nextSibling);
+
+          const rootEl = createRoot(container);
+          rootEl.render(
+            <PythonRunner code={codeText} language="python" />
+          );
+
+          btn.textContent = "✕ 关闭";
+        });
+      }
+
+      // ── 复制按钮 (已有逻辑) ──
+      if (pre.querySelector(".copy-btn")) return;
+
+      const copyBtn = document.createElement("button");
+      copyBtn.className = "copy-btn";
+      copyBtn.textContent = "复制";
+      Object.assign(copyBtn.style, {
+        position: "absolute",
+        top: "8px",
+        right: "8px",
+        padding: "4px 10px",
+        fontSize: "12px",
+        borderRadius: "6px",
+        border: "1px solid rgba(255,255,255,0.1)",
+        background: "rgba(255,255,255,0.08)",
+        color: "#999",
+        cursor: "pointer",
+        opacity: "0",
+        transition: "opacity 0.2s",
+      });
+
+      pre.appendChild(copyBtn);
+
+      pre.addEventListener("mouseenter", () => { copyBtn.style.opacity = "1"; });
+      pre.addEventListener("mouseleave", () => { copyBtn.style.opacity = "0"; });
+
+      copyBtn.addEventListener("click", async () => {
+        const txt = pre.querySelector("code")?.textContent || "";
+        await navigator.clipboard.writeText(txt);
+        copyBtn.textContent = "已复制!";
+        copyBtn.style.color = "#4ade80";
+        setTimeout(() => {
+          copyBtn.textContent = "复制";
+          copyBtn.style.color = "#999";
+        }, 2000);
+      });
+    });
   }, [content]);
 
   return (
