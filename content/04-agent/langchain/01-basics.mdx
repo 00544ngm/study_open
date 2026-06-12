@@ -1,0 +1,91 @@
+---
+title: LangChain 基础
+order: 1
+difficulty: beginner
+estimated_time: 25min
+tags: [LangChain, Agent]
+---
+
+## 入门
+
+```python
+from langchain_openai import ChatOpenAI
+from langchain.schema import SystemMessage, HumanMessage
+
+llm = ChatOpenAI(model="gpt-4o")
+
+response = llm.invoke([
+    SystemMessage(content="你是一个 AI Agent 专家"),
+    HumanMessage(content="什么是 LangChain？")
+])
+print(response.content)
+```
+
+## 核心
+
+### Prompt 模板
+
+```python
+from langchain.prompts import ChatPromptTemplate
+from langchain.schema import SystemMessage, HumanMessage
+
+prompt = ChatPromptTemplate.from_messages([
+    ("system", "你是一个 {role} 专家。请用 {language} 回答。"),
+    ("human", "{question}")
+])
+
+chain = prompt | llm
+result = chain.invoke({
+    "role": "AI Agent",
+    "language": "中文",
+    "question": "什么是 RAG？"
+})
+```
+
+### 工具集成
+
+```python
+from langchain.tools import tool
+
+@tool
+def search_web(query: str) -> str:
+    """搜索互联网获取最新信息"""
+    return f"搜索结果: {query}"
+
+@tool
+def calculate(expression: str) -> str:
+    """执行数学计算"""
+    return str(eval(expression))
+
+# 绑定工具到 LLM
+llm_with_tools = llm.bind_tools([search_web, calculate])
+```
+
+## 进阶
+
+```python
+from langchain.agents import create_tool_calling_agent, AgentExecutor
+from langchain.memory import ConversationBufferMemory
+
+memory = ConversationBufferMemory(
+    memory_key="chat_history",
+    return_messages=True
+)
+
+agent = create_tool_calling_agent(llm, [search_web, calculate], prompt)
+agent_executor = AgentExecutor(
+    agent=agent,
+    tools=[search_web, calculate],
+    memory=memory,
+    verbose=True
+)
+
+result = await agent_executor.ainvoke({
+    "input": "搜索最近的 AI 新闻并总结"
+})
+```
+
+## 练习
+
+1. 创建一个 LangChain Agent，包含搜索和计算工具
+2. 为 Agent 添加对话记忆功能

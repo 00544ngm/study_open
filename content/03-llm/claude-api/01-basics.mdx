@@ -1,0 +1,72 @@
+---
+title: Claude API 基础
+order: 1
+difficulty: beginner
+estimated_time: 15min
+tags: [Claude, LLM]
+---
+
+## 入门
+
+```python
+from anthropic import AsyncAnthropic
+
+client = AsyncAnthropic(api_key="sk-ant-...")
+
+response = await client.messages.create(
+    model="claude-sonnet-4-20250514",
+    max_tokens=1024,
+    system="你是 AI Agent 开发助手。",
+    messages=[
+        {"role": "user", "content": "什么是 MCP 协议？"}
+    ]
+)
+print(response.content[0].text)
+```
+
+## 核心
+
+### Claude 的 Tool Use
+
+```python
+# Claude 的工具调用
+response = await client.messages.create(
+    model="claude-sonnet-4-20250514",
+    max_tokens=1024,
+    system="你是一个有帮助的助手。",
+    messages=[{"role": "user", "content": "北京的天气怎么样？"}],
+    tools=[{
+        "name": "get_weather",
+        "description": "获取城市天气",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "city": {"type": "string"}
+            },
+            "required": ["city"]
+        }
+    }]
+)
+
+# 处理 Claude 的工具调用
+for block in response.content:
+    if block.type == "tool_use":
+        result = await execute_tool(block.name, block.input)
+        # 返回工具结果
+        tool_result = await client.messages.create(
+            model="claude-sonnet-4-20250514",
+            messages=[
+                {"role": "user", "content": "北京的天气怎么样？"},
+                {"role": "assistant", "content": response.content},
+                {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": block.id, "content": str(result)}
+                ]}
+            ],
+            tools=[...]
+        )
+```
+
+## 练习
+
+1. 对比 Claude 和 OpenAI 在 Tool Calling 上的 API 差异
+2. 实现一个统一接口，同时支持 Claude 和 OpenAI

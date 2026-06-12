@@ -1,0 +1,88 @@
+---
+title: Browser Use 高级与 Agent 集成
+order: 2
+difficulty: advanced
+estimated_time: 30min
+tags: [Browser Use, Agent, 自动化, 爬虫]
+---
+
+## 自定义动作
+
+```python
+from browser_use import Agent, Action
+
+class CustomAction(Action):
+    """自定义浏览器动作"""
+    name = "extract_table"
+
+    async def execute(self, browser, page):
+        table = await page.evaluate("""
+            () => {
+                const rows = document.querySelectorAll('table tr');
+                return Array.from(rows).map(row =>
+                    Array.from(row.querySelectorAll('td, th')).map(cell => cell.textContent)
+                );
+            }
+        """)
+        return table
+
+agent = Agent(
+    task="爬取表格数据",
+    actions=[CustomAction],
+)
+```
+
+## 与 PydanticAI 集成
+
+```python
+from pydantic_ai import Agent as PydanticAgent, RunContext
+from browser_use import Agent as BrowserAgent
+
+main_agent = PydanticAgent("openai:gpt-4o")
+
+@main_agent.tool
+async def scrape_with_browser(ctx: RunContext[dict], url: str, task: str) -> str:
+    """使用浏览器访问网页并执行指定任务"""
+    browser_agent = BrowserAgent(
+        task=f"访问 {url}，{task}",
+        headless=True,
+    )
+    result = await browser_agent.run()
+    return str(result)
+
+# 现在 Agent 可以自主决定何时用浏览器
+result = main_agent.run_sync("帮我查一下今天的 AI 新闻头条")
+print(result.data)
+```
+
+## 登录态管理
+
+```python
+# 先手动登录一次保存状态
+agent = Agent(task="登录到 admin 面板")
+await agent.run()
+await agent.save_state("auth.json")
+
+# 后续直接加载
+agent = Agent(
+    task="从 admin 面板导出数据",
+    load_state="auth.json",
+)
+```
+
+## 与 Playwright 对比
+
+| 特性 | Playwright | Browser Use |
+|------|------------|-------------|
+| 控制方式 | 代码指令 | AI 自然语言 |
+| 灵活性 | 精确控制 | 智能决策 |
+| 容错 | 需手动处理 | 自动重试修复 |
+| 适合场景 | 稳定页面 | 动态、复杂页面 |
+| 学习成本 | 需 API 知识 | 自然语言描述 |
+
+| 场景 | 推荐 |
+|------|------|
+| 固定流程采集 | Playwright |
+| 动态变化的页面 | Browser Use |
+| Agent 集成 | Browser Use |
+| 需要精确控制 | Playwright |

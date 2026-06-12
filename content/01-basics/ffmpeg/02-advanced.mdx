@@ -1,0 +1,163 @@
+---
+title: FFmpeg 进阶与 AI 集成
+order: 2
+difficulty: intermediate
+estimated_time: 25min
+tags: [FFmpeg, 音视频, AI, Python]
+---
+
+## 滤镜系统
+
+FFmpeg 的滤镜（filter）是核心功能，支持链式组合：
+
+```bash
+# 添加文字水印
+ffmpeg -i input.mp4 -vf "drawtext=text='AI Agent':fontsize=24:fontcolor=white:x=10:y=10" output.mp4
+
+# 画中画
+ffmpeg -i main.mp4 -i overlay.mp4 -filter_complex \
+  "[1:v]scale=320:240[over];[0:v][over]overlay=W-w-10:H-h-10" output.mp4
+
+# 模糊人脸
+ffmpeg -i input.mp4 -vf "geq=lum='lum(X,Y)':cb='cb(X,Y)':cr='cr(X,Y)',boxblur=8:4" output.mp4
+```
+
+## 音频处理
+
+```bash
+# 调整音量（2 倍）
+ffmpeg -i input.mp3 -af "volume=2.0" output.mp3
+
+# 降噪
+ffmpeg -i noisy.wav -af "anlmdn" clean.wav
+
+# 提取单声道
+ffmpeg -i stereo.mp3 -af "pan=mono|c0=FR" mono.mp3
+
+# 变速不变调
+ffmpeg -i input.mp3 -af "atempo=1.5" output.mp3
+```
+
+## 硬件加速
+
+使用 GPU 大幅提升编码速度：
+
+```bash
+# NVIDIA CUDA
+ffmpeg -i input.mp4 -c:v h264_nvenc -preset p4 output.mp4
+
+# Apple Silicon
+ffmpeg -i input.mp4 -c:v h264_videotoolbox output.mp4
+
+# Intel QSV
+ffmpeg -i input.mp4 -c:v h264_qsv output.mp4
+```
+
+## Python 集成
+
+在 Python 中调用 FFmpeg 处理媒体：
+
+```python
+import subprocess
+import json
+
+def get_media_info(filepath: str) -> dict:
+    """获取媒体文件元信息"""
+    result = subprocess.run(
+        [
+            "ffprobe", "-v", "quiet",
+            "-print_format", "json",
+            "-show_format", "-show_streams",
+            filepath,
+        ],
+        capture_output=True, text=True,
+    )
+    return json.loads(result.stdout)
+
+def extract_audio(video_path: str, audio_path: str, format: str = "mp3"):
+    """从视频中提取音频"""
+    subprocess.run([
+        "ffmpeg", "-i", video_path,
+        "-vn", "-acodec", "libmp3lame" if format == "mp3" else "aac",
+        audio_path,
+    ], check=True)
+
+def convert_for_whisper(input_path: str, output_path: str):
+    """转为 Whisper 最佳输入格式（16kHz 单声道 WAV）"""
+    subprocess.run([
+        "ffmpeg", "-i", input_path,
+        "-ar", "16000",      # 16kHz 采样率
+        "-ac", "1",           # 单声道
+        "-c:a", "pcm_s16le",  # 16-bit PCM
+        output_path,
+    ], check=True)
+
+# 用法
+info = get_media_info("speech.mp4")
+print(f"时长: {info['format']['duration']}s")
+convert_for_whisper("speech.mp4", "speech.wav")
+```
+
+## AI 场景实战
+
+### 多模态输入预处理
+
+```python
+import subprocess
+from pathlib import Path
+
+def prepare_video_for_llm(video_path: str, output_dir: str) -> dict:
+    """为 LLM 多模态处理准备视频"""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. 提取音频供 Whisper 转写
+    audio_path = output_dir / "audio.wav"
+    subprocess.run([
+        "ffmpeg", "-i", video_path,
+        "-ar", "16000", "-ac", "1",
+        str(audio_path),
+    ], check=True)
+
+    # 2. 提取关键帧供视觉模型分析
+    frames_dir = output_dir / "frames"
+    frames_dir.mkdir(exist_ok=True)
+    subprocess.run([
+        "ffmpeg", "-i", video_path,
+        "-vf", "fps=1",  # 每秒一帧
+        "-q:v", "2",
+        str(frames_dir / "frame_%04d.jpg"),
+    ], check=True)
+
+    # 3. 压缩预览版本
+    preview_path = output_dir / "preview.mp4"
+    subprocess.run([
+        "ffmpeg", "-i", video_path,
+        "-vf", "scale=640:-1",
+        "-c:v", "libx264", "-crf", "28",
+        str(preview_path),
+    ], check=True)
+
+    return {
+        "audio": str(audio_path),
+        "frames": str(frames_dir),
+        "preview": str(preview_path),
+    }
+```
+
+### 实时推流
+
+```bash
+# RTMP 推流
+ffmpeg -re -i input.mp4 -c copy -f flv rtmp://live.twitch.tv/app/key
+
+# 桌面录制
+ffmpeg -f gdigrab -i desktop -c:v libx264 output.mp4
+```
+
+| 场景 | 常用 FFmpeg 命令 |
+|------|-----------------|
+| Whisper 输入预处理 | `-ar 16000 -ac 1 -c:a pcm_s16le` |
+| 视觉模型帧提取 | `-vf fps=1 -q:v 2` |
+| 视频压缩后传输 | `-vf scale=640:-1 -crf 28` |
+| 音频降噪 | `-af anlmdn` |

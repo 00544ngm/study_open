@@ -1,0 +1,119 @@
+---
+title: 异步编程
+order: 7
+difficulty: advanced
+estimated_time: 30min
+tags: [Python, 进阶, 核心]
+---
+
+## 入门
+
+```python
+import asyncio
+
+async def say_hello():
+    print("Hello")
+    await asyncio.sleep(1)
+    print("World")
+
+asyncio.run(say_hello())
+```
+
+## 核心
+
+### Agent 开发中异步的核心地位
+
+Agent 需要同时处理多个 LLM 调用、工具调用、网络请求，异步是必须掌握的技能。
+
+```python
+import asyncio
+from typing import List, Dict, Any
+
+# 并发调用多个 LLM
+async def call_llm(prompt: str) -> str:
+    await asyncio.sleep(1)  # 模拟网络延迟
+    return f"回复: {prompt}"
+
+async def batch_process(prompts: List[str]) -> List[str]:
+    tasks = [call_llm(p) for p in prompts]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    return [
+        r if not isinstance(r, Exception) else f"错误: {r}"
+        for r in results
+    ]
+
+# 带超时的异步调用
+async def call_with_timeout(prompt: str, timeout: float = 5.0) -> str:
+    try:
+        result = await asyncio.wait_for(
+            call_llm(prompt),
+            timeout=timeout
+        )
+        return result
+    except asyncio.TimeoutError:
+        return "请求超时"
+
+# 异步生成器（流式处理）
+async def stream_llm(prompt: str):
+    tokens = ["I", "am", "an", "AI", "assistant"]
+    for token in tokens:
+        await asyncio.sleep(0.1)
+        yield token
+
+async def consume_stream():
+    async for token in stream_llm("hello"):
+        print(token, end=" ", flush=True)
+```
+
+## 进阶
+
+### 完整的异步 Agent 框架示例
+
+```python
+class AsyncAgent:
+    def __init__(self):
+        self.semaphore = asyncio.Semaphore(3)  # 并发控制
+        self.queue: asyncio.Queue = asyncio.Queue()
+
+    async def call_llm(self, prompt: str) -> str:
+        async with self.semaphore:  # 最多 3 个并发
+            await asyncio.sleep(1)
+            return f"结果: {prompt}"
+
+    async def process_batch(self, prompts: List[str]) -> List[str]:
+        return await asyncio.gather(*[
+            self.call_llm(p) for p in prompts
+        ])
+
+    async def producer_consumer(self):
+        """生产者-消费者模式"""
+        async def producer():
+            for i in range(10):
+                await self.queue.put(f"任务 {i}")
+                await asyncio.sleep(0.1)
+
+        async def consumer():
+            while True:
+                task = await self.queue.get()
+                result = await self.call_llm(task)
+                print(f"完成: {result}")
+                self.queue.task_done()
+
+        # 并发运行生产者和消费者
+        await asyncio.gather(
+            producer(),
+            consumer(),
+        )
+
+# 运行
+agent = AsyncAgent()
+results = asyncio.run(agent.process_batch([
+    "任务1", "任务2", "任务3"
+]))
+```
+
+## 练习
+
+1. 用 asyncio.Queue 实现一个任务调度器，支持优先级和并发限制
+2. 实现一个可取消的 Agent 任务（使用 asyncio.Task.cancel()）
+3. 用 asyncio.Semaphore 控制对某个 API 的并发请求数（比如同时最多 5 个请求）

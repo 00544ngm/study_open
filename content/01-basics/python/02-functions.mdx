@@ -1,0 +1,95 @@
+---
+title: 函数
+order: 2
+difficulty: beginner
+estimated_time: 20min
+tags: [Python, 基础]
+---
+
+## 入门
+
+```python
+def greet(name: str) -> str:
+    return f"Hello, {name}!"
+```
+
+## 核心
+
+### 函数作为一等公民
+
+在 Agent 开发中，函数经常被作为参数传递：
+
+```python
+from typing import Callable
+
+# 工具函数定义
+def search_web(query: str) -> str:
+    return f"搜索结果: {query}"
+
+def calculate(expr: str) -> str:
+    return f"计算结果: {eval(expr)}"
+
+# Agent 工具注册
+ToolFunction = Callable[[str], str]
+
+tools: dict[str, ToolFunction] = {
+    "search": search_web,
+    "calculate": calculate,
+}
+
+# 动态调用
+def call_tool(name: str, arg: str) -> str:
+    if name in tools:
+        return tools[name](arg)
+    return f"未知工具: {name}"
+```
+
+### 装饰器（Agent 开发中非常重要）
+
+```python
+import functools
+import time
+
+def log_execution(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        print(f"调用: {func.__name__}")
+        start = time.time()
+        result = func(*args, **kwargs)
+        print(f"耗时: {time.time() - start:.2f}s")
+        return result
+    return wrapper
+
+@log_execution
+def call_llm(prompt: str) -> str:
+    # 模拟 LLM 调用
+    time.sleep(1)
+    return "response"
+
+call_llm("Hello")  # 自动记录日志
+```
+
+## 进阶
+
+### 异步函数（Agent 开发的核心）
+
+```python
+import asyncio
+from typing import List
+
+async def call_llm_async(prompt: str) -> str:
+    await asyncio.sleep(1)  # 模拟 API 调用
+    return f"Response to: {prompt}"
+
+async def parallel_calls(prompts: List[str]) -> List[str]:
+    tasks = [call_llm_async(p) for p in prompts]
+    return await asyncio.gather(*tasks)
+
+# 使用
+results = asyncio.run(parallel_calls(["Hi", "Hello", "Hey"]))
+```
+
+## 练习
+
+1. 写一个 `@retry_on_failure` 装饰器，当函数抛出异常时自动重试 3 次
+2. 写一个异步函数 `batch_process`，并发调用多个 LLM 并收集结果

@@ -1,0 +1,48 @@
+---
+title: LangSmith 入门
+order: 1
+difficulty: intermediate
+estimated_time: 15min
+tags: [LangSmith, 监控]
+---
+
+## 入门
+
+```python
+import os
+os.environ["LANGSMITH_TRACING"] = "true"
+os.environ["LANGSMITH_API_KEY"] = "lsv2_..."
+os.environ["LANGSMITH_PROJECT"] = "my-agent"
+
+from langchain_openai import ChatOpenAI
+
+# 所有调用自动被追踪
+llm = ChatOpenAI(model="gpt-4o")
+llm.invoke("Hello")
+```
+
+## 核心
+
+```python
+from langsmith import traceable
+from langsmith.wrappers import wrap_openai
+
+# 手动追踪
+@traceable(name="agent_call", run_type="chain")
+async def my_agent(input_text: str) -> str:
+    result = await llm.invoke(input_text)
+    return result.content
+
+# 查看追踪信息
+# LangSmith 控制台可查看:
+# - Prompt 内容
+# - Token 数量
+# - 延迟
+# - 成本
+# - 工具调用链
+```
+
+## 练习
+
+1. 在 LangSmith 中创建一个项目，运行 Agent 并查看 Trace
+2. 为 Agent 添加自定义的 metadata 标签（如版本号、环境）

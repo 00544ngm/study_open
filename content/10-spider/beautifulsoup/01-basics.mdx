@@ -1,0 +1,133 @@
+---
+title: BeautifulSoup HTML 解析
+order: 1
+difficulty: beginner
+estimated_time: 25min
+tags: [BeautifulSoup, HTML, 解析, Python, 爬虫]
+---
+
+## 安装
+
+```bash
+pip install beautifulsoup4 lxml
+```
+
+## 基础用法
+
+```python
+from bs4 import BeautifulSoup
+
+html = """
+<html>
+<body>
+  <h1>标题</h1>
+  <div class="content">
+    <p>第一段</p>
+    <p>第二段</p>
+    <a href="https://example.com">链接</a>
+  </div>
+</body>
+</html>
+"""
+
+soup = BeautifulSoup(html, "lxml")
+print(soup.h1.text)  # 标题
+print(soup.a["href"])  # https://example.com
+```
+
+## 查找元素
+
+```python
+# 按标签名
+soup.find("h1")           # 第一个 h1
+soup.find_all("p")         # 所有 p 标签
+soup.find_all("a", limit=5)  # 限制数量
+
+# 按 class
+soup.find(class_="content")
+soup.find_all(class_=["item", "active"])
+
+# 按属性
+soup.find(href="https://example.com")
+soup.find_all(attrs={"data-id": "123"})
+
+# CSS 选择器
+soup.select(".content p")           # class="content" 内的 p
+soup.select("div > a")              # div 的直接子元素 a
+soup.select("#main")                # id="main"
+soup.select("[data-type='article']")  # 属性选择
+```
+
+## 提取数据
+
+```python
+# 获取文本
+print(soup.p.text)          # 标签内所有文本
+print(soup.p.get_text())    # 同上
+print(soup.p.string)        # 只取直接文本（无子标签）
+
+# 获取属性
+print(soup.a["href"])       # 直接取值
+print(soup.a.get("href"))   # 安全取值（不存在返回 None）
+print(soup.a.get("target", "_blank"))  # 带默认值
+
+# 遍历
+for p in soup.find_all("p"):
+    print(p.text.strip())
+```
+
+## 实战：提取商品列表
+
+```python
+import requests
+from bs4 import BeautifulSoup
+
+def scrape_products(url: str) -> list[dict]:
+    headers = {"User-Agent": "Mozilla/5.0"}
+    resp = requests.get(url, headers=headers, timeout=10)
+    soup = BeautifulSoup(resp.text, "lxml")
+
+    products = []
+    for item in soup.select(".product-item"):
+        product = {
+            "name": item.select_one(".name").text.strip(),
+            "price": item.select_one(".price").text.strip(),
+            "url": item.select_one("a")["href"],
+            "rating": item.select_one(".rating").get("data-score"),
+        }
+        products.append(product)
+    return products
+```
+
+## 处理表格
+
+```python
+html = """
+<table>
+  <tr><th>姓名</th><th>年龄</th></tr>
+  <tr><td>Alice</td><td>25</td></tr>
+  <tr><td>Bob</td><td>30</td></tr>
+</table>
+"""
+
+soup = BeautifulSoup(html, "lxml")
+table = soup.find("table")
+rows = table.find_all("tr")
+
+data = []
+for row in rows[1:]:  # 跳过表头
+    cols = row.find_all("td")
+    data.append({
+        "name": cols[0].text,
+        "age": int(cols[1].text),
+    })
+```
+
+| 方法 | 说明 |
+|------|------|
+| `find(name)` | 查找第一个 |
+| `find_all(name)` | 查找所有 |
+| `select(css)` | CSS 选择器 |
+| `.text` | 标签文本 |
+| `["attr"]` | 属性值 |
+| `.get(attr)` | 安全获取属性 |

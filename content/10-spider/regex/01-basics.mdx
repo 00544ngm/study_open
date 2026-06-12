@@ -1,0 +1,128 @@
+---
+title: 正则表达式入门
+order: 1
+difficulty: beginner
+estimated_time: 25min
+tags: [正则, Python, 文本处理]
+---
+
+## 基础语法
+
+| 模式 | 匹配 |
+|------|------|
+| `.` | 任意字符（除换行） |
+| `\d` | 数字 `[0-9]` |
+| `\w` | 单词字符 `[a-zA-Z0-9_]` |
+| `\s` | 空白字符 |
+| `^` | 字符串开头 |
+| `$` | 字符串结尾 |
+| `*` | 0 次或多次 |
+| `+` | 1 次或多次 |
+| `?` | 0 次或 1 次 |
+| `{n}` | 恰好 n 次 |
+| `{n,}` | 至少 n 次 |
+| `{n,m}` | n 到 m 次 |
+
+## Python re 模块
+
+```python
+import re
+
+text = "我的电话是 138-1234-5678，邮箱是 alice@example.com"
+
+# search — 查找第一个匹配
+phone = re.search(r"\d{3}-\d{4}-\d{4}", text)
+print(phone.group())  # 138-1234-5678
+
+# findall — 查找所有匹配
+emails = re.findall(r"\w+@\w+\.\w+", text)
+print(emails)  # ['alice@example.com']
+
+# 分组提取
+pattern = r"(\w+)@(\w+)\.(\w+)"
+match = re.search(pattern, "alice@example.com")
+print(match.groups())  # ('alice', 'example', 'com')
+```
+
+## 爬虫实战
+
+```python
+import re, requests
+
+resp = requests.get("https://example.com")
+
+# 提取所有链接
+urls = re.findall(r'href=["\'](https?://[^"\']+)["\']', resp.text)
+
+# 提取中文文本（清洗 HTML 标签后）
+clean = re.sub(r"<[^>]+>", "", resp.text)
+chinese = re.findall(r"[一-鿿]+", clean)
+
+# 提取邮箱
+emails = re.findall(r"\b[\w.-]+@[\w.-]+\.\w{2,}\b", resp.text)
+
+# 提取价格
+prices = re.findall(r"￥(\d+(?:\.\d{2})?)", resp.text)
+```
+
+## 常用模式
+
+```python
+# URL
+url_pattern = r"https?://[^\s/$.?#].[^\s]*"
+
+# 手机号
+phone_pattern = r"1[3-9]\d{9}"
+
+# IP 地址
+ip_pattern = r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}"
+
+# 日期
+date_pattern = r"\d{4}-\d{2}-\d{2}"
+
+# HTML 标签
+tag_pattern = r"<[^>]+>"
+
+# 中文字符
+chinese_pattern = r"[一-鿿]"
+
+# 连续空白
+space_pattern = r"\s+"
+```
+
+## 贪婪与惰性
+
+```python
+text = "<div><p>段落1</p><p>段落2</p></div>"
+
+# 贪婪（默认）：尽可能多匹配
+re.findall(r"<p>.*</p>", text)
+# ['<p>段落1</p><p>段落2</p>']
+
+# 惰性：尽可能少匹配
+re.findall(r"<p>.*?</p>", text)
+# ['<p>段落1</p>', '<p>段落2</p>']
+```
+
+## 编译正则
+
+```python
+# 编译复用提高性能
+pattern = re.compile(r"\b\w+@\w+\.\w{2,}\b")
+
+text = "a@b.com, c@d.com, e@f.com"
+print(pattern.findall(text))  # ['a@b.com', 'c@d.com', 'e@f.com']
+
+# 忽略大小写
+pattern = re.compile(r"python", re.IGNORECASE)
+pattern.findall("Python PYTHON python")  # 3 个匹配
+```
+
+| 函数 | 说明 |
+|------|------|
+| `re.search(p, s)` | 第一个匹配 |
+| `re.findall(p, s)` | 所有匹配 |
+| `re.sub(p, r, s)` | 替换 |
+| `re.split(p, s)` | 分割 |
+| `re.match(p, s)` | 从开头匹配 |
+| `re.compile(p)` | 编译复用 |

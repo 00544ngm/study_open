@@ -1,0 +1,271 @@
+---
+title: 工具注册与错误处理
+order: 2
+difficulty: intermediate
+estimated_time: 20min
+tags: [工具, 错误处理, 日志]
+---
+
+## 入门
+
+统一的工具注册机制和全局错误处理是生产级 Agent 的基础设施。
+
+## 核心
+
+### 工具注册中心
+
+```python
+from typing import Callable, Dict, Any
+from pydantic import BaseModel
+import json
+
+class ToolSpec(BaseModel):
+    """工具定义"""
+    name: str
+    description: str
+    parameters: dict
+    func: Callable
+
+class ToolRegistry:
+    """全局工具注册中心"""
+
+    def __init__(self):
+        self._tools: Dict[str, ToolSpec] = {}
+
+    def register(self, name: str = None):
+        """装饰器方式注册工具"""
+        def decorator(func):
+            nonlocal name
+            tool_name = name or func.__name__
+
+            # 从文档字符串自动生成描述
+            doc = func.__doc__ or ""
+
+            self._tools[tool_name] = ToolSpec(
+                name=tool_name,
+                description=doc.strip(),
+                parameters=self._infer_params(func),
+                func=func
+            )
+            return func
+        return decorator
+
+    def _infer_params(self, func) -> dict:
+        """从函数签名推断参数（简化版）"""
+        import inspect
+        sig = inspect.signature(func)
+        properties = {}
+        required = []
+
+        for name, param in sig.parameters.items():
+            properties[name] = {
+                "type": "string",
+                "description": f"参数 {name}"
+            }
+            if param.default == inspect.Parameter.empty:
+                required.append(name)
+
+        return {
+            "type": "object",
+            "properties": properties,
+            "required": required
+        }
+
+    def get_openai_tools(self) -> list:
+        """转换为 OpenAI tools 格式"""
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": spec.name,
+                    "description": spec.description,
+                    "parameters": spec.parameters
+                }
+            }
+            for spec in self._tools.values()
+        ]
+
+    def execute(self, name: str, args: dict) -> str:
+        tool = self._tools.get(name)
+        if not tool:
+            raise ValueError(f"工具 '{name}' 不存在")
+        return tool.func(**args)
+
+# 使用
+registry = ToolRegistry()
+
+@registry.register()
+def search_web(query: str, limit: int = 5):
+    """搜索网络信息"""
+    return f"搜索 '{query}' 的结果..."
+
+@registry.register(name="calculator")
+def calculate(expression: str):
+    """执行数学计算"""
+    return str(eval(expression))
+```
+
+### 错误处理框架
+
+```python
+import logging
+from typing import Optional
+from datetime import datetime
+
+logger = logging.getLogger("agent")
+
+class AgentError(Exception):
+    """Agent 基础异常"""
+    def __init__(self, message: str, recoverable: bool = False):
+        self.message = message
+        self.recoverable = recoverable
+        self.timestamp = datetime.now()
+        super().__init__(message)
+
+class LLMError(AgentError):
+    """LLM 调用异常"""
+    pass
+
+class ToolError(AgentError):
+    """工具执行异常"""
+    pass
+
+class AgentErrorHandler:
+    """统一错误处理器"""
+
+    def __init__(self, max_retries: int = 3):
+        self.max_retries = max_retries
+        self.errors = []
+
+    async def with_retry(self, func, context: str = ""):
+        """带重试和退避的执行"""
+        for attempt in range(self.max_retries):
+            try:
+                return await func()
+            except AgentError as e:
+                self.errors.append({
+                    "context": context,
+                    "error": str(e),
+                    "attempt": attempt + 1
+                })
+
+                if e.recoverable and attempt < self.max_retries - 1:
+                    wait = 2 ** attempt
+                    logger.warning(f"重试 ({attempt+1}/{self.max_retries}): {e}")
+                    await asyncio.sleep(wait)
+                else:
+                    logger.error(f"不可恢复错误: {e}")
+                    raise
+
+    def summary(self) -> dict:
+        return {
+            "total_errors": len(self.errors),
+            "recent": self.errors[-5:] if self.errors else []
+        }
+```
+
+## 进阶
+
+### 日志与追踪
+
+```python
+import time
+import uuid
+from contextlib import asynccontextmanager
+from datetime import datetime
+
+class TraceLogger:
+    """结构化日志追踪"""
+
+    def __init__(self, service: str = "agent"):
+        self.service = service
+
+    @asynccontextmanager
+    async def trace(self, operation: str, **context):
+        trace_id = str(uuid.uuid4())[:8]
+        start = time.time()
+
+        logger.info({
+            "event": "trace_start",
+            "trace_id": trace_id,
+            "operation": operation,
+            "context": context,
+            "timestamp": datetime.now().isoformat()
+        })
+
+        try:
+            yield trace_id
+            elapsed = time.time() - start
+            logger.info({
+                "event": "trace_end",
+                "trace_id": trace_id,
+                "operation": operation,
+                "elapsed_ms": round(elapsed * 1000, 2)
+            })
+        except Exception as e:
+            elapsed = time.time() - start
+            logger.error({
+                "event": "trace_error",
+                "trace_id": trace_id,
+                "operation": operation,
+                "error": str(e),
+                "elapsed_ms": round(elapsed * 1000, 2)
+            })
+            raise
+
+# 使用
+trace = TraceLogger()
+
+async def process_message(user_input: str):
+    async with trace.trace("chat", user=user_input[:20]):
+        llm_result = await call_llm(user_input)
+        tool_result = await execute_tools(llm_result)
+        return tool_result
+```
+
+### 优雅关闭与清理
+
+```python
+import signal
+import asyncio
+
+class GracefulShutdown:
+    """优雅关闭：清理连接、保存状态"""
+
+    def __init__(self):
+        self.shutdown_event = asyncio.Event()
+        self.cleanup_tasks = []
+
+    def register_cleanup(self, func):
+        self.cleanup_tasks.append(func)
+
+    async def shutdown(self, sig=None):
+        if sig:
+            print(f"收到 {sig.name}，正在关闭...")
+
+        for task in self.cleanup_tasks:
+            try:
+                await task()
+            except Exception as e:
+                print(f"清理失败: {e}")
+
+        self.shutdown_event.set()
+
+    def install(self):
+        loop = asyncio.get_event_loop()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            try:
+                loop.add_signal_handler(
+                    sig,
+                    lambda s=sig: asyncio.create_task(self.shutdown(s))
+                )
+            except NotImplementedError:
+                # Windows 不支持 add_signal_handler
+                pass
+```
+
+## 练习
+
+1. 用 ToolRegistry 注册 3 个工具（搜索、计算、翻译），转换成 OpenAI tools 格式
+2. 实现 AgentErrorHandler，对 LLM 超时进行重试，对无效输入直接报错
+3. 为 Agent 添加 TraceLogger，每次调用记录 trace_id 和耗时

@@ -1,0 +1,637 @@
+---
+title: Docker Compose 生产部署
+order: 2
+difficulty: core
+estimated_time: 35min
+tags: [Docker Compose, 生产部署, 容器编排, 环境管理]
+---
+
+## 生产级 Compose 配置
+
+AI Agent 项目通常由 API 服务、LLM 推理、向量数据库、消息队列等多个服务组成。以下是一个面向生产环境的完整 Docker Compose 配置。
+
+## 多服务编排
+
+```yaml
+# docker-compose.yml
+name: agent-platform
+
+services:
+  # ============================================
+  # API 服务
+  # ============================================
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        - BUILD_ENV=production
+    image: registry.example.com/agent-api:${IMAGE_TAG:-latest}
+    ports:
+      - "${API_PORT:-8000}:8000"
+    env_file:
+      - .env
+    environment:
+      - LOG_LEVEL=info
+      - SERVICE_NAME=agent-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+    restart: unless-stopped
+    networks:
+      - backend
+      - monitoring
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ============================================
+  # Celery Worker（异步任务）
+  # ============================================
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: registry.example.com/agent-worker:${IMAGE_TAG:-latest}
+    command: celery -A app.tasks worker -Q agent,llm --concurrency=4
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    deploy:
+      replicas: 3
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1G
+        reservations:
+          cpus: '1.0'
+          memory: 512M
+    restart: unless-stopped
+    networks:
+      - backend
+
+  # ============================================
+  # PostgreSQL
+  # ============================================
+  postgres:
+    image: postgres:16-alpine
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./init-db:/docker-entrypoint-initdb.d:ro
+    environment:
+      POSTGRES_DB: agent_platform
+      POSTGRES_USER: ${DB_USER:-agent}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?请设置 DB_PASSWORD 环境变量}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-agent} -d agent_platform"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+    restart: unless-stopped
+    networks:
+      - backend
+    ports:
+      - "${DB_EXPOSE_PORT:-127.0.0.1:5432}:5432"
+
+  # ============================================
+  # Redis（缓存 + 消息队列）
+  # ============================================
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
+      - ./config/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    command: redis-server /usr/local/etc/redis/redis.conf
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    restart: unless-stopped
+    networks:
+      - backend
+
+  # ============================================
+  # Qdrant（向量数据库）
+  # ============================================
+  qdrant:
+    image: qdrant/qdrant:v1.12
+    volumes:
+      - qdrant_data:/qdrant/storage
+      - ./config/qdrant.yaml:/qdrant/config/production.yaml:ro
+    environment:
+      QDRANT__SERVICE__GRPC_PORT: 6334
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    restart: unless-stopped
+    networks:
+      - backend
+
+  # ============================================
+  # Nginx（反向代理）
+  # ============================================
+  nginx:
+    image: nginx:1.25-alpine
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - ./frontend/dist:/var/www/app:ro
+    ports:
+      - "${NGINX_PORT:-80}:80"
+      - "${NGINX_SSL_PORT:-443}:443"
+    depends_on:
+      api:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+    restart: unless-stopped
+    networks:
+      - backend
+      - frontend
+
+networks:
+  backend:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+  frontend:
+    driver: bridge
+  monitoring:
+    driver: bridge
+    external: false
+
+volumes:
+  pgdata:
+    driver: local
+    driver_opts:
+      type: none
+      device: /data/agent-platform/postgres
+      o: bind
+  redis_data:
+    driver: local
+  qdrant_data:
+    driver: local
+```
+
+## depends_on 健康检查
+
+Docker Compose v2.1+ 支持 `depends_on` 的条件等待，确保服务按依赖顺序启动。
+
+```yaml
+services:
+  api:
+    depends_on:
+      postgres:
+        condition: service_healthy   # 等待 healthcheck 通过
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      # 也可等待服务启动（不检查健康）
+      # nginx:
+      #   condition: service_started
+
+  # 对于不需要 healthcheck 的服务
+  init-db:
+    image: postgres:16-alpine
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint: |
+      sh -c 'sleep 2 && psql -h postgres -U agent -d agent_platform -f /init/schema.sql'
+```
+
+## 环境管理
+
+### .env 文件
+
+```bash
+# .env.production（不提交到 Git）
+DB_USER=agent
+DB_PASSWORD=your-strong-password-here
+DB_EXPOSE_PORT=127.0.0.1:5432
+
+API_PORT=8000
+NGINX_PORT=80
+NGINX_SSL_PORT=443
+
+IMAGE_TAG=v1.2.3
+
+OPENAI_API_KEY=sk-xxx
+ANTHROPIC_API_KEY=sk-ant-xxx
+
+LOG_LEVEL=info
+CELERY_CONCURRENCY=4
+
+# 外部服务
+QDRANT_URL=http://qdrant:6333
+REDIS_URL=redis://redis:6379/0
+DATABASE_URL=postgresql://agent:${DB_PASSWORD}@postgres:5432/agent_platform
+
+# 监控
+SENTRY_DSN=https://xxx@sentry.example.com/1
+```
+
+```yaml
+# docker-compose.yml 中使用
+services:
+  api:
+    env_file:
+      - .env
+    # 或按环境切换
+    # env_file:
+    #   - .env.${ENVIRONMENT:-development}
+```
+
+### 多环境配置策略
+
+```yaml
+# docker-compose.override.yml（开发环境，自动加载）
+services:
+  api:
+    volumes:
+      - ./backend:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    environment:
+      - LOG_LEVEL=debug
+    ports:
+      - "5678:5678"  # debugpy
+
+  postgres:
+    ports:
+      - "5432:5432"
+```
+
+```bash
+# 生产部署使用配置文件合并
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+```
+
+```yaml
+# docker-compose.prod.yml
+services:
+  api:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    logging:
+      driver: "awslogs"
+      options:
+        awslogs-group: "agent-platform"
+        awslogs-region: "ap-northeast-1"
+        awslogs-stream: "api"
+
+  worker:
+    restart: always
+    deploy:
+      replicas: 3
+```
+
+## 资源限制
+
+合理设置资源限制防止单个服务耗尽主机资源。
+
+```yaml
+services:
+  api:
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'        # 最多 1 个 CPU 核心
+          memory: 512M       # 最多 512MB 内存
+        reservations:
+          cpus: '0.25'       # 预留 0.25 核心
+          memory: 128M       # 预留 128MB
+
+  worker:
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1G
+```
+
+CPU 限制说明：
+
+| 格式 | 含义 | 示例 |
+|------|------|------|
+| `0.5` | 半个核心 | 每 1 秒运行 0.5 秒 |
+| `1.0` | 1 个核心 | 满负荷使用 1 核 |
+| `2.0` | 2 个核心 | 最多使用 2 核 |
+| `500m` | 500 millicores | 等同于 0.5 |
+
+## 网络配置
+
+### 自定义网络
+
+```yaml
+networks:
+  backend:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+    # 附加外部网络（如 Swarm 共享网络）
+    # external:
+    #   name: traefik_network
+```
+
+### 固定 IP
+
+```yaml
+services:
+  postgres:
+    networks:
+      backend:
+        ipv4_address: 172.20.0.10
+
+  redis:
+    networks:
+      backend:
+        ipv4_address: 172.20.0.11
+```
+
+### 网络隔离
+
+```yaml
+services:
+  nginx:
+    networks:
+      - frontend    # 对外暴露
+      - backend     # 连接 API
+
+  api:
+    networks:
+      - backend     # 仅内部可达
+      - monitoring  # 监控系统
+
+  postgres:
+    networks:
+      - backend     # 仅内部可达
+```
+
+## Profiles 选择性启动
+
+Compse Profiles 用于按需启动服务子集，开发时避免启动所有服务。
+
+```yaml
+services:
+  api:
+    profiles: ["core", "all"]
+    # ...
+
+  worker:
+    profiles: ["worker", "all"]
+    # ...
+
+  # 仅在需要时启动
+  llm-inference:
+    profiles: ["gpu", "all"]
+    build: ./llm-server
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  monitoring:
+    profiles: ["monitoring", "all"]
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+
+  admin-panel:
+    profiles: ["dev", "all"]
+    image: pgadmin:latest
+    ports:
+      - "5050:80"
+```
+
+```bash
+# 仅启动核心服务
+docker compose --profile core up -d
+
+# 启动核心 + 监控
+docker compose --profile core --profile monitoring up -d
+
+# 启动所有服务（含 GPU）
+docker compose --profile all up -d
+```
+
+## Watch 模式（开发热重载）
+
+Docker Compose Watch 让开发时文件变更自动同步到容器。
+
+```yaml
+services:
+  api:
+    build: ./backend
+    develop:
+      watch:
+        - action: sync
+          path: ./backend/app
+          target: /app/app
+          ignore:
+            - __pycache__/
+            - *.pyc
+        - action: rebuild
+          path: ./backend/pyproject.toml
+        - action: rebuild
+          path: ./backend/Dockerfile
+
+  frontend:
+    build: ./frontend
+    develop:
+      watch:
+        - action: sync
+          path: ./frontend/src
+          target: /app/src
+        - action: rebuild
+          path: ./frontend/package.json
+```
+
+```bash
+# 启动并监听文件变更
+docker compose watch
+```
+
+## Swarm 模式集成
+
+将 Compose 配置转化为 Docker Swarm Stack 部署。
+
+```yaml
+# docker-stack.yml
+version: "3.8"
+
+services:
+  api:
+    image: registry.example.com/agent-api:${IMAGE_TAG:-latest}
+    deploy:
+      mode: replicated
+      replicas: 3
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first     # 先启动新容器再停止旧容器
+      rollback_config:
+        parallelism: 1
+        delay: 5s
+        order: stop-first
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      placement:
+        constraints:
+          - node.role == worker   # 约束到 worker 节点
+          - node.labels.zone == app
+      resources:
+        limits:
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    secrets:
+      - db_password
+      - openai_key
+
+  postgres:
+    image: postgres:16-alpine
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.zone == db
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:
+    driver: rexray   # 使用持久化存储驱动
+
+secrets:
+  db_password:
+    external: true
+  openai_key:
+    external: true
+```
+
+```bash
+# 初始化 Swarm
+docker swarm init --advertise-addr 10.0.1.10
+
+# 部署 Stack
+docker stack deploy -c docker-stack.yml agent-platform
+
+# 查看 Stack 状态
+docker stack services agent-platform
+docker stack ps agent-platform
+
+# 滚动更新
+docker service update --image registry.example.com/agent-api:v2.0 agent-platform_api
+
+# 回滚
+docker service rollback agent-platform_api
+
+# 移除 Stack
+docker stack rm agent-platform
+```
+
+## 运维命令参考
+
+```bash
+# ========== 启动/停止 ==========
+docker compose up -d                        # 后台启动所有服务
+docker compose -f compose.yml up -d         # 指定配置文件
+docker compose up -d api worker             # 仅启动指定服务
+docker compose down                         # 停止并移除容器（保留数据卷）
+docker compose down -v                      # 同时删除数据卷（谨慎！）
+
+# ========== 查看状态 ==========
+docker compose ps                           # 服务状态
+docker compose top                          # 进程列表
+docker compose stats                        # 实时资源使用
+docker compose images                       # 镜像列表
+
+# ========== 日志 ==========
+docker compose logs -f                      # 跟踪所有日志
+docker compose logs -f api                  # 跟踪特定服务
+docker compose logs --tail=100 api          # 最近 100 行
+docker compose logs --since=5m api          # 最近 5 分钟
+
+# ========== 执行命令 ==========
+docker compose exec api sh                  # 进入容器 Shell
+docker compose exec api python manage.py migrate   # 运行迁移
+docker compose run --rm api pytest          # 运行一次性命令
+
+# ========== 扩缩容 ==========
+docker compose up -d --scale api=5          # 扩容到 5 个实例
+docker compose up -d --scale worker=3
+
+# ========== 重建 ==========
+docker compose build --no-cache api         # 无缓存构建
+docker compose up -d --force-recreate api   # 强制重建
+
+# ========== 清理 ==========
+docker compose down --rmi all               # 删除服务关联镜像
+docker system prune -af --volumes           # 清理所有未使用资源
+```
+
+## 练习
+
+1. 基于上述配置为你的 Agent 平台编写完整的 `docker-compose.yml`，包含 API、PostgreSQL、Redis、Qdrant、Nginx
+2. 为每个数据服务添加 `healthcheck`，并在依赖服务中使用 `condition: service_healthy`
+3. 配置 `.env` 文件管理敏感信息，使用 `profiles` 实现开发/生产选择性启动
+4. 使用 `docker compose up -d --scale worker=3` 测试 worker 扩缩容
+5. 编写 `docker-stack.yml` 并尝试部署到 Swarm 集群

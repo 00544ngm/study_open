@@ -1,0 +1,106 @@
+---
+title: Scrapy 进阶与分布式
+order: 2
+difficulty: advanced
+estimated_time: 30min
+tags: [Scrapy, 分布式, 中间件, 爬虫]
+---
+
+## 中间件
+
+```python
+# middlewares.py — 反爬处理
+class AntiScrapeMiddleware:
+    def process_request(self, request, spider):
+        request.headers["User-Agent"] = random.choice(USER_AGENTS)
+        return None
+
+    def process_response(self, request, response, spider):
+        if response.status == 403:
+            spider.logger.warning(f"被拦截: {request.url}")
+            # 使用代理重试
+            new_request = request.copy()
+            new_request.meta["proxy"] = get_proxy()
+            return new_request
+        return response
+```
+
+## 限速与自动节流
+
+```python
+# settings.py
+DOWNLOAD_DELAY = 2          # 请求间隔 2s
+RANDOMIZE_DOWNLOAD_DELAY = True  # 随机化延迟
+CONCURRENT_REQUESTS = 8     # 并发数
+
+# AutoThrottle 自动调整
+AUTOTHROTTLE_ENABLED = True
+AUTOTHROTTLE_START_DELAY = 1
+AUTOTHROTTLE_MAX_DELAY = 10
+AUTOTHROTTLE_TARGET_CONCURRENCY = 5
+```
+
+## 分布式爬虫
+
+```bash
+pip install scrapy-redis
+```
+
+```python
+# settings.py
+SCHEDULER = "scrapy_redis.scheduler.Scheduler"
+DUPEFILTER_CLASS = "scrapy_redis.dupefilter.RFPDupeFilter"
+REDIS_URL = "redis://localhost:6379"
+
+# spiders/redis_quotes.py
+from scrapy_redis.spiders import RedisSpider
+
+class RedisQuotesSpider(RedisSpider):
+    name = "redis_quotes"
+    redis_key = "quotes:start_urls"
+
+    def parse(self, response):
+        # 同普通 spider
+        pass
+
+# 多个爬虫共享 Redis 队列，实现分布式
+```
+
+```bash
+# 在多台机器上运行
+scrapy crawl redis_quotes
+
+# 往 Redis 推送起始 URL
+redis-cli lpush quotes:start_urls "https://quotes.toscrape.com"
+```
+
+## 图片下载
+
+```python
+# pipelines.py
+from scrapy.pipelines.images import ImagesPipeline
+
+class MyImagesPipeline(ImagesPipeline):
+    def get_media_requests(self, item, info):
+        for url in item["image_urls"]:
+            yield scrapy.Request(url)
+
+    def file_path(self, request, response=None, info=None):
+        return f"full/{request.url.split('/')[-1]}"
+```
+
+```python
+# settings.py
+ITEM_PIPELINES = {
+    "scrapy.pipelines.images.ImagesPipeline": 1,
+}
+IMAGES_STORE = "images/"
+```
+
+| 特性 | 说明 |
+|------|------|
+| AutoThrottle | 自动限速防止被封 |
+| scrapy-redis | 分布式支持 |
+| ImagesPipeline | 自动下载图片 |
+| CrawlSpider | 全站爬取规则 |
+| Feed 导出 | JSON/CSV/XML 自动输出 |

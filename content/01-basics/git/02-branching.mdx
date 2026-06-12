@@ -1,0 +1,61 @@
+---
+title: 分支与协作
+order: 2
+difficulty: intermediate
+estimated_time: 20min
+tags: [Git, 进阶]
+---
+
+## 入门
+
+```bash
+# 分支操作
+git branch                    # 列出分支
+git branch feature/agent      # 创建分支
+git checkout feature/agent    # 切换分支
+git checkout -b feature/rag   # 创建并切换
+```
+
+## 核心
+
+### 分支策略（AI 项目推荐）
+
+```text
+main        → 稳定版本
+dev         → 开发主分支
+feat/*      → 功能分支 (feat/rag-pipeline, feat/mcp-server)
+fix/*       → 修复分支
+release/*   → 发布分支
+```
+
+### 合并操作
+
+```bash
+# 方法1: merge（保留完整历史）
+git checkout main
+git merge feature/agent
+
+# 方法2: rebase（线性历史）
+git checkout feature/agent
+git rebase main
+git checkout main
+git merge feature/agent
+```
+
+## 进阶
+
+### 多 Agent 协作项目中的分支管理
+
+```text
+main
+└── dev
+    ├── feat/agent-orchestrator
+    ├── feat/rag-pipeline
+    ├── feat/mcp-integration
+    └── fix/token-count
+```
+
+## 练习
+
+1. 创建 feature 分支，做修改后合并回 main
+2. 制造一个合并冲突，手动解决

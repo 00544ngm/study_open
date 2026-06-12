@@ -1,0 +1,50 @@
+---
+title: 请求与响应
+order: 2
+difficulty: beginner
+estimated_time: 15min
+tags: [FastAPI, 后端]
+---
+
+## 入门
+
+```python
+from fastapi import FastAPI, Query, Path
+from pydantic import BaseModel
+
+app = FastAPI()
+
+# 路径参数
+@app.get("/agents/{agent_id}")
+def get_agent(agent_id: str):
+    return {"agent_id": agent_id}
+
+# 查询参数
+@app.get("/search")
+def search(q: str = Query(..., description="搜索关键词"), limit: int = 10):
+    return {"query": q, "limit": limit}
+```
+
+## 核心
+
+```python
+from pydantic import BaseModel, Field
+from typing import Optional
+
+class AgentConfig(BaseModel):
+    name: str = Field(..., description="Agent 名称")
+    model: str = Field("gpt-4", description="模型名称")
+    temperature: float = Field(0.7, ge=0, le=2)
+    system_prompt: Optional[str] = None
+    tools: list[str] = []
+
+@app.post("/api/agents", status_code=201)
+async def create_agent(config: AgentConfig):
+    agent_id = await db.create_agent(config.dict())
+    return {"id": agent_id, **config.dict()}
+```
+
+## 练习
+
+1. 为聊天接口添加流式响应（使用 StreamingResponse）
+2. 实现一个分页接口，返回 cursor-based 分页结果

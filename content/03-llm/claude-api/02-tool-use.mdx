@@ -1,0 +1,156 @@
+---
+title: Tool Use 与 Messages API
+order: 2
+difficulty: intermediate
+estimated_time: 25min
+tags: [Claude, API, Tool Use]
+---
+
+## 入门
+
+Claude 的 Messages API 和 Tool Use（工具调用）能力，与 OpenAI 类似但细节不同。
+
+## 核心
+
+### Messages API
+
+```python
+import anthropic
+
+client = anthropic.Anthropic()
+
+response = client.messages.create(
+    model="claude-sonnet-4-20250514",
+    max_tokens=1024,
+    system="你是 AI Agent 专家，用中文回答",
+    messages=[
+        {"role": "user", "content": "什么是 MCP 协议？"}
+    ]
+)
+
+print(response.content[0].text)
+```
+
+### 流式响应
+
+```python
+stream = client.messages.create(
+    model="claude-sonnet-4-20250514",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": "讲一个关于AI Agent的故事"}],
+    stream=True
+)
+
+for event in stream:
+    if event.type == "content_block_delta":
+        print(event.delta.text, end="", flush=True)
+```
+
+### Tool Use
+
+```python
+import json
+
+tools = [
+    {
+        "name": "search_knowledge_base",
+        "description": "从知识库中检索信息",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "搜索关键词"},
+                "limit": {"type": "integer", "description": "返回结果数量"}
+            },
+            "required": ["query"]
+        }
+    }
+]
+
+def search_knowledge_base(query: str, limit: int = 3):
+    results = [
+        {"title": "什么是Agent", "content": "Agent是自主决策的AI系统"},
+        {"title": "MCP协议", "content": "Model Context Protocol 是 Anthropic 提出的标准"}
+    ]
+    return json.dumps(results[:limit])
+
+# 调用
+response = client.messages.create(
+    model="claude-sonnet-4-20250514",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": "帮我查一下Agent相关的资料"}],
+    tools=tools
+)
+
+# 处理工具调用
+for block in response.content:
+    if block.type == "tool_use":
+        tool_name = block.name
+        tool_input = block.input
+        print(f"调用工具: {tool_name}({tool_input})")
+
+        if tool_name == "search_knowledge_base":
+            result = search_knowledge_base(**tool_input)
+
+        # 返回结果
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=1024,
+            messages=[
+                {"role": "user", "content": "帮我查一下Agent相关的资料"},
+                {"role": "assistant", "content": response.content},
+                {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": block.id, "content": result}
+                ]}
+            ],
+            tools=tools
+        )
+        print(response.content[0].text)
+```
+
+## 进阶
+
+### Thinking 模式（扩展思考）
+
+```python
+response = client.messages.create(
+    model="claude-sonnet-4-20250514",
+    max_tokens=2048,
+    thinking={"type": "enabled", "budget_tokens": 1024},
+    messages=[{"role": "user", "content": "设计一个多Agent协作系统的架构"}]
+)
+
+for block in response.content:
+    if block.type == "thinking":
+        print(f"思考过程: {block.thinking}")
+    elif block.type == "text":
+        print(f"最终回答: {block.text}")
+```
+
+### 多工具协同
+
+```python
+tools = [
+    {   # 工具1: 代码搜索
+        "name": "search_code",
+        "description": "搜索代码库",
+        "input_schema": {"type": "object", "properties": {
+            "pattern": {"type": "string"},
+            "language": {"type": "string"}
+        }, "required": ["pattern"]}
+    },
+    {   # 工具2: 读取文件
+        "name": "read_file",
+        "description": "读取文件内容",
+        "input_schema": {"type": "object", "properties": {
+            "path": {"type": "string"}
+        }, "required": ["path"]}
+    }
+]
+
+# Claude 会自主决定何时调用哪个工具、按什么顺序
+```
+
+## 练习
+
+1. 用 Claude Messages API 实现一个流式聊天，支持 Tool Use
+2. 添加 Thinking 模式，让模型在回答前展示推理过程

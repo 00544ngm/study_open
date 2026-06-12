@@ -1,0 +1,383 @@
+---
+title: 从零搭建智能客服 Agent
+order: 1
+difficulty: advanced
+estimated_time: 60min
+tags: [项目, 实战, 全栈, 智能客服]
+---
+
+## 概述
+
+用前面学到的所有知识，从零搭建一个**完整的智能客服 Agent**。包含后端、RAG、工具调用、前端聊天界面。
+
+```
+用户输入 → 意图分类 → 检索知识库 → 调用工具 → 生成回答 → 流式展示
+```
+
+## Step 1: 项目结构
+
+```
+customer-service-agent/
+├── app/
+│   ├── main.py              # FastAPI 入口
+│   ├── agent.py             # Agent 核心逻辑
+│   ├── tools.py             # 工具定义
+│   ├── knowledge.py         # RAG 检索
+│   └── models.py            # 数据模型
+├── frontend/
+│   └── ChatUI.jsx           # 聊天界面
+├── data/
+│   └── knowledge_base.md    # 知识库文档
+├── .env
+└── requirements.txt
+```
+
+## Step 2: 定义数据模型
+
+```python
+# models.py
+from pydantic import BaseModel
+from typing import List, Optional
+from enum import Enum
+
+class Intent(str, Enum):
+    order_query = "order_query"
+    return_request = "return_request"
+    complaint = "complaint"
+    greeting = "greeting"
+    faq = "faq"
+    other = "other"
+
+class UserMessage(BaseModel):
+    text: str
+    session_id: str
+
+class ClassificationResult(BaseModel):
+    intent: Intent
+    entities: dict  # 如 {"order_id": "12345"}
+    sentiment: str
+    confidence: float
+
+class ToolCall(BaseModel):
+    name: str
+    args: dict
+    result: Optional[str] = None
+
+class AgentResponse(BaseModel):
+    reply: str
+    tool_calls: List[ToolCall] = []
+    sources: List[str] = []
+```
+
+## Step 3: 工具定义
+
+```python
+# tools.py
+import json
+from datetime import datetime
+
+TOOL_DEFINITIONS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "query_order",
+            "description": "查询订单状态",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "order_id": {"type": "string", "description": "订单号"}
+                },
+                "required": ["order_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "initiate_return",
+            "description": "发起退货申请",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "order_id": {"type": "string"},
+                    "reason": {"type": "string"}
+                },
+                "required": ["order_id", "reason"]
+            }
+        }
+    }
+]
+
+# 工具实现
+class OrderService:
+    async def query_order(self, order_id: str) -> str:
+        # 模拟查询
+        orders = {
+            "1001": {"status": "已发货", "eta": "2024-01-20"},
+            "1002": {"status": "待发货", "eta": "2024-01-22"},
+        }
+        info = orders.get(order_id, {"status": "未找到", "eta": ""})
+        return json.dumps(info, ensure_ascii=False)
+
+    async def initiate_return(self, order_id: str, reason: str) -> str:
+        # 模拟退货
+        return json.dumps({
+            "return_id": f"R{order_id}",
+            "status": "已提交",
+            "next_step": "等待仓库确认，请将商品寄回"
+        }, ensure_ascii=False)
+
+tools = OrderService()
+```
+
+## Step 4: Agent 核心
+
+```python
+# agent.py
+from openai import OpenAI
+from models import ClassificationResult, ToolCall, AgentResponse
+from tools import TOOL_DEFINITIONS, tools
+
+client = OpenAI()
+
+class CustomerServiceAgent:
+    def __init__(self):
+        self.system_prompt = """你是电商客服助手。你的职责：
+1. 友好问候用户
+2. 回答常见问题（从知识库检索）
+3. 查询订单状态
+4. 处理退货请求
+
+如果用户情绪负面，先安抚再处理。"""
+
+    async def classify(self, text: str) -> ClassificationResult:
+        """Step 1: 意图分类"""
+        response = client.beta.chat.completions.parse(
+            model="gpt-4o-mini",  # 简单任务用便宜模型
+            messages=[{"role": "user", "content": text}],
+            response_format=ClassificationResult,
+        )
+        return response.choices[0].message.parsed
+
+    async def retrieve_knowledge(self, query: str) -> List[str]:
+        """Step 2: 知识库检索"""
+        # 简化版：关键词匹配
+        kb = {
+            "退货": "退货政策：收货后7天内可无理由退货",
+            "运费": "满99元包邮，不满收8元运费",
+            "保修": "电子产品保修1年",
+        }
+        return [v for k, v in kb.items() if k in query] or [
+            f"关于「{query}」暂无专门资料，请转人工"
+        ]
+
+    async def decide(self, text: str, context: str) -> AgentResponse:
+        """Step 3: 决策和执行"""
+        messages = [
+            {"role": "system", "content": self.system_prompt},
+            {"role": "user", "content": f"知识库: {context}\n用户: {text}"}
+        ]
+
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=messages,
+            tools=TOOL_DEFINITIONS,
+        )
+
+        msg = response.choices[0].message
+        tool_calls = []
+
+        # 执行工具
+        if msg.tool_calls:
+            for tc in msg.tool_calls:
+                args = json.loads(tc.function.arguments)
+                if tc.function.name == "query_order":
+                    result = await tools.query_order(**args)
+                elif tc.function.name == "initiate_return":
+                    result = await tools.initiate_return(**args)
+                else:
+                    result = "未知工具"
+
+                tool_calls.append(ToolCall(
+                    name=tc.function.name,
+                    args=args,
+                    result=result
+                ))
+
+                messages.append(msg)
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": result
+                })
+
+            # 生成最终回答
+            final = client.chat.completions.create(
+                model="gpt-4o",
+                messages=messages,
+            )
+            reply = final.choices[0].message.content
+        else:
+            reply = msg.content
+
+        return AgentResponse(reply=reply, tool_calls=tool_calls)
+
+    async def handle(self, text: str) -> AgentResponse:
+        # 完整流程
+        classification = await self.classify(text)
+        context = await self.retrieve_knowledge(text)
+        response = await self.decide(text, "\n".join(context))
+        return response
+```
+
+## Step 5: FastAPI 端点
+
+```python
+# main.py
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from agent import CustomerServiceAgent
+
+app = FastAPI()
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+agent = CustomerServiceAgent()
+
+@app.post("/api/chat")
+async def chat(req: dict):
+    response = await agent.handle(req["message"])
+    return response.model_dump()
+
+# 流式版本
+@app.post("/api/chat/stream")
+async def chat_stream(req: dict):
+    text = req["message"]
+
+    async def generate():
+        # 1. 分类
+        classification = await agent.classify(text)
+        yield f"data: {json.dumps({'type': 'thought', 'content': f'识别到意图: {classification.intent.value}'})}\n\n"
+
+        # 2. 检索
+        context = await agent.retrieve_knowledge(text)
+        yield f"data: {json.dumps({'type': 'thought', 'content': f'检索到 {len(context)} 条相关知识'})}\n\n"
+
+        # 3. 决策
+        response = await agent.decide(text, "\n".join(context))
+
+        for tc in response.tool_calls:
+            yield f"data: {json.dumps({'type': 'tool_call', 'content': tc.name, 'metadata': tc.args})}\n\n"
+            yield f"data: {json.dumps({'type': 'tool_result', 'content': tc.result})}\n\n"
+
+        # 4. 逐字输出回答
+        for char in response.reply:
+            yield f"data: {json.dumps({'type': 'text', 'content': char})}\n\n"
+            await asyncio.sleep(0.02)
+
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+```
+
+## Step 6: 前端界面
+
+```tsx
+// frontend/ChatUI.jsx
+'use client'
+import { useState } from 'react'
+
+export function CustomerServiceChat() {
+  const [messages, setMessages] = useState([])
+  const [input, setInput] = useState('')
+  const [events, setEvents] = useState([])  // 推理过程
+  const [isStreaming, setIsStreaming] = useState(false)
+
+  async function sendMessage() {
+    const userMsg = { role: 'user', content: input }
+    setMessages(prev => [...prev, userMsg])
+    setInput('')
+    setIsStreaming(true)
+    setEvents([])
+
+    let reply = ''
+    const res = await fetch('http://localhost:8000/api/chat/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: input }),
+    })
+
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n\n')
+      buffer = lines.pop() || ''
+
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          const data = line.slice(6)
+          if (data === '[DONE]') continue
+
+          const event = JSON.parse(data)
+          if (event.type === 'text') {
+            reply += event.content
+          } else {
+            setEvents(prev => [...prev, event])
+          }
+        }
+      }
+    }
+
+    setMessages(prev => [...prev, { role: 'assistant', content: reply }])
+    setIsStreaming(false)
+  }
+
+  return (
+    <div className="flex gap-4 max-w-4xl mx-auto">
+      {/* 聊天面板 */}
+      <div className="flex-1 border rounded-lg">
+        {/* ... ChatContainer ... */}
+      </div>
+
+      {/* 推理过程面板 */}
+      <div className="w-80 border rounded-lg p-4 bg-gray-50">
+        <h3 className="font-bold mb-2">Agent 推理过程</h3>
+        <div className="space-y-2 text-sm">
+          {events.map((event, i) => (
+            <div key={i} className="p-2 rounded bg-white border">
+              <span className="font-mono text-xs text-gray-400">{event.type}</span>
+              <p>{event.content}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+```
+
+## Step 7: 运行
+
+```bash
+# 1. 安装依赖
+pip install fastapi uvicorn openai python-dotenv
+
+# 2. 启动后端
+uvicorn app.main:app --reload --port 8000
+
+# 3. 前端（Next.js 项目内）
+npm run dev
+# 访问 http://localhost:3000
+```
+
+## 扩展练习
+
+1. 为 Agent 添加记忆能力（用 Redis 保存对话历史）
+2. 集成 Qdrant 知识库，替代关键词检索
+3. 添加人工兜底：当 Agent 无法处理时转接人工客服
+4. 添加评价功能：用户可以对回复打分，反馈用于改进

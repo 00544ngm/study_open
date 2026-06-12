@@ -1,0 +1,52 @@
+---
+title: 文件操作命令
+order: 1
+difficulty: beginner
+estimated_time: 15min
+tags: [Linux, 基础]
+---
+
+## 入门
+
+```bash
+cd /home/project    # 切换目录
+ls -la              # 列出文件详情
+pwd                 # 当前路径
+mkdir -p app/data   # 递归创建目录
+cp config.json backup/  # 复制
+mv app.py src/      # 移动/重命名
+rm -rf temp/        # 删除目录
+```
+
+## 核心
+
+### Agent 项目中的常用操作
+
+```bash
+# 查看日志
+tail -f agent.log                    # 实时跟踪日志
+tail -n 100 agent.log                # 查看最后100行
+grep "ERROR" agent.log               # 搜索错误
+
+# 查找文件
+find . -name "*.py"                  # 查找所有Python文件
+find . -type f -size +10M            # 查找大文件
+
+# 查看文件内容
+cat config.yaml                      # 查看全部
+head -20 config.yaml                 # 前20行
+less agent.log                       # 分页查看
+```
+
+## 进阶
+
+```bash
+# 查看进程
+ps aux | grep python        # 查找Python进程
+top                         # 实时系统监控
+netstat -tlnp               # 查看端口占用
+
+# SSH 连接远程服务器
+ssh user@server_ip
+scp local.txt user@server:/remote/
+```

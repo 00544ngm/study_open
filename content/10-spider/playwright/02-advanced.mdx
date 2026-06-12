@@ -1,0 +1,88 @@
+---
+title: Playwright 高级技巧
+order: 2
+difficulty: intermediate
+estimated_time: 30min
+tags: [Playwright, 浏览器, 反爬, 自动化]
+---
+
+## 反爬绕过
+
+```python
+# 自定义视图和 UA
+context = await browser.new_context(
+    viewport={"width": 1920, "height": 1080},
+    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) ...",
+)
+
+# 注入反检测脚本
+await page.add_init_script("""
+    Object.defineProperty(navigator, 'webdriver', {
+        get: () => undefined
+    });
+""")
+
+# 设置时区和地理位置
+context = await browser.new_context(
+    timezone_id="Asia/Shanghai",
+    locale="zh-CN",
+    geolocation={"latitude": 39.9, "longitude": 116.4},
+)
+```
+
+## Cookie 和状态管理
+
+```python
+# 保存登录状态
+context = await browser.new_context()
+page = await context.new_page()
+await page.goto("https://example.com/login")
+await page.fill("#username", "admin")
+await page.fill("#password", "pass")
+await page.click("#login-btn")
+await page.wait_for_url("**/dashboard")
+
+# 存储状态供下次使用
+await context.storage_state(path="auth.json")
+
+# 下次直接加载已登录状态
+context = await browser.new_context(storage_state="auth.json")
+```
+
+## 并发多页面
+
+```python
+async def scrape_page(browser, url):
+    page = await browser.new_page()
+    await page.goto(url)
+    title = await page.title()
+    await page.close()
+    return title
+
+async def main():
+    async with async_playwright() as p:
+        browser = await p.chromium.launch()
+        urls = ["https://a.com", "https://b.com", "https://c.com"]
+        tasks = [scrape_page(browser, url) for url in urls]
+        results = await asyncio.gather(*tasks)
+        print(results)
+        await browser.close()
+```
+
+## PDF 导出
+
+```python
+# 页面转 PDF
+await page.pdf(path="page.pdf", format="A4")
+
+# 截图指定元素
+element = await page.query_selector(".chart")
+await element.screenshot(path="chart.png")
+```
+
+| 场景 | 方案 |
+|------|------|
+| JS 渲染页面 | Playwright |
+| 登录态保持 | storage_state |
+| 反爬检测 | init_script + 自定义 UA |
+| 并发采集 | 多 page + asyncio |

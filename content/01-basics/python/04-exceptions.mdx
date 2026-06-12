@@ -1,0 +1,77 @@
+---
+title: 异常处理
+order: 4
+difficulty: beginner
+estimated_time: 15min
+tags: [Python, 基础]
+---
+
+## 入门
+
+```python
+try:
+    result = call_llm(prompt)
+except Exception as e:
+    print(f"调用失败: {e}")
+```
+
+## 核心
+
+### Agent 开发中的异常处理模式
+
+```python
+from typing import Optional
+
+class LLMError(Exception):
+    """LLM 调用相关错误"""
+    pass
+
+class ToolError(Exception):
+    """工具调用相关错误"""
+    pass
+
+async def safe_call_llm(prompt: str, retry: int = 3) -> Optional[str]:
+    for attempt in range(retry):
+        try:
+            return await call_llm_api(prompt)
+        except TimeoutError:
+            print(f"超时，重试 {attempt + 1}/{retry}")
+            continue
+        except RateLimitError:
+            print("触发限流，等待后重试")
+            await asyncio.sleep(5)
+            continue
+    raise LLMError(f"LLM 调用失败，已重试 {retry} 次")
+
+# Agent 中的容错处理
+async def agent_with_fallback(prompt: str) -> str:
+    try:
+        return await safe_call_llm(prompt)
+    except LLMError:
+        return "抱歉，我暂时无法处理这个请求，请稍后再试。"
+```
+
+## 进阶
+
+### 上下文管理器与资源清理
+
+```python
+class AgentSession:
+    async def __aenter__(self):
+        print("打开 Agent 会话")
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        print("关闭 Agent 会话")
+        if exc_type:
+            print(f"会话异常: {exc_val}")
+
+async def main():
+    async with AgentSession() as session:
+        result = await session.run("Hello")
+```
+
+## 练习
+
+1. 为 LLM 调用添加指数退避重试逻辑（每次重试等待时间翻倍）
+2. 实现一个 `CircuitBreaker` 类，连续失败 N 次后熔断

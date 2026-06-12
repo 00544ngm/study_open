@@ -1,0 +1,198 @@
+---
+title: 关联关系与异步 ORM
+order: 2
+difficulty: intermediate
+estimated_time: 30min
+tags: [SQLAlchemy, ORM, 异步, 关系, FastAPI]
+---
+
+## 表关联
+
+```python
+from sqlalchemy import ForeignKey
+from sqlalchemy.orm import relationship, Mapped, mapped_column
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(100))
+    conversations: Mapped[list["Conversation"]] = relationship(back_populates="user")
+
+class Conversation(Base):
+    __tablename__ = "conversations"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    title: Mapped[str] = mapped_column(String(200))
+
+    user: Mapped["User"] = relationship(back_populates="conversations")
+    messages: Mapped[list["Message"]] = relationship(back_populates="conversation")
+
+class Message(Base):
+    __tablename__ = "messages"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    conversation_id: Mapped[int] = mapped_column(ForeignKey("conversations.id"))
+    role: Mapped[str] = mapped_column(String(50))    # user / assistant
+    content: Mapped[str] = mapped_column(Text)
+
+    conversation: Mapped["Conversation"] = relationship(back_populates="messages")
+```
+
+## 关联查询
+
+```python
+# 懒加载（默认）
+user = session.get(User, 1)
+print(user.conversations)  # 此时才查询
+
+# 预加载
+from sqlalchemy.orm import joinedload
+
+user = session.query(User).options(
+    joinedload(User.conversations)
+).first()
+# 一次 JOIN 查询所有关联
+
+# 子查询加载
+from sqlalchemy.orm import selectinload
+
+user = session.query(User).options(
+    selectinload(User.conversations).selectinload(Conversation.messages)
+).first()
+print(user.conversations[0].messages)  # 不会触发额外查询
+```
+
+## 异步 ORM
+
+```python
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+
+# 异步引擎（注意驱动前缀）
+async_engine = create_async_engine(
+    "postgresql+asyncpg://user:pass@localhost:5432/appdb",
+    echo=True,
+)
+
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+AsyncSessionLocal = async_sessionmaker(async_engine)
+
+# 异步 CRUD
+async def get_user(user_id: int):
+    async with AsyncSessionLocal() as session:
+        user = await session.get(User, user_id)
+        return user
+
+# 异步查询
+async def get_recent_conversations(user_id: int, limit: int = 10):
+    async with AsyncSessionLocal() as session:
+        from sqlalchemy import select
+        stmt = (
+            select(Conversation)
+            .where(Conversation.user_id == user_id)
+            .order_by(Conversation.created_at.desc())
+            .limit(limit)
+        )
+        result = await session.execute(stmt)
+        return result.scalars().all()
+```
+
+## FastAPI 异步集成
+
+```python
+from fastapi import FastAPI, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
+
+app = FastAPI()
+
+async def get_db():
+    async with AsyncSessionLocal() as session:
+        yield session
+
+@app.get("/conversations/{user_id}")
+async def get_conversations(
+    user_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    from sqlalchemy import select
+    stmt = (
+        select(Conversation)
+        .where(Conversation.user_id == user_id)
+        .order_by(Conversation.created_at.desc())
+    )
+    result = await db.execute(stmt)
+    conversations = result.scalars().all()
+    return [
+        {"id": c.id, "title": c.title}
+        for c in conversations
+    ]
+```
+
+## 数据库迁移
+
+使用 Alembic 管理数据库版本：
+
+```bash
+pip install alembic
+alembic init alembic
+
+# 配置 alembic.ini 中的 sqlalchemy.url
+# 修改 alembic/env.py 导入 Base
+
+# 生成迁移
+alembic revision --autogenerate -m "add messages table"
+# 执行迁移
+alembic upgrade head
+```
+
+## Agent 场景实战
+
+```python
+# 存储 Agent 对话历史
+async def save_conversation(
+    user_id: int,
+    title: str,
+    messages: list[dict],
+):
+    async with AsyncSessionLocal() as session:
+        conv = Conversation(
+            user_id=user_id,
+            title=title,
+        )
+        session.add(conv)
+        await session.flush()  # 获取 conv.id
+
+        for msg in messages:
+            session.add(Message(
+                conversation_id=conv.id,
+                role=msg["role"],
+                content=msg["content"],
+            ))
+        await session.commit()
+        return conv.id
+
+# 查询用户最近对话
+async def get_user_context(user_id: int) -> str:
+    async with AsyncSessionLocal() as session:
+        stmt = (
+            select(Conversation)
+            .where(Conversation.user_id == user_id)
+            .order_by(Conversation.created_at.desc())
+            .limit(5)
+        )
+        result = await session.execute(stmt)
+        return "\n".join(
+            f"{c.title}: {c.messages[:200] if c.messages else ''}"
+            for c in result.scalars()
+        )
+```
+
+| 概念 | 说明 |
+|------|------|
+| relationship | 定义 ORM 间关联 |
+| joinedload | JOIN 预加载 |
+| selectinload | IN 子查询预加载 |
+| AsyncSession | 异步会话 |
+| Alembic | 数据库迁移 |

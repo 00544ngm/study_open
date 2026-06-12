@@ -1,0 +1,149 @@
+---
+title: 高级 RAG 策略
+order: 2
+difficulty: advanced
+estimated_time: 30min
+tags: [RAG, 知识库, 检索]
+---
+
+## 入门
+
+基础 RAG（检索 → 拼接 → 生成）在复杂场景下效果有限。高级策略能显著提升检索质量。
+
+## 核心
+
+### Multi-Query 检索
+
+```python
+from openai import OpenAI
+
+client = OpenAI()
+
+def multi_query_rag(question: str, retriever, top_k: int = 3):
+    """生成多个角度的查询，扩大召回"""
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": "你是一个搜索专家。根据用户问题，生成3个不同角度的搜索查询。"},
+            {"role": "user", "content": question}
+        ]
+    )
+    queries = response.choices[0].message.content.split("\n")
+    queries = [q.strip() for q in queries if q.strip()]
+
+    # 对每个查询分别检索，合并去重
+    all_docs = []
+    seen = set()
+    for q in queries:
+        docs = retriever.search(q, top_k=top_k)
+        for doc in docs:
+            if doc.id not in seen:
+                all_docs.append(doc)
+                seen.add(doc.id)
+
+    # 用最多样化的上下文来生成回答
+    context = "\n\n".join(d.content for d in all_docs[:top_k])
+    return generate_answer(question, context)
+```
+
+### 重排序 (Rerank)
+
+```python
+from sentence_transformers import CrossEncoder
+
+# 用 Cross-Encoder 做精准重排序
+reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
+
+def rerank_search(query: str, documents: list, top_k: int = 3):
+    pairs = [[query, doc.content] for doc in documents]
+    scores = reranker.predict(pairs)
+
+    # 按相关性得分排序
+    scored = list(zip(documents, scores))
+    scored.sort(key=lambda x: x[1], reverse=True)
+
+    return [doc for doc, score in scored[:top_k]]
+```
+
+### 混合搜索 (Hybrid Search)
+
+```python
+def hybrid_search(query: str, retriever, top_k: int = 3):
+    """结合向量搜索 + 关键词搜索"""
+
+    # 向量语义搜索
+    vector_results = retriever.vector_search(query, top_k=top_k * 2)
+
+    # 关键词精确搜索（如 BM25 / TF-IDF）
+    keyword_results = retriever.keyword_search(query, top_k=top_k * 2)
+
+    # RRF (Reciprocal Rank Fusion) 融合排序
+    scores = {}
+    for rank, doc in enumerate(vector_results):
+        scores[doc.id] = scores.get(doc.id, 0) + 1 / (rank + 60)
+
+    for rank, doc in enumerate(keyword_results):
+        scores[doc.id] = scores.get(doc.id, 0) + 1 / (rank + 60)
+
+    ranked_ids = sorted(scores, key=scores.get, reverse=True)[:top_k]
+    return [retriever.get_doc(did) for did in ranked_ids]
+```
+
+## 进阶
+
+### 查询转换
+
+```python
+def query_transformation(question: str, history: list[str]):
+    """将模糊问题拆解或改写为更精确的查询"""
+    if len(history) > 0:
+        # 带上下文的查询重写
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "基于对话历史，将最新问题改写成独立查询"},
+                {"role": "user", "content": f"历史: {' | '.join(history[-3:])}\n最新: {question}"}
+            ]
+        )
+        return response.choices[0].message.content
+    return question
+```
+
+### 自适应检索
+
+根据问题复杂度动态决定检索策略：
+
+```python
+def adaptive_rag(question: str, retriever):
+    # 先判断问题复杂度
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": "判断问题复杂度: simple(不需要检索) / medium(需要检索) / complex(需要多步检索)"},
+            {"role": "user", "content": question}
+        ]
+    )
+    level = response.choices[0].message.content.strip()
+
+    if level == "simple":
+        # 直接用模型知识回答
+        return generate_answer(question, "")
+
+    elif level == "medium":
+        docs = retriever.search(question)
+        return generate_answer(question, docs[0].content)
+
+    else:  # complex
+        # 多步检索 + 推理
+        sub_queries = decompose_question(question)
+        all_contexts = []
+        for sq in sub_queries:
+            docs = retriever.search(sq)
+            all_contexts.extend(d.content for d in docs)
+        return generate_answer(question, "\n".join(all_contexts))
+```
+
+## 练习
+
+1. 实现一个 Multi-Query RAG，对比单查询和多查询的结果质量差异
+2. 为 RAG 系统添加 Rerank 步骤，观察 Top-3 准确率的变化

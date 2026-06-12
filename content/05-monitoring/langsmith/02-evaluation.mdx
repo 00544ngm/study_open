@@ -1,0 +1,385 @@
+---
+title: LangSmith 评估与数据集
+order: 2
+difficulty: core
+estimated_time: 30min
+tags: [LangSmith, 评估, 数据集, 回归测试, CI]
+---
+
+## 入门
+
+LangSmith 不仅是追踪工具，更是一个完整的评估平台。通过创建测试数据集、运行评估、对比模型版本，你可以在 CI 中自动保证 LLM 应用的质量。
+
+```python
+import os
+os.environ["LANGSMITH_TRACING"] = "true"
+os.environ["LANGSMITH_API_KEY"] = "lsv2_..."
+os.environ["LANGSMITH_PROJECT"] = "eval-demo"
+```
+
+## 核心
+
+### 1. 创建测试数据集
+
+数据集是评估的基础。每个样本包含输入（问题）和参考输出（标准答案）。
+
+```python
+from langsmith import Client
+
+client = Client()
+
+# 从 CSV 创建数据集
+dataset = client.create_dataset(
+    dataset_name="QA 测试集",
+    description="客服问答测试数据",
+)
+
+# 逐条添加样本
+client.create_examples(
+    dataset_id=dataset.id,
+    inputs=[
+        {"question": "如何退款？"},
+        {"question": "发货时间多久？"},
+        {"question": "怎么修改地址？"},
+    ],
+    outputs=[
+        {"answer": "请在订单页面点击退款，1-3 工作日到账"},
+        {"answer": "下单后 24 小时内发货"},
+        {"answer": "联系客服或自行在订单页修改"},
+    ],
+)
+```
+
+也可以从 LangSmith UI 上传 CSV / JSON 文件，或在代码中批量导入：
+
+```python
+import pandas as pd
+
+df = pd.read_csv("test_cases.csv")
+# CSV 字段: question, expected_answer, category
+
+client.create_examples(
+    dataset_id=dataset.id,
+    inputs=[{"question": row["question"]} for _, row in df.iterrows()],
+    outputs=[{"answer": row["expected_answer"]} for _, row in df.iterrows()],
+)
+```
+
+### 2. 运行评估
+
+LangSmith 提供 `evaluate` 函数，自动将测试数据送入你的系统，并计算评分。
+
+```python
+from langsmith import evaluate
+from langsmith.schemas import Example, Run
+
+# 定义被评估的系统
+def my_qa_system(inputs: dict) -> dict:
+    """你的 QA 系统：接收 question，返回 answer"""
+    # 这里替换为实际的 LLM 调用
+    from langchain_openai import ChatOpenAI
+    llm = ChatOpenAI(model="gpt-4o", temperature=0)
+    result = llm.invoke(f"请回答：{inputs['question']}")
+    return {"answer": result.content}
+
+# 定义评估器
+def exact_match_evaluator(run: Run, example: Example) -> dict:
+    """精确匹配评估器"""
+    predicted = run.outputs.get("answer", "")
+    expected = example.outputs.get("answer", "")
+    score = 1.0 if predicted.strip() == expected.strip() else 0.0
+    return {"key": "exact_match", "score": score}
+
+# 运行评估
+results = evaluate(
+    my_qa_system,
+    data="QA 测试集",                  # 数据集名称或 ID
+    evaluators=[exact_match_evaluator],
+    experiment_prefix="qa-eval-v1",    # 实验名称前缀
+    metadata={"version": "1.0.0"},     # 附加元数据
+)
+
+# 查看汇总
+summary = results._results_summary
+print(f"准确率: {summary['exact_match']:.2%}")
+```
+
+### 3. 内置评估器
+
+LangSmith 内置了多种评估器，避免重复造轮子：
+
+```python
+from langsmith.evaluation import evaluate
+from langsmith.evaluation.criteria import Criteria
+
+# 使用 LangChain 内置评估器
+from langchain.evaluation import load_evaluator
+
+# 自定义评估配置
+evaluators = [
+    # 精确匹配
+    "exact_match",
+
+    # 语义相似度（基于 LLM）
+    "semantic_similarity",
+
+    # 自定义 Criteria（LLM 打分）
+    Criteria({"helpfulness": "回答是否有帮助？",
+              "conciseness": "回答是否简洁？"}),
+]
+
+results = evaluate(
+    my_qa_system,
+    data="QA 测试集",
+    evaluators=evaluators,
+)
+```
+
+常用内置评估器：
+
+| 评估器 | 说明 | 适用场景 |
+|---|---|---|
+| `exact_match` | 精确字符串匹配 | 固定答案、分类 |
+| `semantic_similarity` | 语义相似度评分 (0-1) | 开放问答 |
+| `Criteria` | 自定义 LLM 评判标准 | 质量评估 |
+| `labeled_criteria` | 带参考答案的评判 | 有标准答案时 |
+| `cot_qa` | Chain-of-Thought QA 评估 | 复杂推理 |
+| `embedding_distance` | 向量距离评估 | 语义相似度 |
+
+### 4. 自定义评估器（LLM-as-Judge）
+
+对于开放性问题，用 LLM 作为评审效果最好：
+
+```python
+from langsmith.evaluation import evaluate
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import ChatPromptTemplate
+
+# LLM-as-Judge 评估器
+def llm_judge_evaluator(run: Run, example: Example) -> dict:
+    judge_llm = ChatOpenAI(model="gpt-4o", temperature=0)
+
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", """你是一个专业的 QA 质量评审。根据以下标准打分（1-5）：
+        - 准确性：答案是否正确？
+        - 完整性：是否回答了问题的所有方面？
+        - 清晰度：表达是否清晰易懂？"""),
+        ("human", """问题: {question}
+        标准答案: {expected_answer}
+        系统回答: {predicted_answer}
+        请给出 1-5 分和简短理由。"""),
+    ])
+
+    chain = prompt | judge_llm
+    result = chain.invoke({
+        "question": example.inputs["question"],
+        "expected_answer": example.outputs["answer"],
+        "predicted_answer": run.outputs.get("answer", ""),
+    })
+
+    return {
+        "key": "llm_judge",
+        "score": int(result.content[0]),  # 提取分数
+        "comment": result.content,
+    }
+
+# 带权重的复合评估
+def composite_evaluator(run: Run, example: Example) -> dict:
+    """综合评分：结合精确匹配和语义相似度"""
+    predicted = run.outputs.get("answer", "")
+    expected = example.outputs.get("answer", "")
+
+    exact = 1.0 if predicted.strip() == expected.strip() else 0.0
+
+    from langchain_openai import OpenAIEmbeddings
+    from sklearn.metrics.pairwise import cosine_similarity
+    import numpy as np
+
+    emb = OpenAIEmbeddings()
+    pred_emb = emb.embed_query(predicted)
+    exp_emb = emb.embed_query(expected)
+    similarity = cosine_similarity([pred_emb], [exp_emb])[0][0]
+
+    # 加权综合：精确匹配占 40%，语义相似度占 60%
+    composite = 0.4 * exact + 0.6 * similarity
+
+    return {
+        "key": "composite_score",
+        "score": composite,
+        "metadata": {
+            "exact_match": exact,
+            "semantic_similarity": similarity,
+        }
+    }
+```
+
+### 5. 模型版本对比
+
+`evaluate` 返回的实验结果可以直接在 LangSmith UI 中对比：
+
+```python
+def run_comparison():
+    """对比不同模型在同一测试集上的表现"""
+    models = [
+        ("gpt-4o", "gpt-4o"),
+        ("gpt-4o-mini", "gpt-4o-mini"),
+        ("claude-3-haiku", "claude-3-haiku"),
+    ]
+
+    experiments = []
+    for name, model in models:
+        def create_llm(model_name=model):
+            from langchain_openai import ChatOpenAI
+            llm = ChatOpenAI(model=model_name, temperature=0)
+            return lambda inputs: {
+                "answer": llm.invoke(f"请回答：{inputs['question']}").content
+            }
+
+        result = evaluate(
+            create_llm(),
+            data="QA 测试集",
+            evaluators=["exact_match", llm_judge_evaluator],
+            experiment_prefix=f"model-compare-{name}",
+            metadata={"model": name},
+        )
+        experiments.append(result)
+
+    return experiments
+
+# 运行后，在 LangSmith UI 的 Dataset 页面
+# 可以同时选择多个实验进行对比，查看每个模型的评分矩阵
+```
+
+### 6. 回归测试与 CI 集成
+
+将评估集成到 CI 流水线中，每次提交自动运行：
+
+```yaml
+# .github/workflows/eval.yml
+name: LangSmith Evaluation
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run evaluations
+        env:
+          LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          LANGSMITH_TRACING: "true"
+        run: |
+          python -m pytest tests/evaluation/ --eval-dataset="regression-suite"
+
+      - name: Check quality gate
+        env:
+          LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
+        run: python scripts/check_quality_gate.py
+```
+
+质量门禁示例：
+
+```python
+"""check_quality_gate.py - 检查评估结果是否达标"""
+from langsmith import Client
+
+client = Client()
+
+THRESHOLDS = {
+    "exact_match": 0.80,       # 精确匹配 >= 80%
+    "llm_judge": 4.0,          # LLM 评分 >= 4.0
+    "semantic_similarity": 0.85, # 语义相似度 >= 85%
+}
+
+def check_quality_gate():
+    latest_experiment = client.list_experiments(
+        project_name="regression-suite",
+        limit=1,
+    )[0]
+
+    results = client.get_test_results(latest_experiment.id)
+
+    for metric, threshold in THRESHOLDS.items():
+        score = results.get(feedback_stats, {}).get(metric, {}).get("avg", 0)
+        if score < threshold:
+            raise ValueError(
+                f"质量门禁失败: {metric} = {score:.3f} < {threshold:.3f}"
+            )
+        print(f"✓ {metric}: {score:.3f} >= {threshold:.3f}")
+
+if __name__ == "__main__":
+    check_quality_gate()
+```
+
+### 7. 反馈循环与持续改进
+
+```python
+# 将生产环境的用户反馈记录为评估数据
+def record_user_feedback(run_id: str, score: int, comment: str = ""):
+    """记录用户对某次生成的反馈"""
+    client.create_feedback(
+        run_id=run_id,
+        key="user_satisfaction",
+        score=score,         # 1-5 分
+        comment=comment,
+    )
+
+# 定期将高评分样本加入训练集
+def promote_to_dataset(threshold: float = 4.0):
+    """将用户高评分的问答对加入数据集"""
+    runs = client.list_runs(
+        project_name="production",
+        filter="feedback_stats.user_satisfaction.avg > {threshold}",
+    )
+
+    dataset = client.create_dataset(
+        dataset_name="production-high-quality",
+        description="生产环境中用户高评价的样本",
+    )
+
+    for run in runs:
+        client.create_example(
+            dataset_id=dataset.id,
+            inputs=run.inputs,
+            outputs=run.outputs,
+        )
+```
+
+## 进阶
+
+### 评估策略选择
+
+| 场景 | 推荐评估器 | 说明 |
+|---|---|---|
+| 分类/标签 | `exact_match` | 确定性任务 |
+| 开放问答 | `llm_judge` + `semantic_similarity` | 主观质量 |
+| 代码生成 | `execution_match` + 单元测试 | 功能正确性 |
+| 检索 RAG | `context_recall` + `answer_relevancy` | 检索质量 |
+| 对话 | `cot_qa` + 人工抽样 | 长对话 |
+
+### 最佳实践
+
+1. **数据集规模**: 评估集至少 50-100 条，回归集至少 20 条
+2. **多样性**: 覆盖边界情况、错误输入、典型场景
+3. **版本管理**: 数据集的每次修改会自动版本化，可回溯
+4. **预算控制**: 评估消耗 Token，可先用小模型 + 小数据集，最后用全量跑一次
+5. **基准线**: 维护一个"基线实验"，每次对比确保不退化
+6. **质量门禁**: CI 中设定硬性阈值，防止劣化代码合并
+
+## 练习
+
+1. 用你自己的 LLM 应用创建一个 10 条样本的测试数据集
+2. 编写一个自定义 LLM-as-Judge 评估器，设定 5 个评分维度
+3. 对比 gpt-4o-mini 和 gpt-4o 在你数据集上的表现差异
+4. 在 GitHub Actions 中配置评估流水线，设置质量门禁

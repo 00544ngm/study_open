@@ -1,0 +1,99 @@
+---
+title: Asyncio 异步编程
+order: 1
+difficulty: intermediate
+estimated_time: 30min
+tags: [Asyncio, 异步, Python, 并发]
+---
+
+## 核心概念
+
+```python
+import asyncio
+
+# 协程函数
+async def fetch_data(url: str):
+    print(f"开始请求: {url}")
+    await asyncio.sleep(1)  # 模拟 IO
+    print(f"完成: {url}")
+
+# 运行
+asyncio.run(fetch_data("https://example.com"))
+```
+
+## 并发执行
+
+```python
+async def fetch_one(url: str):
+    print(f"请求: {url}")
+    await asyncio.sleep(1)
+    return f"结果: {url}"
+
+# 同时执行多个
+async def main():
+    tasks = [
+        fetch_one("https://a.com"),
+        fetch_one("https://b.com"),
+        fetch_one("https://c.com"),
+    ]
+    results = await asyncio.gather(*tasks)
+    print(results)
+
+asyncio.run(main())
+# 3 个请求同时执行，总耗时 ~1s 而非 3s
+```
+
+## 超时控制
+
+```python
+async def slow_operation():
+    await asyncio.sleep(10)
+    return "完成"
+
+async def main():
+    try:
+        result = await asyncio.wait_for(slow_operation(), timeout=2)
+    except asyncio.TimeoutError:
+        print("请求超时")
+```
+
+## 信号量限流
+
+```python
+semaphore = asyncio.Semaphore(5)  # 最多 5 个并发
+
+async def rate_limited_fetch(url: str):
+    async with semaphore:
+        print(f"请求: {url}")
+        await asyncio.sleep(1)
+        return url
+
+async def main():
+    urls = [f"https://api.example.com/page/{i}" for i in range(20)]
+    tasks = [rate_limited_fetch(url) for url in urls]
+    results = await asyncio.gather(*tasks)
+    print(f"完成 {len(results)} 个请求")
+```
+
+## 事件循环
+
+```python
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
+try:
+    result = loop.run_until_complete(fetch_data("https://example.com"))
+finally:
+    loop.close()
+
+# 获取当前运行循环
+loop = asyncio.get_running_loop()
+print(f"循环: {loop}")
+```
+
+| 函数 | 说明 |
+|------|------|
+| `asyncio.run(coro)` | 运行协程 |
+| `asyncio.gather(*tasks)` | 并发执行 |
+| `asyncio.wait_for(coro, timeout)` | 超时控制 |
+| `asyncio.Semaphore(n)` | 信号量限流 |
+| `asyncio.sleep(n)` | 异步等待 |

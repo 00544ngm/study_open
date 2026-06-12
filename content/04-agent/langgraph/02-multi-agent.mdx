@@ -1,0 +1,62 @@
+---
+title: 多 Agent 系统
+order: 2
+difficulty: advanced
+estimated_time: 30min
+tags: [LangGraph, Agent, 进阶]
+---
+
+## 核心
+
+### 多 Agent 协作模式
+
+```python
+from langgraph.graph import StateGraph, END
+from typing import TypedDict, Literal
+
+class MultiAgentState(TypedDict):
+    messages: list
+    task: str
+    current_agent: str
+    results: dict
+
+# 路由节点
+def router(state: MultiAgentState) -> Literal["research", "code", "summary"]:
+    task = state["task"].lower()
+    if "代码" in task or "实现" in task:
+        return "code"
+    return "research"
+
+def research_agent(state: MultiAgentState) -> MultiAgentState:
+    info = {"research_result": f"研究结果: {state['task']}"}
+    return {"results": {**state.get("results", {}), **info}}
+
+def code_agent(state: MultiAgentState) -> MultiAgentState:
+    code = {"code_result": f"代码实现: {state['task']}"}
+    return {"results": {**state.get("results", {}), **code}}
+
+def summary_agent(state: MultiAgentState) -> MultiAgentState:
+    all_results = state.get("results", {})
+    summary = f"最终总结: {all_results}"
+    return {"messages": [summary]}
+
+# 构建多 Agent 图
+builder = StateGraph(MultiAgentState)
+builder.add_node("router", router)
+builder.add_node("research", research_agent)
+builder.add_node("code", code_agent)
+builder.add_node("summary", summary_agent)
+builder.set_entry_point("router")
+
+builder.add_conditional_edges("router", router)
+builder.add_edge("research", "summary")
+builder.add_edge("code", "summary")
+builder.add_edge("summary", END)
+
+multi_agent = builder.compile()
+```
+
+## 练习
+
+1. 实现一个三 Agent 系统：搜索 Agent → 分析 Agent → 报告 Agent
+2. 为每个 Agent 添加独立的系统提示词

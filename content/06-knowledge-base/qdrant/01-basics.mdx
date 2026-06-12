@@ -1,0 +1,91 @@
+---
+title: Qdrant 基础
+order: 1
+difficulty: intermediate
+estimated_time: 25min
+tags: [Qdrant, 向量数据库]
+---
+
+## 入门
+
+```python
+from qdrant_client import QdrantClient
+from qdrant_client.models import Distance, VectorParams
+
+client = QdrantClient(host="localhost", port=6333)
+
+# 创建集合
+client.create_collection(
+    collection_name="knowledge_base",
+    vectors_config=VectorParams(size=1536, distance=Distance.COSINE)
+)
+```
+
+## 核心
+
+```python
+from qdrant_client import QdrantClient
+from qdrant_client.models import PointStruct, Filter, FieldCondition, MatchValue
+from openai import OpenAI
+
+class KnowledgeBase:
+    def __init__(self):
+        self.qdrant = QdrantClient(host="localhost", port=6333)
+        self.openai = OpenAI()
+        self.collection = "learning_notes"
+
+    def add_document(self, text: str, metadata: dict, point_id: int):
+        vector = self.openai.embeddings.create(
+            model="text-embedding-3-small",
+            input=text
+        ).data[0].embedding
+
+        self.qdrant.upsert(
+            collection_name=self.collection,
+            points=[PointStruct(
+                id=point_id,
+                vector=vector,
+                payload={"text": text, **metadata}
+            )]
+        )
+
+    def search(self, query: str, stage_filter: str = None, top_k: int = 5):
+        query_vec = self.openai.embeddings.create(
+            model="text-embedding-3-small",
+            input=query
+        ).data[0].embedding
+
+        filter_cond = None
+        if stage_filter:
+            filter_cond = Filter(
+                must=[FieldCondition(key="stage", match=MatchValue(value=stage_filter))]
+            )
+
+        results = self.qdrant.search(
+            collection_name=self.collection,
+            query_vector=query_vec,
+            query_filter=filter_cond,
+            limit=top_k,
+            score_threshold=0.5
+        )
+        return results
+```
+
+## 进阶
+
+```python
+# 在 Docker 中运行 Qdrant
+# docker run -p 6333:6333 -p 6334:6334 qdrant/qdrant
+
+# 批量写入（高效）
+points = [
+    PointStruct(id=i, vector=vecs[i], payload={"text": texts[i]})
+    for i in range(len(texts))
+]
+client.upsert(collection_name="kb", points=points, wait=False)
+```
+
+## 练习
+
+1. 启动 Qdrant Docker 容器，创建集合并写入 10 篇笔记
+2. 实现按阶段（stage）过滤搜索功能

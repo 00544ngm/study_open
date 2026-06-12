@@ -1,0 +1,917 @@
+---
+title: LLM 成本控制实战
+order: 2
+difficulty: core
+estimated_time: 35min
+tags: [成本, Token, 缓存, 模型选型, 优化]
+---
+
+## 核心挑战
+
+LLM API 调用成本随用量线性增长。一个中等规模的 Agent 应用每日调用数十万次，月成本可达数万美元。本节从 Token 追踪、缓存策略、模型选型、提示压缩四个维度构建成本控制体系。
+
+## Token 用量追踪
+
+### 按用户与会话追踪
+
+```python
+import tiktoken
+from datetime import datetime, date
+from typing import Optional, Dict, List
+from collections import defaultdict
+import json
+
+
+class TokenUsage:
+    """单次调用的 Token 使用记录"""
+
+    def __init__(
+        self,
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+        user_id: str,
+        session_id: str,
+        task_type: str = "general",
+    ):
+        self.model = model
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
+        self.total_tokens = input_tokens + output_tokens
+        self.user_id = user_id
+        self.session_id = session_id
+        self.task_type = task_type
+        self.timestamp = datetime.utcnow().isoformat() + "Z"
+
+    def calculate_cost(self) -> float:
+        """根据模型定价计算成本（美元）"""
+        pricing = {
+            "gpt-4o":               {"input": 2.50,  "output": 10.00},
+            "gpt-4o-mini":          {"input": 0.15,  "output": 0.60},
+            "gpt-4-turbo":          {"input": 10.00, "output": 30.00},
+            "claude-opus-4-20250514": {"input": 15.00, "output": 75.00},
+            "claude-sonnet-4-20250514": {"input": 3.00,  "output": 15.00},
+            "claude-haiku-3-5":     {"input": 0.80,  "output": 4.00},
+        }
+
+        rates = pricing.get(self.model, {"input": 0, "output": 0})
+        input_cost = (self.input_tokens * rates["input"]) / 1_000_000
+        output_cost = (self.output_tokens * rates["output"]) / 1_000_000
+        return round(input_cost + output_cost, 6)
+
+    def to_dict(self) -> dict:
+        return {
+            "model": self.model,
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "total_tokens": self.total_tokens,
+            "cost": self.calculate_cost(),
+            "user_id": self.user_id,
+            "session_id": self.session_id,
+            "task_type": self.task_type,
+            "timestamp": self.timestamp,
+        }
+
+
+class CostTracker:
+    """全量成本追踪器，支持聚合查询和预算告警"""
+
+    def __init__(self, budget_limit_daily: float = 100.0):
+        self.usage_log: List[TokenUsage] = []
+        self.budget_limit_daily = budget_limit_daily
+        self._alert_callbacks = []
+
+    def record(self, usage: TokenUsage):
+        self.usage_log.append(usage)
+        self._check_budget(usage)
+
+    def on_budget_alert(self, callback):
+        """注册预算告警回调"""
+        self._alert_callbacks.append(callback)
+
+    def _check_budget(self, usage: TokenUsage):
+        today_cost = self.daily_cost()
+        if today_cost > self.budget_limit_daily:
+            for cb in self._alert_callbacks:
+                cb({
+                    "type": "budget_exceeded",
+                    "daily_cost": today_cost,
+                    "limit": self.budget_limit_daily,
+                    "last_usage": usage.to_dict(),
+                })
+
+    def daily_cost(self, target_date: Optional[date] = None) -> float:
+        today = target_date or date.today()
+        return sum(
+            u.calculate_cost()
+            for u in self.usage_log
+            if u.timestamp.startswith(today.isoformat())
+        )
+
+    def user_cost(self, user_id: str, days: int = 7) -> float:
+        """查询指定用户的成本"""
+        from datetime import timedelta
+        cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
+        return sum(
+            u.calculate_cost()
+            for u in self.usage_log
+            if u.user_id == user_id and u.timestamp >= cutoff
+        )
+
+    def model_breakdown(self, days: int = 30) -> Dict[str, float]:
+        """按模型拆分解读成本"""
+        from datetime import timedelta
+        cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
+        breakdown = defaultdict(float)
+        for u in self.usage_log:
+            if u.timestamp >= cutoff:
+                breakdown[u.model] += u.calculate_cost()
+        return dict(breakdown)
+
+    def top_users(self, limit: int = 5, days: int = 30) -> List[dict]:
+        """查看成本最高的用户"""
+        from datetime import timedelta
+        cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
+        user_costs = defaultdict(float)
+        for u in self.usage_log:
+            if u.timestamp >= cutoff:
+                user_costs[u.user_id] += u.calculate_cost()
+        return [
+            {"user_id": uid, "cost": round(cost, 4)}
+            for uid, cost in sorted(
+                user_costs.items(), key=lambda x: -x[1]
+            )[:limit]
+        ]
+
+    def export_report(self, days: int = 30) -> dict:
+        """导出完整成本报告"""
+        return {
+            "period_days": days,
+            "total_cost": round(self.daily_cost(), 2),
+            "model_breakdown": self.model_breakdown(days),
+            "top_users": self.top_users(days=days),
+            "daily_budget_limit": self.budget_limit_daily,
+        }
+
+
+# 使用示例
+tracker = CostTracker(budget_limit_daily=50.0)
+
+
+def on_alert(alert):
+    print(f"[告警] 预算超限! 日成本 ${alert['daily_cost']:.2f}")
+    # 发送邮件、Slack 通知等
+
+
+tracker.on_budget_alert(on_alert)
+
+# 模拟记录多次调用
+usage = TokenUsage(
+    model="gpt-4o",
+    input_tokens=1500,
+    output_tokens=400,
+    user_id="user_abc",
+    session_id="session_001",
+    task_type="chat",
+)
+tracker.record(usage)
+print(f"本次成本: ${usage.calculate_cost():.6f}")
+```
+
+## 缓存策略
+
+缓存是成本控制最有效的手段。语义缓存可以显著减少重复查询的开销。
+
+### 语义缓存（Redis + Embedding）
+
+```python
+import numpy as np
+from typing import Optional, List, Tuple
+import json
+import hashlib
+import asyncio
+from datetime import timedelta
+
+
+class SemanticCache:
+    """基于语义相似度的 LLM 响应缓存
+
+    使用 Embedding 向量 + Redis 实现：
+    1. 将用户输入转为 Embedding
+    2. 在 Redis 中搜索相似度超过阈值的缓存条目
+    3. 命中则返回缓存，否则调用 LLM 并缓存结果
+    """
+
+    def __init__(
+        self,
+        redis_client,
+        embedding_fn,
+        similarity_threshold: float = 0.92,
+        ttl_seconds: int = 3600,
+        max_cache_size: int = 10000,
+    ):
+        self.redis = redis_client
+        self.embedding_fn = embedding_fn  # async: text -> List[float]
+        self.threshold = similarity_threshold
+        self.ttl = ttl_seconds
+        self.max_size = max_cache_size
+        self.hits = 0
+        self.misses = 0
+        self.cost_saved = 0.0
+
+    def _cosine_similarity(self, a: List[float], b: List[float]) -> float:
+        a_arr = np.array(a)
+        b_arr = np.array(b)
+        return float(np.dot(a_arr, b_arr) / (
+            np.linalg.norm(a_arr) * np.linalg.norm(b_arr) + 1e-10
+        ))
+
+    async def _search_similar(
+        self, embedding: List[float]
+    ) -> Optional[Tuple[str, dict]]:
+        """在缓存中搜索语义相似的条目"""
+        # 从 Redis 获取所有缓存 key 和对应的 embedding
+        cursor = 0
+        best_match = None
+        best_score = 0.0
+
+        while True:
+            cursor, keys = await self.redis.scan(
+                cursor, match="sem_cache:*", count=100
+            )
+            for key in keys:
+                cached = await self.redis.hgetall(key)
+                if not cached:
+                    continue
+                cached_emb = json.loads(cached.get(b"embedding", b"[]"))
+                score = self._cosine_similarity(embedding, cached_emb)
+                if score > best_score:
+                    best_score = score
+                    best_match = (key.decode(), json.loads(cached.get(b"response", b"{}")))
+
+            if cursor == 0:
+                break
+
+        if best_score >= self.threshold:
+            return best_match
+        return None
+
+    async def get_or_compute(
+        self,
+        messages: list,
+        model: str,
+        llm_func,
+        task_type: str = "general",
+        user_id: str = "anonymous",
+    ) -> dict:
+        """查询缓存或调用 LLM"""
+        # 生成输入文本
+        input_text = json.dumps(messages, ensure_ascii=False, sort_keys=True)
+
+        # 计算 Embedding
+        embedding = await self.embedding_fn(input_text)
+
+        # 搜索语义缓存
+        cached = await self._search_similar(embedding)
+        if cached:
+            self.hits += 1
+            return cached[1]
+
+        self.misses += 1
+
+        # 调用 LLM
+        response = await llm_func(messages, model)
+
+        # 估算节省的成本
+        input_tokens = len(input_text) // 4  # 粗略估算
+        output_tokens = len(json.dumps(response)) // 4
+
+        # 存入缓存
+        cache_key = f"sem_cache:{hashlib.md5(input_text.encode()).hexdigest()}"
+        await self.redis.hset(cache_key, mapping={
+            "embedding": json.dumps(embedding),
+            "response": json.dumps(response),
+            "model": model,
+            "task_type": task_type,
+            "user_id": user_id,
+            "created_at": asyncio.get_event_loop().time(),
+        })
+        await self.redis.expire(cache_key, self.ttl)
+
+        return response
+
+    @property
+    def hit_rate(self) -> float:
+        total = self.hits + self.misses
+        return self.hits / total if total > 0 else 0.0
+
+
+# Embedding 函数示例
+async def get_embedding(text: str) -> List[float]:
+    """调用 OpenAI Embedding API"""
+    from openai import AsyncOpenAI
+    client = AsyncOpenAI()
+    resp = await client.embeddings.create(
+        model="text-embedding-3-small",
+        input=text,
+    )
+    return resp.data[0].embedding
+
+
+# 使用
+async def example():
+    import redis.asyncio as aioredis
+    r = aioredis.from_url("redis://localhost:6379")
+
+    cache = SemanticCache(
+        redis_client=r,
+        embedding_fn=get_embedding,
+        similarity_threshold=0.90,
+        ttl_seconds=1800,
+    )
+
+    # 第一次调用（miss）
+    result1 = await cache.get_or_compute(
+        messages=[{"role": "user", "content": "什么是 RAG 架构？"}],
+        model="gpt-4o-mini",
+        llm_func=my_llm_call,
+    )
+    print(f"缓存命中率: {cache.hit_rate}")  # 0.0
+
+    # 第二次调用 - 语义相似（hit）
+    result2 = await cache.get_or_compute(
+        messages=[{"role": "user", "content": "请解释 RAG 架构是什么"}],
+        model="gpt-4o-mini",
+        llm_func=my_llm_call,
+    )
+    print(f"缓存命中率: {cache.hit_rate}")  # 0.5
+    print(f"实际节省调用次数: {cache.hits}")
+```
+
+### 精确缓存（Exact Match Cache）
+
+对于确定性的重复请求，精确缓存更高效：
+
+```python
+class ExactCache:
+    """精确匹配缓存，适用于完全相同的请求"""
+
+    def __init__(self, redis_client, ttl: int = 3600):
+        self.redis = redis_client
+        self.ttl = ttl
+
+    def _make_key(self, messages: list, model: str, temperature: float) -> str:
+        content = json.dumps(messages, sort_keys=True)
+        return f"exact:{hashlib.sha256(
+            f"{content}|{model}|{temperature}".encode()
+        ).hexdigest()}"
+
+    async def get(self, messages: list, model: str, temperature: float = 0) -> Optional[dict]:
+        key = self._make_key(messages, model, temperature)
+        cached = await self.redis.get(key)
+        if cached:
+            return json.loads(cached)
+        return None
+
+    async def set(self, messages: list, model: str, response: dict, temperature: float = 0):
+        key = self._make_key(messages, model, temperature)
+        await self.redis.setex(key, self.ttl, json.dumps(response))
+```
+
+## 模型分层（Tiering）
+
+根据任务复杂度动态选择模型，在成本和质量之间取得平衡。
+
+```python
+from enum import Enum
+
+
+class ModelTier(Enum):
+    CHEAP = "cheap"        # 简单任务，低成本
+    STANDARD = "standard"  # 一般任务，平衡
+    POWERFUL = "powerful"  # 复杂任务，高质量
+    CRITICAL = "critical"  # 关键任务，最强模型
+
+
+class ModelRouter:
+    """基于任务特征的多层模型路由"""
+
+    TIER_CONFIG = {
+        ModelTier.CHEAP: {
+            "models": ["gpt-4o-mini", "claude-haiku-3-5"],
+            "max_input_tokens": 4096,
+            "cost_per_1k": 0.00015,
+            "description": "简单问答、分类、提取",
+        },
+        ModelTier.STANDARD: {
+            "models": ["gpt-4o", "claude-sonnet-4-20250514"],
+            "max_input_tokens": 8192,
+            "cost_per_1k": 0.0025,
+            "description": "一般对话、代码生成、内容总结",
+        },
+        ModelTier.POWERFUL: {
+            "models": ["claude-opus-4-20250514", "gpt-4-turbo"],
+            "max_input_tokens": 32768,
+            "cost_per_1k": 0.015,
+            "description": "复杂推理、长文档分析、多步骤规划",
+        },
+        ModelTier.CRITICAL: {
+            "models": ["claude-opus-4-20250514"],
+            "max_input_tokens": 65536,
+            "cost_per_1k": 0.015,
+            "description": "关键业务决策、合规审查、代码审计",
+        },
+    }
+
+    def __init__(self, preferred_provider: str = "openai"):
+        self.preferred_provider = preferred_provider
+
+    def classify_task(
+        self,
+        task_type: str,
+        input_length: int,
+        requires_reasoning: bool = False,
+    ) -> ModelTier:
+        """根据任务特征分配合适的层"""
+
+        # 关键任务直接分配最高层
+        critical_tasks = {"code_audit", "compliance_check", "financial_decision"}
+        if task_type in critical_tasks:
+            return ModelTier.CRITICAL
+
+        # 简单快速任务
+        simple_tasks = {"classification", "extraction", "translation", "summarize_short"}
+        if task_type in simple_tasks and input_length < 1000:
+            return ModelTier.CHEAP
+
+        # 需要推理的任务
+        if requires_reasoning or input_length > 8000:
+            return ModelTier.POWERFUL
+
+        # 长文本但不需要深度推理
+        if input_length > 4000:
+            return ModelTier.STANDARD
+
+        return ModelTier.STANDARD
+
+    def select_model(self, tier: ModelTier) -> str:
+        """从指定层中选择具体模型"""
+        config = self.TIER_CONFIG[tier]
+        models = config["models"]
+
+        # 根据 preferred_provider 选择
+        if self.preferred_provider == "openai":
+            preferred = [m for m in models if "gpt" in m]
+        else:
+            preferred = [m for m in models if "claude" in m]
+
+        return preferred[0] if preferred else models[0]
+
+    def estimate_cost(self, tier: ModelTier, input_tokens: int, output_tokens: int) -> float:
+        """预估一次调用的成本"""
+        cost_per_1k = self.TIER_CONFIG[tier]["cost_per_1k"]
+        return (input_tokens + output_tokens) * cost_per_1k / 1000
+
+
+# 使用示例
+router = ModelRouter(preferred_provider="openai")
+
+
+def smart_llm_call(task_type: str, user_input: str, requires_reasoning: bool = False):
+    """智能 LLM 调用：自动选择模型并追踪成本"""
+    input_length = len(user_input)
+    tier = router.classify_task(task_type, input_length, requires_reasoning)
+    model = router.select_model(tier)
+
+    print(f"[路由] {task_type} -> {tier.value} ({model})")
+    print(f"[成本] 预估 ${router.estimate_cost(tier, input_length, 200):.4f}")
+
+    # 实际调用 ...
+    return call_llm(model, user_input)
+
+
+# 演示不同场景
+assert router.classify_task("classification", 50).value == "cheap"
+assert router.classify_task("chat", 3000).value == "standard"
+assert router.classify_task("analysis", 10000, requires_reasoning=True).value == "powerful"
+assert router.classify_task("code_audit", 50000).value == "critical"
+```
+
+## Prompt 压缩
+
+压缩 Prompt 可以直接减少 Token 消耗。以下是几种实用的压缩策略。
+
+```python
+class PromptCompressor:
+    """Prompt 压缩器"""
+
+    @staticmethod
+    def compress_system_prompt(prompt: str, max_ratio: float = 0.5) -> str:
+        """压缩 System Prompt：删除冗余描述，保留核心指令"""
+        # 删除注释行
+        lines = [l for l in prompt.split("\n") if not l.strip().startswith("#")]
+
+        # 删除空行（合并连续的空白行）
+        compressed = []
+        prev_empty = False
+        for l in lines:
+            is_empty = not l.strip()
+            if is_empty and prev_empty:
+                continue
+            compressed.append(l)
+            prev_empty = is_empty
+
+        # 如果仍然超过目标长度，截断
+        target_len = int(len(prompt) * max_ratio)
+        result = "\n".join(compressed)
+        if len(result) > target_len:
+            result = result[:target_len]
+
+        return result
+
+    @staticmethod
+    def truncate_history(messages: list, max_messages: int = 10) -> list:
+        """截断对话历史：保留最近的 N 轮对话"""
+        if len(messages) <= max_messages + 1:  # +1 for system prompt
+            return messages
+
+        # 保留 system prompt
+        system_msg = [m for m in messages if m.get("role") == "system"]
+        # 保留最近的消息
+        recent = messages[-max_messages:]
+
+        return system_msg + recent
+
+    @staticmethod
+    def summarize_long_context(context: str, llm_func, max_chars: int = 2000) -> str:
+        """对超长上下文先总结再使用"""
+        if len(context) <= max_chars:
+            return context
+
+        # 分段总结
+        chunks = [context[i:i+max_chars] for i in range(0, len(context), max_chars)]
+        summaries = []
+
+        for chunk in chunks:
+            summary = llm_func(
+                messages=[{
+                    "role": "user",
+                    "content": f"请用一句话总结以下内容：\n{chunk}",
+                }],
+                model="gpt-4o-mini",
+            )
+            summaries.append(summary)
+
+        # 再次汇总
+        final = llm_func(
+            messages=[{
+                "role": "user",
+                "content": f"请将这些摘要合并为一个连贯的总结：\n" +
+                           "\n".join(summaries),
+            }],
+            model="gpt-4o-mini",
+        )
+        return final
+
+    @staticmethod
+    def minify_json_in_prompt(prompt: str) -> str:
+        """压缩 Prompt 中的 JSON 数据"""
+        import re
+
+        def _minify_json(match):
+            try:
+                data = json.loads(match.group())
+                return json.dumps(data, separators=(",", ":"))
+            except json.JSONDecodeError:
+                return match.group()
+
+        # 匹配 JSON 对象和数组
+        prompt = re.sub(r'\{[^{}]*\}', _minify_json, prompt)
+        prompt = re.sub(r'\[[^\[\]]*\]', _minify_json, prompt)
+
+        return prompt
+
+
+# 使用示例
+compressor = PromptCompressor()
+
+verbose_prompt = """
+# 角色定义
+你是一个专业的客服助手。
+
+# 核心职责
+你负责回答用户关于产品的问题。
+
+# 回答规范
+- 保持礼貌
+- 给出具体答案
+- 不要编造信息
+"""
+compressed = compressor.compress_system_prompt(verbose_prompt)
+print(f"压缩前: {len(verbose_prompt)} 字符")
+print(f"压缩后: {len(compressed)} 字符")
+```
+
+## 批处理 vs 实时处理
+
+对于非实时场景，批处理可以大幅降低成本。
+
+```python
+import asyncio
+from dataclasses import dataclass
+from typing import List
+
+
+@dataclass
+class BatchItem:
+    id: str
+    messages: list
+    model: str
+    callback=None
+
+
+class BatchProcessor:
+    """批处理处理器：聚合请求，合并调用"""
+
+    def __init__(self, max_batch_size: int = 20, max_wait_ms: int = 500):
+        self.max_batch_size = max_batch_size
+        self.max_wait_ms = max_wait_ms
+        self.queue: List[BatchItem] = []
+        self._lock = asyncio.Lock()
+        self._flush_task = None
+
+    async def submit(self, item: BatchItem) -> dict:
+        """提交一个批处理请求"""
+        async with self._lock:
+            self.queue.append(item)
+            if len(self.queue) >= self.max_batch_size:
+                return await self._flush()
+            if self._flush_task is None:
+                self._flush_task = asyncio.create_task(
+                    self._delayed_flush()
+                )
+
+    async def _delayed_flush(self):
+        await asyncio.sleep(self.max_wait_ms / 1000)
+        async with self._lock:
+            await self._flush()
+            self._flush_task = None
+
+    async def _flush(self) -> List[dict]:
+        """批量处理所有排队请求"""
+        if not self.queue:
+            return []
+
+        batch = self.queue[:]
+        self.queue.clear()
+
+        # 合并为一个 LLM 调用
+        combined_input = "\n---\n".join(
+            json.dumps(item.messages, ensure_ascii=False)
+            for item in batch
+        )
+
+        combined_response = await call_llm(
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"请依次回答以下 {len(batch)} 个问题，"
+                    f"每个回答前标注 [ID: xxx]：\n{combined_input}"
+                ),
+            }],
+            model=batch[0].model,
+        )
+
+        # 分发结果
+        results = self._parse_batch_response(combined_response, batch)
+        for item in batch:
+            if item.callback:
+                item.callback(results.get(item.id, ""))
+
+        return results
+
+    def _parse_batch_response(self, response: str, batch: list) -> dict:
+        """解析批量响应，按 ID 分发"""
+        results = {}
+        lines = response.split("\n")
+        current_id = None
+        current_text = []
+
+        for line in lines:
+            for item in batch:
+                marker = f"[ID: {item.id}]"
+                if marker in line:
+                    if current_id:
+                        results[current_id] = "\n".join(current_text)
+                    current_id = item.id
+                    current_text = [line.replace(marker, "").strip()]
+                    break
+            else:
+                if current_id:
+                    current_text.append(line)
+
+        if current_id:
+            results[current_id] = "\n".join(current_text)
+
+        return results
+
+
+# 批量 vs 实时成本对比
+def cost_comparison():
+    """计算批处理带来的成本节约"""
+    num_requests = 100
+    tokens_per_request = 500
+    price_per_1k = 0.0025  # gpt-4o
+
+    # 实时模式：每次独立调用
+    realtime_cost = num_requests * (tokens_per_request * 2) * price_per_1k / 1000
+
+    # 批处理模式：合并调用，共享上下文
+    shared_overhead = 200  # 额外合并开销 Token
+    batch_cost = (num_requests * tokens_per_request + shared_overhead) * price_per_1k / 1000
+
+    savings = (realtime_cost - batch_cost) / realtime_cost * 100
+
+    print(f"实时模式成本: ${realtime_cost:.2f}")
+    print(f"批处理模式成本: ${batch_cost:.2f}")
+    print(f"节省比例: {savings:.1f}%")
+```
+
+## 预算告警与额度管理
+
+```python
+from datetime import datetime, timedelta
+from typing import Optional, Callable
+
+
+class BudgetAlert:
+    """预算告警系统"""
+
+    def __init__(self, monthly_budget: float, alert_thresholds: List[float] = None):
+        self.monthly_budget = monthly_budget
+        self.alert_thresholds = alert_thresholds or [0.5, 0.8, 0.9, 1.0]
+        self.notifiers: List[Callable] = []
+
+    def add_notifier(self, fn: Callable):
+        self.notifiers.append(fn)
+
+    def check(self, current_spend: float) -> List[dict]:
+        """检查预算使用情况并触发告警"""
+        usage_ratio = current_spend / self.monthly_budget
+        alerts = []
+
+        for threshold in self.alert_thresholds:
+            if usage_ratio >= threshold:
+                alert = {
+                    "level": "warning",
+                    "message": (
+                        f"预算使用率已达 {usage_ratio:.0%}"
+                        f"（${current_spend:.2f} / ${self.monthly_budget:.2f}）"
+                    ),
+                    "usage_ratio": usage_ratio,
+                    "threshold": threshold,
+                    "timestamp": datetime.utcnow().isoformat(),
+                }
+                alerts.append(alert)
+                for notifier in self.notifiers:
+                    notifier(alert)
+
+        return alerts
+
+
+# 综合预算控制器
+class BudgetController:
+    """自动预算控制器：超限时执行降级策略"""
+
+    def __init__(self, monthly_budget: float, tracker: CostTracker):
+        self.budget = monthly_budget
+        self.tracker = tracker
+        self.tier_downgraded = False
+        self.cache_forced = False
+        self.rate_limited = False
+
+    def evaluate(self) -> dict:
+        """评估当前预算状态并自动采取行动"""
+        monthly_spend = sum(
+            u.calculate_cost()
+            for u in self.tracker.usage_log
+            if u.timestamp.startswith(datetime.utcnow().strftime("%Y-%m"))
+        )
+        ratio = monthly_spend / self.budget
+        actions = []
+
+        if ratio >= 0.8 and not self.tier_downgraded:
+            actions.append("降级模型层级：非关键任务使用 cheap 层")
+            self.tier_downgraded = True
+        if ratio >= 0.9 and not self.cache_forced:
+            actions.append("强制缓存：所有查询先查缓存")
+            self.cache_forced = True
+        if ratio >= 1.0 and not self.rate_limited:
+            actions.append("限流：非核心 API 调用降频至 1/10")
+            self.rate_limited = True
+
+        return {
+            "monthly_spend": round(monthly_spend, 2),
+            "budget": self.budget,
+            "usage_ratio": round(ratio, 3),
+            "actions_taken": actions,
+            "downgraded": self.tier_downgraded,
+            "cache_forced": self.cache_forced,
+            "rate_limited": self.rate_limited,
+        }
+```
+
+## 综合成本控制架构
+
+```python
+# CostController —— 一切从简的入口
+class CostController:
+    """统一成本控制器，整合追踪、缓存、路由、告警"""
+
+    def __init__(
+        self,
+        redis_url: str = "redis://localhost:6379",
+        monthly_budget: float = 1000.0,
+        daily_budget: float = 50.0,
+    ):
+        import redis.asyncio as aioredis
+
+        self.redis = aioredis.from_url(redis_url)
+        self.tracker = CostTracker(budget_limit_daily=daily_budget)
+        self.model_router = ModelRouter()
+        self.budget_controller = BudgetController(
+            monthly_budget=monthly_budget,
+            tracker=self.tracker,
+        )
+        self.semantic_cache = None  # 延迟初始化
+
+    async def call(
+        self,
+        messages: list,
+        task_type: str = "general",
+        user_id: str = "anonymous",
+        session_id: str = "",
+        requires_reasoning: bool = False,
+        use_cache: bool = True,
+    ) -> dict:
+        """智能 LLM 调用：成本感知"""
+        # 1. 预算检查
+        budget_status = self.budget_controller.evaluate()
+
+        # 2. 模型选择
+        input_text = json.dumps(messages)
+        tier = self.model_router.classify_task(
+            task_type, len(input_text), requires_reasoning
+        )
+
+        # 预算超限时强制降级
+        if budget_status["downgraded"] and tier.value not in ("cheap",):
+            tier = ModelTier.STANDARD
+
+        model = self.model_router.select_model(tier)
+
+        # 3. 缓存查询
+        if use_cache and not budget_status.get("cache_forced"):
+            if self.semantic_cache is None:
+                self.semantic_cache = SemanticCache(
+                    redis_client=self.redis,
+                    embedding_fn=get_embedding,
+                )
+            cached = await self.semantic_cache.get_or_compute(
+                messages, model, self._llm_call, task_type, user_id
+            )
+            return cached
+
+        # 4. 实际调用
+        response = await self._llm_call(messages, model)
+
+        # 5. 记录用量
+        output_text = json.dumps(response)
+        usage = TokenUsage(
+            model=model,
+            input_tokens=len(input_text) // 4,
+            output_tokens=len(output_text) // 4,
+            user_id=user_id,
+            session_id=session_id,
+            task_type=task_type,
+        )
+        self.tracker.record(usage)
+
+        return response
+
+    async def _llm_call(self, messages: list, model: str) -> dict:
+        from openai import AsyncOpenAI
+        client = AsyncOpenAI()
+        resp = await client.chat.completions.create(
+            model=model,
+            messages=messages,
+        )
+        return resp.choices[0].message.content
+```
+
+## 练习
+
+1. 为你的项目接入 CostTracker，记录每天的 Token 消耗和成本，生成周报
+2. 实现语义缓存并在实际查询中测试命中率和成本节约
+3. 针对一个多步骤 Agent 任务，设计模型路由策略：按步骤分配不同层级的模型
+4. 设置月度预算告警，当使用率达 80% 和 100% 时分别执行降级和限流

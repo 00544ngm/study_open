@@ -1,0 +1,59 @@
+---
+title: 工作流设计模式
+order: 1
+difficulty: advanced
+estimated_time: 25min
+tags: [企业级, 工作流]
+---
+
+## 核心
+
+### Agent 工作流模式
+
+```text
+1. Chain（链式）
+   A → B → C → D
+   每个 Agent 依次执行
+
+2. Router（路由）
+   输入 → 分类器 → A / B / C
+
+3. Parallel（并行）
+   输入 → A ──┐
+           B ──┤ → 聚合
+           C ──┘
+
+4. Orchestrator（编排器）
+   编排器 → 分解任务 → 分配 Agent → 收集结果 → 输出
+```
+
+### 工作流状态管理
+
+```python
+class WorkflowEngine:
+    def __init__(self):
+        self.workflows = {}
+        self.states = {}
+
+    def register_workflow(self, name: str, steps: list):
+        self.workflows[name] = steps
+
+    async def execute(self, workflow_name: str, input_data: dict):
+        steps = self.workflows[workflow_name]
+        state = {"input": input_data, "results": {}}
+
+        for step in steps:
+            result = await step["agent"].run(state)
+            state["results"][step["name"]] = result
+
+            # 如果有条件判断
+            if "condition" in step and not step["condition"](result):
+                break
+
+        return state["results"]
+```
+
+## 练习
+
+1. 设计一个"客户支持"工作流：分类 → 检索知识库 → 生成回复 → 人工审核
+2. 添加错误处理：如果某个 Agent 失败，自动降级到备用方案

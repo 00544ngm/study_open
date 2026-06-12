@@ -1,0 +1,371 @@
+---
+title: 正则表达式深入
+order: 2
+difficulty: core
+estimated_time: 35min
+tags: [正则, Python, re, 文本处理, 性能优化]
+---
+
+## 前瞻与后顾（Lookahead / Lookbehind）
+
+零宽断言不消耗字符，只检查位置前后的模式，是数据提取的利器：
+
+```python
+import re
+
+text = "商品价格：¥100，折扣价：¥80，原价：¥120"
+
+# === 正向前瞻 (?=...) ===
+# 匹配后面跟 "元" 的数字（不消费 "元"）
+prices = re.findall(r"\d+(?=元)", "价格 100元，运费 10元，折扣 20%")
+print(prices)  # ['100', '10']
+
+# === 负向前瞻 (?!...) ===
+# 匹配后面不跟 "元" 的数字
+prices = re.findall(r"\d+(?!\w)", "价格100元，折扣20%")
+print(prices)  # ['20']  （100 后面是元，\w 匹配汉字，所以被排除）
+
+# === 正向后顾 (?<=...) ===
+# 匹配前面有 "¥" 的数字
+prices = re.findall(r"(?<=¥)\d+", text)
+print(prices)  # ['100', '80', '120']
+
+# === 负向后顾 (?<!...) ===
+# 匹配前面没有 "¥" 的数字
+prices = re.findall(r"(?<!¥)\d+", "原价¥100，运费10元")
+print(prices)  # ['10']
+
+# === 实战：提取引号内的内容（不含引号） ===
+text = 'name="Alice", role="admin", desc="超级管理员"'
+names = re.findall(r'(?<=")[^"]+(?=")', text)
+print(names)  # ['Alice', 'admin', '超级管理员']
+
+# === 实战：提取 Markdown 链接 ===
+md = "参考 [Python官网](https://python.org) 和 [文档](https://docs.python.org)"
+links = re.findall(r'(?<=\[).+?(?=\])\((.+?)\)', md)
+print(links)  # ['https://python.org', 'https://docs.python.org']
+```
+
+## 非贪婪匹配详解
+
+默认的 `*`、`+`、`{n,m}` 是贪婪的，会匹配尽可能多的字符。加 `?` 变为非贪婪：
+
+```python
+import re
+
+html = """
+<div class="item">
+  <a href="/a">商品A</a>
+  <a href="/b">商品B</a>
+</div>
+"""
+
+# 贪婪：从第一个 <a 匹配到最后一个 >（跨越多个标签）
+greedy = re.findall(r"<a.*>", html)
+print(greedy)
+# ['<a href="/a">商品A</a>\n  <a href="/b">商品B</a>']
+
+# 非贪婪：匹配最短的可能
+non_greedy = re.findall(r"<a.*?>", html)
+print(non_greedy)
+# ['<a href="/a">', '<a href="/b">']
+
+# 非贪婪分组提取
+links = re.findall(r'<a href="(.*?)">(.*?)</a>', html)
+print(links)
+# [('/a', '商品A'), ('/b', '商品B')]
+
+# 各种量词的非贪婪版本
+r"a*?"      # 匹配 0 次（优先空匹配）
+r"a+?"      # 匹配 1 次
+r"a??"      # 匹配 0 或 1 次（优先 0）
+r"a{3,5}?" # 匹配恰好 3 次（最少）
+```
+
+## 命名分组（Named Groups）
+
+用 `(?P<name>...)` 为分组命名，提高代码可读性：
+
+```python
+import re
+
+# 命名分组
+log_line = "2024-01-15 10:30:45 ERROR [auth] 用户登录失败：密码错误"
+
+pattern = re.compile(
+    r"(?P<date>\d{4}-\d{2}-\d{2})\s+"
+    r"(?P<time>\d{2}:\d{2}:\d{2})\s+"
+    r"(?P<level>\w+)\s+"
+    r"\[(?P<module>\w+)\]\s+"
+    r"(?P<message>.+)"
+)
+
+match = pattern.search(log_line)
+if match:
+    print(match.group("date"))     # "2024-01-15"
+    print(match.group("level"))    # "ERROR"
+    print(match.groupdict())
+    # {'date': '2024-01-15', 'time': '10:30:45', 'level': 'ERROR',
+    #  'module': 'auth', 'message': '用户登录失败：密码错误'}
+
+# === 命名分组用于 re.sub ===
+def mask_email(match: re.Match) -> str:
+    name = match.group("name")
+    return f"{name[0]}***@{match.group('domain')}"
+
+text = "联系方式：alice@example.com, bob@test.com"
+masked = re.sub(
+    r"(?P<name>\w+)@(?P<domain>[\w.]+)",
+    mask_email,
+    text,
+)
+print(masked)  # "联系方式：a***@example.com, b***@test.com"
+
+# === 命名分组反向引用 (?P=name) ===
+# 匹配重复的单词
+text = "the the quick brown fox fox jumps"
+duplicates = re.findall(r"(?P<word>\w+)\s+(?P=word)", text)
+print(duplicates)  # ['the', 'fox']
+```
+
+## 反向引用（Backreferences）
+
+在正则内部和替换字符串中引用之前匹配的分组：
+
+```python
+import re
+
+# === \1, \2 在模式中引用 ===
+# 匹配成对的 HTML 标签
+text = "<h1>标题</h1><p>段落</p><div>未闭合</span>"
+pairs = re.findall(r"<(\w+)>.*?</\1>", text)
+print(pairs)  # ['h1', 'p']  — div 未闭合所以不匹配
+
+# 匹配重复的字符
+text = "abbcccddddeeeee"
+repeat = re.findall(r"(.)\1+", text)
+print(repeat)  # ['b', 'c', 'd', 'e']
+
+# === \g<1>, \g<name> 在替换中引用 ===
+# 交换姓名顺序
+text = "张三, 李四, 王五"
+swapped = re.sub(r"(\w+),\s*(\w+)", r"\2 \1", text)
+print(swapped)  # "张三 李四, 王五"（分组有误，需要更正）
+
+# 正确交换：匹配 "姓, 名" 为 "名 姓"
+text = "Zhang, San; Li, Si"
+swapped = re.sub(r"(\w+),\s*(\w+)", r"\2 \1", text)
+print(swapped)  # "San Zhang; Si Li"
+
+# 使用命名分组的替换
+text = "2024-01-15"
+reformat = re.sub(
+    r"(?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2})",
+    r"\g<year>年\g<month>月\g<day>日",
+    text,
+)
+print(reformat)  # "2024年01月15日"
+```
+
+## 编译标志（Flags）
+
+| 标志 | 缩写 | 说明 |
+|------|------|------|
+| `re.I` | `IGNORECASE` | 忽略大小写 |
+| `re.M` | `MULTILINE` | `^` `$` 匹配每行的开头和结尾 |
+| `re.S` | `DOTALL` | `.` 匹配换行符 |
+| `re.X` | `VERBOSE` | 允许注释和空白，增强可读性 |
+| `re.A` | `ASCII` | `\w` `\d` `\s` 只匹配 ASCII |
+| `re.L` | `LOCALE` | 根据 locale 匹配 |
+
+```python
+import re
+
+# === re.I：忽略大小写 ===
+print(re.findall(r"python", "Python PYTHON python", re.I))
+# ['Python', 'PYTHON', 'python']
+
+# === re.M：多行模式 ===
+text = """第一行
+第二行
+第三行"""
+print(re.findall(r"^\w+", text))          # ['第一行'] （默认只匹配开头）
+print(re.findall(r"^\w+", text, re.M))    # ['第一行', '第二行', '第三行']
+print(re.findall(r"\w+$", text, re.M))    # 每行结尾
+
+# === re.S：点号匹配换行 ===
+html = "<div>第\n一\n段</div>"
+print(re.findall(r"<div>.*?</div>", html))           # [] 匹配不到
+print(re.findall(r"<div>.*?</div>", html, re.S))     # ['<div>第\n一\n段</div>']
+
+# === re.X：详细模式（有注释才可读） ===
+email_pattern = re.compile(r"""
+    (?P<name>[\w.+-]+)       # 用户名：字母数字下划线点号加减号
+    @                        # 分隔符
+    (?P<domain>              # 域名部分
+        [\w-]+               # 一级域名
+        (?:\.[\w-]+)+        # 二级及以上域名
+    )
+""", re.X | re.I)
+
+# === 组合标志 ===
+pattern = re.compile(r"pattern", re.I | re.S | re.X)
+```
+
+## 性能优化
+
+```python
+import re
+import time
+
+# === 1. 预编译正则 ===
+# 坏习惯：每次调用都编译
+for text in large_texts:
+    re.findall(r"复杂的\w+模式", text)
+
+# 好习惯：一次编译，多次使用
+pattern = re.compile(r"复杂的\w+模式")
+for text in large_texts:
+    pattern.findall(text)
+
+# === 2. 避免灾难性回溯（Catastrophic Backtracking） ===
+
+# 危险的正则（嵌套量词）
+bad_pattern = re.compile(r"^(a+)+b$")   # 匹配 aaaaaaac 会回溯膨胀
+# 输入 "a" * 30 + "c" → 回溯 2^30 次 ≈ 10 亿次
+
+# 安全方案
+good_pattern = re.compile(r"^a+b$")     # 去掉嵌套量词
+
+# 另一个常见陷阱
+bad_pattern = re.compile(r"<div>.*</div>")     # .* 可能导致灾难性回溯
+good_pattern = re.compile(r"<div>[^<]*</div>") # 排除法更安全
+
+# === 3. 使用原子分组 (?>...) ===
+# 原子分组阻止回溯（Python re 不支持，但 regex 库支持）
+# pip install regex
+import regex
+
+# 原子分组：匹配失败不回溯
+safe_pattern = regex.compile(r"^(?>a+)b$")
+# 匹配 "aaaaaac" 立即失败，不回退
+
+# === 4. 使用非捕获组 (?:...) ===
+# 不需要捕获时，使用非捕获组节省内存
+# 低效
+re.findall(r"(https?|ftp)://([\w.]+)", text)
+# 高效（不需要捕获协议时）
+re.findall(r"(?:https?|ftp)://([\w.]+)", text)
+
+# === 5. 尽量具体化 ===
+r".*"            # 模糊，回溯多
+r"[^<]*"         # 具体，回溯少
+r"\w+"           # 比 .+ 更具体
+r"(?:jpg|png|gif)"  # 比 \w+ 更具体
+
+# === 6. 锚点优化 ===
+# 以 ^ 开头时，匹配失败可以快速返回
+re.search(r"^特定前缀.*结果", text)  # 快速排除不匹配的文本
+
+# === 性能测试 ===
+pattern = re.compile(r"<a\s+href=\"(.*?)\">(.*?)</a>")
+test_html = "<a href=\"https://example.com\">链接</a>" * 1000
+
+start = time.perf_counter()
+results = pattern.findall(test_html)
+print(f"耗时：{(time.perf_counter() - start)*1000:.2f}ms")
+```
+
+## 常见数据提取模式
+
+```python
+import re
+
+class DataExtractor:
+    """生产级数据提取工具类"""
+
+    @staticmethod
+    def extract_emails(text: str) -> list[str]:
+        """提取邮箱地址（RFC 5322 简化版）"""
+        pattern = re.compile(
+            r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"
+        )
+        return pattern.findall(text)
+
+    @staticmethod
+    def extract_urls(text: str) -> list[str]:
+        """提取 URL（支持 http/https/ftp）"""
+        pattern = re.compile(
+            r"https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+"
+            r"(?:/[\w./?%&=\-~#@!()']*)?"
+        )
+        return pattern.findall(text)
+
+    @staticmethod
+    def extract_chinese_phone(text: str) -> list[str]:
+        """提取中国大陆手机号"""
+        pattern = re.compile(r"1[3-9]\d{9}")
+        return pattern.findall(text)
+
+    @staticmethod
+    def extract_dates(text: str) -> list[tuple[str, str, str]]:
+        """提取多种格式的日期"""
+        patterns = [
+            # 2024-01-15 或 2024/01/15
+            (r"(?P<y>\d{4})[-/](?P<m>\d{1,2})[-/](?P<d>\d{1,2})", "%Y-%m-%d"),
+            # 2024年1月15日
+            (r"(?P<y>\d{4})年(?P<m>\d{1,2})月(?P<d>\d{1,2})日", None),
+            # 01/15/2024
+            (r"(?P<m>\d{1,2})/(?P<d>\d{1,2})/(?P<y>\d{4})", "%m/%d/%Y"),
+        ]
+        results = []
+        for pat, _ in patterns:
+            for match in re.finditer(pat, text):
+                results.append((
+                    match.group("y"),
+                    match.group("m").zfill(2),
+                    match.group("d").zfill(2),
+                ))
+        return results
+
+    @staticmethod
+    def extract_ipv4(text: str) -> list[str]:
+        """提取 IPv4 地址"""
+        pattern = re.compile(
+            r"(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}"
+            r"(?:25[0-5]|2[0-4]\d|[01]?\d\d?)"
+        )
+        return pattern.findall(text)
+
+    @staticmethod
+    def extract_chinese_id(text: str) -> list[str]:
+        """提取 18 位身份证号"""
+        pattern = re.compile(r"[1-9]\d{5}(?:19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{3}[\dXx]")
+        return pattern.findall(text)
+
+
+# 使用示例
+text = """
+联系方式：张三 alice@example.com，李四 bob@gmail.com
+公司网址：https://www.example.com/products?id=123
+手机号：13812345678、15912345678
+日期：2024-01-15、2024/03/20、2024年12月25日
+IP：192.168.1.1、10.0.0.255
+身份证：110101199001011234
+"""
+
+extractor = DataExtractor()
+print(extractor.extract_emails(text))
+print(extractor.extract_urls(text))
+print(extractor.extract_chinese_phone(text))
+print(extractor.extract_dates(text))
+```
+
+| 特性 | 基础篇 | 进阶篇 |
+|------|-------|--------|
+| 分组 | `(pattern)` 匿名 | `(?P<name>...)` 命名 + 反向引用 |
+| 断言 | 不支持 | 前瞻/后顾 + 零宽断言 |
+| 量词 | 贪婪 | 非贪婪 + 原子分组 |
+| 标志 | IGNORECASE | MULTILINE + DOTALL + VERBOSE |
+| 性能 | 简单匹配 | 预编译 + 防回溯 + 非捕获组 |
+| 提取 | 单模式 | 多格式组合 + 工具类封装 |

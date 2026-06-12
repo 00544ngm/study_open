@@ -1,0 +1,213 @@
+---
+title: Qdrant vs Pinecone vs Milvus
+order: 1
+difficulty: intermediate
+estimated_time: 20min
+tags: [向量数据库, Qdrant, Pinecone, Milvus, 选型]
+---
+
+## 入门
+
+选择合适的向量数据库对 RAG 系统性能至关重要。本节对比三大主流方案。
+
+## 核心
+
+### 快速对比
+
+| 特性 | Qdrant | Pinecone | Milvus |
+|---|---|---|---|
+| 开源 | 开源 + Cloud | 闭源(SaaS) | 开源 + Cloud |
+| 部署方式 | 自托管 / Cloud | 全托管 | 自托管 / Cloud |
+| SDK | Python/Rust/Go | Python/Node/Go | Python/Java/Go |
+| 过滤 | 支持 | 支持 | 支持 |
+| 分组搜索 | 支持 | 不支持 | 支持 |
+| 多向量 | 支持 | 支持 | 支持 |
+| 量化 | 标量/乘积量化 | 自动 | IVF/PQ/GPU |
+| 一致性 | 可调 | 强一致 | 可调 |
+| 学习曲线 | 低 | 最低 | 中高 |
+| 资源占用 | 低(单机可用) | 全托管 | 高(Pod依赖) |
+
+### 场景推荐
+
+```python
+def recommend_vector_db(scenario: str) -> str:
+    recommendations = {
+        "个人项目": "Qdrant（docker run 即用，资源少）",
+        "快速原型": "Pinecone（零运维，5 分钟接入）",
+        "大规模生产": "Milvus（分布式，十亿级）",
+        "企业私有部署": "Qdrant（开源，可控）",
+        "已有 K8s 集群": "Milvus / Qdrant（Helm 部署）",
+    }
+    return recommendations.get(scenario, "Qdrant（通用推荐）")
+```
+
+## 各库详解
+
+### Qdrant
+
+**最适合**: 个人项目、中小团队、需要自托管
+
+```python
+from qdrant_client import QdrantClient
+
+# 本地运行
+client = QdrantClient("localhost", port=6333)
+
+# 或使用 Docker
+# docker run -p 6333:6333 qdrant/qdrant
+
+# 创建集合
+client.create_collection(
+    collection_name="agents",
+    vectors_config={"size": 384, "distance": "Cosine"},
+)
+
+# 支持丰富的过滤和分组
+results = client.search(
+    collection_name="agents",
+    query_vector=[0.1] * 384,
+    query_filter=Filter(
+        must=[FieldCondition(key="category", match=MatchValue(value="tech"))]
+    ),
+    limit=10,
+)
+```
+
+**优点**:
+- Rust 实现，性能极佳
+- Docker 一键启动，资源占用少
+- 支持分组搜索、Payload 索引
+- 开源，可完全本地化
+
+**缺点**:
+- 分布式能力较弱（新版正在改善）
+- 索引构建速度中等
+
+### Pinecone
+
+**最适合**: 快速原型、不想管运维、小到中规模
+
+```python
+from pinecone import Pinecone
+
+# 需要 API Key（需注册）
+pc = Pinecone(api_key="pcsk_xxx")
+
+# 创建索引
+pc.create_index(
+    name="agent-kb",
+    dimension=384,
+    metric="cosine",
+    spec=ServerlessSpec(cloud="aws", region="us-west-2"),
+)
+
+# 写入和查询
+index = pc.Index("agent-kb")
+index.upsert(vectors=[("id1", [0.1] * 384, {"text": "文档内容"})])
+results = index.query(vector=[0.1] * 384, top_k=3, include_metadata=True)
+```
+
+**优点**:
+- 完全托管，零运维
+- 自动扩缩容，无服务器模式
+- SDK 简洁，上手最快
+- 延迟稳定
+
+**缺点**:
+- 闭源，数据不可控
+- 费用较高（按量计费）
+- 不支持分组搜索
+- 网络延迟（海外服务）
+
+### Milvus
+
+**最适合**: 大规模生产环境、十亿级数据
+
+```python
+from pymilvus import connections, Collection, FieldSchema, CollectionSchema, DataType
+
+# 连接集群
+connections.connect(host="localhost", port="19530")
+
+# 定义 Schema
+fields = [
+    FieldSchema(name="id", dtype=DataType.INT64, is_primary=True),
+    FieldSchema(name="embedding", dtype=DataType.FLOAT_VECTOR, dim=384),
+    FieldSchema(name="text", dtype=DataType.VARCHAR, max_length=1000),
+]
+schema = CollectionSchema(fields)
+collection = Collection("agent_kb", schema)
+
+# 创建索引
+collection.create_index("embedding", {"index_type": "IVF_FLAT", "params": {"nlist": 128}})
+collection.load()
+
+# 搜索
+results = collection.search(
+    data=[[0.1] * 384],
+    anns_field="embedding",
+    param={"metric_type": "COSINE", "params": {"nprobe": 10}},
+    limit=3,
+)
+```
+
+**优点**:
+- 分布式原生，水平扩展
+- GPU 加速索引
+- 十亿级向量搜索
+- 丰富的索引类型
+
+**缺点**:
+- 部署复杂（依赖 Etcd、MinIO 等）
+- 资源消耗大
+- 学习曲线陡峭
+- 小数据集大材小用
+
+## 进阶
+
+### 选型决策流
+
+```python
+def decide_vector_db(budget: str, scale: str, control: str) -> str:
+    if scale == "small":
+        return "Qdrant (Docker)"
+    if budget == "low":
+        return "Qdrant (开源免费)"
+    if control == "must":
+        return "Qdrant (完全自控)"
+
+    if scale == "huge" and budget == "high":
+        return "Milvus (分布式集群)"
+    if budget == "medium" and control == "don't care":
+        return "Pinecone (全托管)"
+
+    return "Qdrant"
+
+# 常见组合
+examples = [
+    ("个人博客 RAG", "Qdrant"),
+    ("创业公司 MVP", "Pinecone / Qdrant"),
+    ("企业知识库", "Qdrant / Milvus"),
+    ("百万级文档检索", "Milvus"),
+    ("边缘设备", "Qdrant (轻量)"),
+]
+```
+
+### 迁移注意事项
+
+```
+从一个向量库迁移到另一个时关注:
+1. 向量维度必须一致
+2. 距离算法 (Cosine / Dot / Euclid)
+3. Payload 结构映射
+4. 索引参数调优
+5. 批量导出/导入速度
+
+迁移工具推荐: `vector-transfer` (开源)
+```
+
+## 练习
+
+1. 根据你的项目需求，用决策流程选择合适的向量数据库
+2. Qdrant 和 Milvus 分别用 Docker 部署，对比启动速度和资源占用
+3. 在 Qdrant 中创建带过滤的集合，测试分组搜索功能

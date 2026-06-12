@@ -1,0 +1,154 @@
+---
+title: SQLAlchemy 基础
+order: 1
+difficulty: beginner
+estimated_time: 25min
+tags: [SQLAlchemy, ORM, 数据库, Python]
+---
+
+## 安装
+
+```bash
+pip install sqlalchemy
+# 数据库驱动
+pip install psycopg2-binary   # PostgreSQL
+pip install pymysql            # MySQL
+# SQLite 无需额外安装
+```
+
+## 创建模型
+
+```python
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Float
+from sqlalchemy.orm import DeclarativeBase, Session
+from datetime import datetime
+
+class Base(DeclarativeBase):
+    pass
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100), nullable=False)
+    email = Column(String(255), unique=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class Conversation(Base):
+    __tablename__ = "conversations"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, nullable=False)
+    title = Column(String(200))
+    messages = Column(Text)  # JSON 文本
+    created_at = Column(DateTime, default=datetime.utcnow)
+```
+
+## 引擎与会话
+
+```python
+# SQLite（开发）
+engine = create_engine("sqlite:///app.db", echo=True)
+
+# PostgreSQL（生产）
+engine = create_engine(
+    "postgresql://user:pass@localhost:5432/appdb",
+    pool_size=10,
+    max_overflow=20,
+)
+
+# 创建所有表
+Base.metadata.create_all(engine)
+
+# 创建会话
+session = Session(engine)
+```
+
+## CRUD 操作
+
+```python
+# 创建
+user = User(name="Alice", email="alice@example.com")
+session.add(user)
+session.commit()
+print(user.id)  # 自动生成
+
+# 批量创建
+session.add_all([
+    User(name="Bob", email="bob@example.com"),
+    User(name="Charlie", email="charlie@example.com"),
+])
+session.commit()
+
+# 查询
+user = session.query(User).filter_by(name="Alice").first()
+users = session.query(User).all()
+active_users = session.query(User).filter(
+    User.created_at >= "2024-01-01"
+).order_by(User.created_at.desc()).limit(10).all()
+
+# 更新
+user = session.query(User).filter_by(name="Alice").first()
+user.email = "alice@newdomain.com"
+session.commit()
+
+# 删除
+session.delete(user)
+session.commit()
+```
+
+## 事务管理
+
+```python
+from contextlib import contextmanager
+
+@contextmanager
+def get_db():
+    db = Session(engine)
+    try:
+        yield db
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+# 使用
+with get_db() as db:
+    user = User(name="Alice")
+    db.add(user)
+    # 自动 commit / rollback
+```
+
+## FastAPI 集成
+
+```python
+from fastapi import FastAPI, Depends
+from sqlalchemy.orm import Session as DBSession
+
+app = FastAPI()
+
+def get_db():
+    db = Session(engine)
+    try:
+        yield db
+    finally:
+        db.close()
+
+@app.post("/users")
+def create_user(name: str, email: str, db: DBSession = Depends(get_db)):
+    user = User(name=name, email=email)
+    db.add(user)
+    db.commit()
+    return {"id": user.id, "name": user.name}
+```
+
+| 概念 | 说明 |
+|------|------|
+| Engine | 数据库连接引擎 |
+| Session | 工作单元会话 |
+| Column | 定义字段和类型 |
+| query | 查询接口 |
+| commit | 提交事务 |
+| rollback | 回滚事务 |

@@ -1,0 +1,115 @@
+---
+title: Elasticsearch 基础
+order: 1
+difficulty: intermediate
+estimated_time: 25min
+tags: [Elasticsearch, 搜索引擎, 全文检索]
+---
+
+## 安装
+
+```bash
+# Docker
+docker run -d --name es \
+  -p 9200:9200 \
+  -e "discovery.type=single-node" \
+  -e "xpack.security.enabled=false" \
+  docker.elastic.co/elasticsearch/elasticsearch:8.12.0
+
+# 验证
+curl http://localhost:9200
+```
+
+## 核心概念
+
+| 概念 | ES 类比 | 关系型数据库类比 |
+|------|---------|----------------|
+| Index | 数据库 | Database |
+| Type | 表类型（已废弃） | Table |
+| Document | 行 | Row |
+| Field | 列 | Column |
+| Mapping | Schema | Schema |
+
+## 创建索引
+
+```bash
+# 创建文档（索引自动创建）
+PUT /articles/_doc/1
+{
+  "title": "Elasticsearch 入门",
+  "content": "Elasticsearch 是分布式搜索和分析引擎...",
+  "tags": ["搜索", "大数据"],
+  "publish_date": "2024-01-15",
+  "views": 1234
+}
+```
+
+## 搜索
+
+```bash
+# 全文搜索
+GET /articles/_search
+{
+  "query": {
+    "match": {
+      "content": "搜索引擎"
+    }
+  }
+}
+
+# 精确匹配
+GET /articles/_search
+{
+  "query": {
+    "term": {
+      "tags": "搜索"
+    }
+  }
+}
+
+# 组合查询
+GET /articles/_search
+{
+  "query": {
+    "bool": {
+      "must": [{ "match": { "content": "搜索" } }],
+      "filter": [{ "range": { "views": { "gte": 100 } } }]
+    }
+  }
+}
+```
+
+## Python 客户端
+
+```python
+from elasticsearch import Elasticsearch
+
+es = Elasticsearch("http://localhost:9200")
+
+# 索引文档
+doc = {
+    "title": "RAG 技术实践",
+    "content": "检索增强生成是一种结合搜索和生成的 AI 技术...",
+    "tags": ["RAG", "AI", "搜索"],
+}
+resp = es.index(index="articles", document=doc)
+print(resp["_id"])
+
+# 搜索
+resp = es.search(
+    index="articles",
+    query={
+        "match": {"content": "RAG"}
+    },
+)
+for hit in resp["hits"]["hits"]:
+    print(hit["_source"]["title"], hit["_score"])
+```
+
+| 功能 | 说明 |
+|------|------|
+| match | 全文搜索 |
+| term | 精确匹配 |
+| bool | 组合查询 |
+| range | 范围过滤 |
+| fuzzy | 模糊搜索 |

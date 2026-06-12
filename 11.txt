@@ -1,0 +1,78 @@
+
+
+1/1
+
+Next.js 15.5.19 (outdated)
+Webpack
+Recoverable Error
+
+Hydration failed because the server rendered text didn't match the client. As a result this tree will be regenerated on the client. This can happen if a SSR-ed Client Component used:
+
+- A server/client branch `if (typeof window !== 'undefined')`.
+- Variable input such as `Date.now()` or `Math.random()` which changes each time it's called.
+- Date formatting in a user's locale which doesn't match the server.
+- External changing data without sending a snapshot of it along with the HTML.
+- Invalid HTML tag nesting.
+
+It can also happen if the client has a browser extension installed which messes with the HTML before React loaded.
+
+See more info here: https://nextjs.org/docs/messages/react-hydration-error
+
+
+  ...
+    <RedirectErrorBoundary router={{...}}>
+      <Head>
+      <__next_root_layout_boundary__>
+        <SegmentViewNode type="layout" pagePath="layout.tsx">
+          <SegmentTrieNode>
+          <link>
+          <RootLayout>
+            <html lang="zh-CN" suppressHydrationWarning={true}>
+              <body className="__classNam...">
+                <ThemeProvider>
+                  <div className="flex min-h...">
+                    <Sidebar>
+                      <button>
+                      <aside className="hidden lg:...">
+                        <div className="flex flex-...">
+                          <div>
+                          <nav className="flex-1 ove...">
+                            <div className="mb-1">
+                              <button onClick={function onClick} className="w-full fle...">
+                                <ChevronDown>
+                                <span>
+                                <span className="text-xs te...">
++                                 1
+-                                 0
+                                  ...
+                              ...
+                            ...
+                          ...
+                    ...
+      ...
+src\components\Sidebar.tsx (59:19) @ eval
+
+
+  57 |                 </span>
+  58 |                 {progress.total > 0 && (
+> 59 |                   <span className="text-xs text-[var(--text-muted)]">
+     |                   ^
+  60 |                     {progress.completed}/{progress.total}
+  61 |                   </span>
+  62 |                 )}
+Call Stack
+16
+
+Show 11 ignore-listed frame(s)
+span
+<anonymous>
+eval
+src\components\Sidebar.tsx (59:19)
+Array.map
+<anonymous>
+Sidebar
+src\components\Sidebar.tsx (38:17)
+RootLayout
+src\app\layout.tsx (21:13)
+1
+2

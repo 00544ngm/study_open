@@ -1,0 +1,39 @@
+---
+title: 系统管理
+order: 3
+difficulty: intermediate
+estimated_time: 15min
+tags: [Linux, 进阶]
+---
+
+## 入门
+
+```bash
+systemctl status docker    # 查看服务状态
+systemctl start agent      # 启动服务
+systemctl enable agent     # 开机自启
+```
+
+## 核心
+
+```bash
+# 进程管理
+ps aux --sort=-%mem | head -10  # 内存前10
+kill -9 PID                      # 强制终止进程
+nohup python agent.py &          # 后台运行
+
+# 资源监控
+top -bn1 | head -20              # 系统资源
+df -h                            # 磁盘使用
+free -h                          # 内存使用
+
+# 网络
+netstat -tlnp                    # 监听端口
+curl -I http://localhost:8000    # HTTP 探测
+ssh -i key.pem user@host         # SSH 密钥登录
+```
+
+## 练习
+
+1. 启动一个 Python HTTP 服务，用 nohup 放在后台运行
+2. 用 netstat 查看端口被哪个进程占用

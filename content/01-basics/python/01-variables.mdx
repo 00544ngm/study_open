@@ -1,0 +1,84 @@
+---
+title: 变量与数据类型
+order: 1
+difficulty: beginner
+estimated_time: 15min
+tags: [Python, 基础]
+---
+
+## 入门
+
+Python 是动态类型语言，变量不需要声明类型：
+
+```python
+name = "AI Agent"      # 字符串
+version = 1.0           # 浮点数
+count = 42              # 整数
+is_active = True        # 布尔值
+tokens = [100, 200, 300]  # 列表
+config = {"model": "gpt-4", "temp": 0.7}  # 字典
+```
+
+## 核心
+
+### 类型系统
+
+Python 的基本数据类型：
+
+```python
+# 不可变类型
+int: 42
+float: 3.14
+str: "hello"
+bool: True
+tuple: (1, 2, 3)
+NoneType: None
+
+# 可变类型
+list: [1, 2, 3]
+dict: {"key": "value"}
+set: {1, 2, 3}
+```
+
+### 类型注解（Agent 开发中的重要实践）
+
+```python
+from typing import List, Dict, Optional
+
+def process_messages(
+    messages: List[Dict[str, str]],
+    model: str = "gpt-4",
+    temperature: Optional[float] = None
+) -> str:
+    return "response"
+```
+
+## 进阶
+
+### 在 Agent 开发中的实际应用
+
+```python
+# Agent 的状态管理
+from dataclasses import dataclass
+from typing import List, Dict, Any
+
+@dataclass
+class AgentState:
+    messages: List[Dict[str, str]]
+    current_step: str
+    context: Dict[str, Any]
+    tools_used: List[str]
+
+# 使用示例
+state = AgentState(
+    messages=[{"role": "user", "content": "Hello"}],
+    current_step="thinking",
+    context={},
+    tools_used=[]
+)
+```
+
+## 练习
+
+1. 创建一个 `AgentConfig` dataclass，包含 `model_name`, `temperature`, `max_tokens` 字段
+2. 为每个字段添加类型注解和默认值

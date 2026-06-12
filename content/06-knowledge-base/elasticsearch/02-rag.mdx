@@ -1,0 +1,143 @@
+---
+title: ES 与 RAG 集成
+order: 2
+difficulty: advanced
+estimated_time: 30min
+tags: [Elasticsearch, RAG, 混合搜索, 知识库]
+---
+
+## 混合搜索
+
+结合关键词搜索（ES）和向量搜索（语义）：
+
+```python
+from elasticsearch import Elasticsearch
+from openai import OpenAI
+
+es = Elasticsearch("http://localhost:9200")
+client = OpenAI()
+
+def hybrid_search(query: str, index: str = "documents", k: int = 5):
+    # 生成向量
+    response = client.embeddings.create(
+        model="text-embedding-3-small",
+        input=query,
+    )
+    query_vector = response.data[0].embedding
+
+    # ES 混合搜索
+    script_query = {
+        "script_score": {
+            "query": {"match": {"content": query}},
+            "script": {
+                "source": "cosineSimilarity(params.query_vector, 'embedding') + 1.0",
+                "params": {"query_vector": query_vector},
+            },
+        }
+    }
+
+    resp = es.search(index=index, query=script_query, size=k)
+    return [hit["_source"]["content"] for hit in resp["hits"]["hits"]]
+```
+
+## 创建向量索引
+
+```python
+from elasticsearch import Elasticsearch
+
+es = Elasticsearch("http://localhost:9200")
+
+# 创建带向量字段的索引
+mappings = {
+    "mappings": {
+        "properties": {
+            "title": {"type": "text"},
+            "content": {"type": "text"},
+            "embedding": {
+                "type": "dense_vector",
+                "dims": 1536,  # text-embedding-3-small 维度
+                "index": True,
+                "similarity": "cosine",
+            },
+        }
+    }
+}
+
+es.indices.create(index="knowledge_base", body=mappings)
+```
+
+## 完整 RAG 管道
+
+```python
+import hashlib
+from openai import OpenAI
+from elasticsearch import Elasticsearch
+
+class ESHybridRAG:
+    def __init__(self):
+        self.es = Elasticsearch("http://localhost:9200")
+        self.llm = OpenAI()
+
+    def index_document(self, text: str, metadata: dict = None):
+        """索引文档（含向量）"""
+        # 生成 embedding
+        resp = self.llm.embeddings.create(
+            model="text-embedding-3-small",
+            input=text,
+        )
+        doc_id = hashlib.md5(text.encode()).hexdigest()
+
+        doc = {
+            "content": text,
+            "embedding": resp.data[0].embedding,
+            "metadata": metadata or {},
+        }
+        self.es.index(index="knowledge", id=doc_id, document=doc)
+
+    def search(self, query: str, k: int = 5) -> list[str]:
+        """混合搜索"""
+        resp = self.llm.embeddings.create(
+            model="text-embedding-3-small",
+            input=query,
+        )
+        vec = resp.data[0].embedding
+
+        result = self.es.search(index="knowledge", body={
+            "size": k,
+            "query": {
+                "script_score": {
+                    "query": {"match": {"content": query}},
+                    "script": {
+                        "source": "cosineSimilarity(params.qv, 'embedding') + 1.0",
+                        "params": {"qv": vec},
+                    },
+                }
+            }
+        })
+        return [h["_source"]["content"] for h in result["hits"]["hits"]]
+
+    def query(self, question: str) -> str:
+        """RAG 问答"""
+        context = "\n\n".join(self.search(question))
+        return self.llm.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "基于以下上下文回答问题："},
+                {"role": "user", "content": f"上下文：{context}\n\n问题：{question}"},
+            ],
+        ).choices[0].message.content
+
+rag = ESHybridRAG()
+rag.index_document("Elasticsearch 是分布式搜索引擎...")
+print(rag.query("什么是 Elasticsearch？"))
+```
+
+## ES vs 向量数据库
+
+| 特性 | Elasticsearch | 向量数据库 (Qdrant) |
+|------|---------------|-------------------|
+| 全文搜索 | 原生强大 | 需配合 |
+| 向量搜索 | 7.x+ 支持 | 核心功能 |
+| 聚合分析 | 丰富 | 有限 |
+| 运维复杂度 | 较高 | 简单 |
+| 适用场景 | 混合搜索、日志分析 | 纯语义搜索 |

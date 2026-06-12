@@ -1,0 +1,91 @@
+---
+title: MCP Client 入门
+order: 1
+difficulty: advanced
+estimated_time: 20min
+tags: [MCP, Client]
+---
+
+## 入门
+
+MCP Client 连接 Server 并调用其工具。
+
+```python
+# 官方 MCP Client 示例
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+
+async def main():
+    # 连接 Server
+    server_params = StdioServerParameters(
+        command="python",
+        args=["server.py"]
+    )
+
+    async with stdio_client(server_params) as (read, write):
+        async with ClientSession(read, write) as session:
+            # 初始化
+            await session.initialize()
+
+            # 列出可用工具
+            tools = await session.list_tools()
+            for tool in tools:
+                print(f"工具: {tool.name} - {tool.description}")
+
+            # 调用工具
+            result = await session.call_tool(
+                "add",
+                arguments={"a": 1, "b": 2}
+            )
+            print(f"结果: {result.content[0].text}")
+```
+
+## 核心
+
+### 与 LLM 集成
+
+```python
+import json
+from openai import OpenAI
+
+client = OpenAI()
+
+async def agent_with_mcp(session, user_input: str):
+    # 1. 获取 MCP 工具列表
+    tools = await session.list_tools()
+
+    # 2. 转换成 OpenAI tool 格式
+    openai_tools = []
+    for t in tools:
+        openai_tools.append({
+            "type": "function",
+            "function": {
+                "name": t.name,
+                "description": t.description,
+                "parameters": t.inputSchema
+            }
+        })
+
+    # 3. LLM 决定调用哪个工具
+    response = client.chat.completions.create(
+        model="gpt-4",
+        messages=[{"role": "user", "content": user_input}],
+        tools=openai_tools
+    )
+
+    # 4. 执行工具调用
+    for choice in response.choices:
+        if choice.finish_reason == "tool_calls":
+            for tc in choice.message.tool_calls:
+                args = json.loads(tc.function.arguments)
+                result = await session.call_tool(
+                    tc.function.name,
+                    arguments=args
+                )
+                print(f"工具结果: {result.content[0].text}")
+```
+
+## 练习
+
+1. 用 Python 编写 MCP Client，连接自己的 Server 并调用工具
+2. 将 MCP Client 集成到 LLM 调用链中，实现 Agent 自动选择工具

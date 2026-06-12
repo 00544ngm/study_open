@@ -1,0 +1,123 @@
+---
+title: WebSocket 基础
+order: 1
+difficulty: beginner
+estimated_time: 20min
+tags: [WebSocket, FastAPI, 实时通信]
+---
+
+## WebSocket 协议
+
+WebSocket 是**全双工**通信协议，建立一次连接后双方可随时发送消息：
+
+```
+HTTP (请求-响应):  客户端 → 服务器 → 客户端（每次都需要新连接）
+WebSocket (全双工): 客户端 ↔ 服务器（持久连接，双向推送）
+```
+
+## FastAPI WebSocket
+
+```python
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+import asyncio
+
+app = FastAPI()
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        while True:
+            data = await websocket.receive_text()
+            await websocket.send_text(f"你说了: {data}")
+    except WebSocketDisconnect:
+        print("客户端断开")
+```
+
+## 客户端连接
+
+```python
+# Python 客户端
+import asyncio
+import websockets
+
+async def chat():
+    async with websockets.connect("ws://localhost:8000/ws") as ws:
+        await ws.send("你好")
+        response = await ws.recv()
+        print(response)
+
+asyncio.run(chat())
+```
+
+```javascript
+// 浏览器端
+const ws = new WebSocket("ws://localhost:8000/ws");
+ws.onopen = () => ws.send("你好");
+ws.onmessage = (event) => console.log(event.data);
+ws.onclose = () => console.log("连接关闭");
+```
+
+## 连接管理
+
+```python
+from typing import Set
+from fastapi import WebSocket
+
+class ConnectionManager:
+    def __init__(self):
+        self.active: Set[WebSocket] = set()
+
+    async def connect(self, ws: WebSocket):
+        await ws.accept()
+        self.active.add(ws)
+
+    def disconnect(self, ws: WebSocket):
+        self.active.discard(ws)
+
+    async def broadcast(self, message: str):
+        for ws in self.active:
+            try:
+                await ws.send_text(message)
+            except Exception:
+                self.disconnect(ws)
+
+manager = ConnectionManager()
+
+@app.websocket("/ws")
+async def ws(websocket: WebSocket):
+    await manager.connect(websocket)
+    try:
+        while True:
+            data = await websocket.receive_text()
+            await manager.broadcast(f"用户: {data}")
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+```
+
+## 心跳保活
+
+```python
+@app.websocket("/ws")
+async def ws(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        while True:
+            try:
+                data = await asyncio.wait_for(
+                    websocket.receive_text(), timeout=30
+                )
+                await websocket.send_text(f"收到: {data}")
+            except asyncio.TimeoutError:
+                await websocket.send_json({"type": "ping"})
+    except WebSocketDisconnect:
+        print("断开")
+```
+
+| 概念 | 说明 |
+|------|------|
+| accept() | 接受 WebSocket 连接 |
+| receive_text() | 接收文本消息 |
+| send_text() | 发送文本消息 |
+| receive_json() / send_json() | JSON 格式收发 |
+| WebSocketDisconnect | 客户端断开异常 |

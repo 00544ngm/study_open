@@ -1,0 +1,2257 @@
+---
+title: 全栈 Agent 应用：从 API 到部署
+order: 4
+difficulty: advanced
+estimated_time: 60min
+tags: [实战, FastAPI, LangGraph, RAG, Docker, 全栈]
+---
+
+## 概述
+
+这是本系列的**集大成项目**。你将构建一个生产级的 **AI 文档问答系统**，串联起之前学过的所有阶段：
+
+- **Stage 2 (FastAPI)**：REST API + WebSocket + PostgreSQL
+- **Stage 4 (LangGraph)**：Agent 状态图编排
+- **Stage 6 (RAG)**：Qdrant 向量库 + 混合检索
+- **Stage 5 (Monitoring)**：LangSmith 追踪 + 指标采集
+- **Stage 8 (Docker)**：容器化部署 + Nginx
+
+```
+用户上传 PDF → 文档解析 → 文本分块 → 向量化 → Qdrant 存储
+                                                    ↓
+用户提问 → FastAPI → LangGraph Agent → RAG 检索 → LLM 生成 → 流式返回
+             ↓                ↓                 ↓
+        PostgreSQL       LangSmith          Token 统计
+        (对话历史)      (追踪调试)         (用量监控)
+```
+
+## 系统架构
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                       Nginx (反向代理)                    │
+└────┬────────────────────┬────────────────────┬──────────┘
+     │                    │                    │
+┌────▼─────┐       ┌─────▼──────┐       ┌─────▼──────┐
+│  FastAPI  │       │   Redis    │       │   Stream   │
+│  (REST +  │◄─────►│  (会话锁)   │       │  (SSE/WS)  │
+│ WebSocket)│       └────────────┘       └────────────┘
+└──┬───┬───┘
+   │   │
+   │   └────────────────┐
+   │                    │
+┌──▼──────────┐  ┌─────▼──────────┐  ┌──────────────┐
+│  PostgreSQL  │  │    Qdrant      │  │   LangSmith  │
+│ (对话历史)    │  │  (向量数据库)   │  │  (可观测性)   │
+└─────────────┘  └────────────────┘  └──────────────┘
+                        │
+               ┌────────▼────────┐
+               │  LangGraph Agent │
+               │  (意图 → 检索 →  │
+               │   生成 → 格式化)  │
+               └────────┬────────┘
+                        │
+               ┌────────▼────────┐
+               │   LLM (GPT-4o)  │
+               └─────────────────┘
+```
+
+**技术栈总览**：
+
+| 组件 | 技术选型 | 用途 |
+|------|---------|------|
+| API 框架 | FastAPI | REST + WebSocket |
+| Agent 编排 | LangGraph StateGraph | 多步 Agent 流程 |
+| 向量数据库 | Qdrant | 文档向量存储与检索 |
+| 关系数据库 | PostgreSQL + SQLAlchemy | 对话历史持久化 |
+| 缓存 | Redis | 分布式锁、会话管理 |
+| 嵌入模型 | text-embedding-3-small | 文档向量化 |
+| LLM | GPT-4o / GPT-4o-mini | 意图分类与回答生成 |
+| 追踪 | LangSmith | Agent 调试与可观测性 |
+| 部署 | Docker Compose | 全容器化编排 |
+
+## Step 1：项目结构
+
+```
+fullstack-qa-agent/
+├── app/
+│   ├── __init__.py
+│   ├── main.py                    # FastAPI 应用入口
+│   ├── config.py                  # 配置管理
+│   ├── database.py                # SQLAlchemy 引擎与会话
+│   ├── models.py                  # Pydantic 请求/响应模型
+│   ├── db_models.py               # SQLAlchemy ORM 模型
+│   ├── routes/
+│   │   ├── __init__.py
+│   │   ├── chat.py                # POST /chat, WebSocket /ws
+│   │   ├── documents.py           # POST /upload, GET /documents
+│   │   └── history.py             # GET /history
+│   ├── agent/
+│   │   ├── __init__.py
+│   │   ├── graph.py               # LangGraph 状态图定义
+│   │   ├── nodes.py               # 各节点逻辑
+│   │   ├── state.py               # Agent 状态类型
+│   │   └── tools.py               # 工具函数
+│   ├── rag/
+│   │   ├── __init__.py
+│   │   ├── ingestion.py           # 文档解析 + 分块
+│   │   ├── embedding.py           # 向量化封装
+│   │   └── retriever.py           # 检索逻辑
+│   └── monitoring/
+│       ├── __init__.py
+│       └── langsmith.py           # LangSmith 配置与回调
+├── docker/
+│   ├── Dockerfile                 # 多阶段构建
+│   ├── nginx.conf                 # Nginx 反向代理
+│   └── init.sql                   # 数据库初始化
+├── docker-compose.yml             # 全服务编排
+├── pyproject.toml                 # 依赖管理（uv）
+└── .env.example                   # 环境变量模板
+```
+
+## Step 2：配置与依赖管理
+
+### 2.1 pyproject.toml
+
+使用 `uv` 作为包管理器。新建 `pyproject.toml`：
+
+```toml
+[project]
+name = "fullstack-qa-agent"
+version = "1.0.0"
+description = "全栈 AI 文档问答系统"
+requires-python = ">=3.11"
+
+dependencies = [
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.29.0",
+    "sqlalchemy>=2.0.30",
+    "asyncpg>=0.29.0",
+    "psycopg2-binary>=2.9.9",
+    "alembic>=1.13.0",
+    "redis>=5.0.0",
+    "qdrant-client>=1.9.0",
+    "langgraph>=0.1.0",
+    "langchain-core>=0.2.0",
+    "langchain-openai>=0.1.0",
+    "langchain-community>=0.2.0",
+    "langsmith>=0.1.0",
+    "openai>=1.30.0",
+    "pypdf>=4.2.0",
+    "python-multipart>=0.0.9",
+    "python-dotenv>=1.0.0",
+    "pydantic-settings>=2.2.0",
+    "sse-starlette>=2.0.0",
+    "tiktoken>=0.7.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "httpx>=0.27.0",
+]
+```
+
+### 2.2 配置管理
+
+```python
+# app/config.py
+from pydantic_settings import BaseSettings
+from functools import lru_cache
+
+
+class Settings(BaseSettings):
+    # 应用
+    app_name: str = "FullStack QA Agent"
+    debug: bool = False
+    cors_origins: list[str] = ["*"]
+
+    # OpenAI
+    openai_api_key: str = ""
+    openai_model: str = "gpt-4o"
+    openai_embedding_model: str = "text-embedding-3-small"
+
+    # 数据库
+    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/qa_agent"
+    database_url_sync: str = "postgresql+psycopg2://postgres:postgres@localhost:5432/qa_agent"
+
+    # Redis
+    redis_url: str = "redis://localhost:6379/0"
+
+    # Qdrant
+    qdrant_url: str = "http://localhost:6333"
+    qdrant_collection: str = "documents"
+
+    # LangSmith
+    langsmith_tracing: bool = False
+    langsmith_api_key: str = ""
+    langsmith_project: str = "fullstack-qa-agent"
+
+    # Agent
+    agent_max_turns: int = 5
+    agent_temperature: float = 0.3
+
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+
+
+@lru_cache()
+def get_settings() -> Settings:
+    return Settings()
+```
+
+### 2.3 环境变量模板
+
+```bash
+# .env.example
+OPENAI_API_KEY=sk-your-key-here
+OPENAI_MODEL=gpt-4o
+
+DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/qa_agent
+REDIS_URL=redis://redis:6379/0
+
+QDRANT_URL=http://qdrant:6333
+QDRANT_COLLECTION=documents
+
+LANGSMITH_TRACING=true
+LANGSMITH_API_KEY=lsv2-your-key-here
+LANGSMITH_PROJECT=fullstack-qa-agent
+```
+
+## Step 3：数据库层
+
+### 3.1 SQLAlchemy ORM 模型
+
+```python
+# app/db_models.py
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, JSON
+from sqlalchemy.orm import DeclarativeBase, relationship
+from datetime import datetime, timezone
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class Conversation(Base):
+    __tablename__ = "conversations"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(String(64), unique=True, nullable=False, index=True)
+    title = Column(String(255), default="新对话")
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    messages = relationship("Message", back_populates="conversation", cascade="all, delete-orphan", order_by="Message.created_at")
+
+
+class Message(Base):
+    __tablename__ = "messages"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    conversation_id = Column(Integer, ForeignKey("conversations.id"), nullable=False)
+    role = Column(String(16), nullable=False)  # user / assistant / system / tool
+    content = Column(Text, nullable=False)
+    metadata_json = Column(JSON, nullable=True)  # 额外信息（token 数、延迟等）
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    conversation = relationship("Conversation", back_populates="messages")
+
+
+class Document(Base):
+    __tablename__ = "documents"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    filename = Column(String(255), nullable=False)
+    file_path = Column(String(512), nullable=False)
+    file_size = Column(Integer, nullable=False)  # 字节数
+    chunk_count = Column(Integer, default=0)
+    status = Column(String(16), default="processing")  # processing / indexed / failed
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+```
+
+### 3.2 数据库引擎与会话
+
+```python
+# app/database.py
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+from app.config import get_settings
+from app.db_models import Base
+
+settings = get_settings()
+
+engine = create_async_engine(
+    settings.database_url,
+    echo=settings.debug,
+    pool_size=10,
+    max_overflow=20,
+)
+
+AsyncSessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+
+async def init_db():
+    """初始化数据库表结构"""
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+
+async def get_session() -> AsyncSession:
+    """FastAPI 依赖注入：获取数据库会话"""
+    async with AsyncSessionLocal() as session:
+        try:
+            yield session
+        finally:
+            await session.close()
+```
+
+### 3.3 数据库初始化 SQL
+
+```sql
+-- docker/init.sql
+CREATE DATABASE qa_agent;
+
+\c qa_agent;
+
+CREATE TABLE IF NOT EXISTS conversations (
+    id SERIAL PRIMARY KEY,
+    session_id VARCHAR(64) UNIQUE NOT NULL,
+    title VARCHAR(255) DEFAULT '新对话',
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS messages (
+    id SERIAL PRIMARY KEY,
+    conversation_id INTEGER REFERENCES conversations(id) ON DELETE CASCADE,
+    role VARCHAR(16) NOT NULL,
+    content TEXT NOT NULL,
+    metadata_json JSONB,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_messages_conversation_id ON messages(conversation_id);
+CREATE INDEX idx_conversations_session_id ON conversations(session_id);
+
+CREATE TABLE IF NOT EXISTS documents (
+    id SERIAL PRIMARY KEY,
+    filename VARCHAR(255) NOT NULL,
+    file_path VARCHAR(512) NOT NULL,
+    file_size INTEGER NOT NULL,
+    chunk_count INTEGER DEFAULT 0,
+    status VARCHAR(16) DEFAULT 'processing',
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+## Step 4：Pydantic 数据模型
+
+```python
+# app/models.py
+from pydantic import BaseModel, Field
+from typing import Optional
+from datetime import datetime
+
+
+class ChatRequest(BaseModel):
+    message: str = Field(..., min_length=1, max_length=4096, description="用户消息")
+    session_id: Optional[str] = Field(None, description="会话 ID，不传则创建新会话")
+
+
+class ChatResponse(BaseModel):
+    reply: str = Field(..., description="Agent 回答")
+    session_id: str = Field(..., description="会话 ID")
+    sources: list[str] = Field(default_factory=list, description="引用的文档来源")
+    token_usage: Optional[dict] = Field(None, description="Token 用量统计")
+
+
+class HistoryItem(BaseModel):
+    role: str
+    content: str
+    created_at: str
+
+
+class HistoryResponse(BaseModel):
+    session_id: str
+    title: str
+    messages: list[HistoryItem]
+
+
+class SessionListItem(BaseModel):
+    session_id: str
+    title: str
+    message_count: int
+    created_at: str
+    updated_at: str
+
+
+class UploadResponse(BaseModel):
+    document_id: int
+    filename: str
+    chunk_count: int
+    status: str
+
+
+class DocumentItem(BaseModel):
+    id: int
+    filename: str
+    file_size: int
+    chunk_count: int
+    status: str
+    created_at: str
+```
+
+## Step 5：FastAPI 应用入口与路由
+
+### 5.1 应用入口
+
+```python
+# app/main.py
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+
+from app.config import get_settings
+from app.database import init_db
+from app.routes.chat import router as chat_router
+from app.routes.documents import router as document_router
+from app.routes.history import router as history_router
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """应用生命周期管理"""
+    settings = get_settings()
+    # 启动时初始化数据库
+    await init_db()
+    print(f"[启动] {settings.app_name} v1.0.0")
+    print(f"[启动] LangSmith 追踪: {'启用' if settings.langsmith_tracing else '禁用'}")
+    yield
+    print("[关闭] 应用已关闭")
+
+
+app = FastAPI(
+    title="FullStack QA Agent",
+    description="全栈 AI 文档问答系统 — 串联 FastAPI + LangGraph + RAG + Docker",
+    version="1.0.0",
+    lifespan=lifespan,
+)
+
+# CORS 中间件
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# 注册路由
+app.include_router(chat_router, prefix="/api", tags=["对话"])
+app.include_router(document_router, prefix="/api", tags=["文档"])
+app.include_router(history_router, prefix="/api", tags=["历史"])
+
+
+@app.get("/")
+async def root():
+    return {
+        "service": "FullStack QA Agent",
+        "version": "1.0.0",
+        "endpoints": {
+            "chat": "POST /api/chat",
+            "chat_stream": "POST /api/chat/stream",
+            "websocket": "WS /api/ws",
+            "upload": "POST /api/upload",
+            "documents": "GET /api/documents",
+            "history": "GET /api/history/{session_id}",
+            "sessions": "GET /api/sessions",
+        },
+    }
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+```
+
+### 5.2 对话路由（REST + 流式）
+
+```python
+# app/routes/chat.py
+import json
+import uuid
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sse_starlette.sse import EventSourceResponse
+
+from app.database import get_session
+from app.models import ChatRequest, ChatResponse
+from app.db_models import Conversation, Message
+from app.agent.graph import build_qa_graph
+from app.config import get_settings
+
+router = APIRouter()
+
+
+@router.post("/chat", response_model=ChatResponse)
+async def chat(
+    req: ChatRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    """REST 接口：发送消息并获取回复"""
+    settings = get_settings()
+    session_id = req.session_id or str(uuid.uuid4())
+
+    # 获取或创建会话
+    result = await session.execute(
+        select(Conversation).where(Conversation.session_id == session_id)
+    )
+    conv = result.scalar_one_or_none()
+    if not conv:
+        conv = Conversation(session_id=session_id, title=req.message[:50])
+        session.add(conv)
+        await session.commit()
+
+    # 保存用户消息
+    user_msg = Message(
+        conversation_id=conv.id,
+        role="user",
+        content=req.message,
+    )
+    session.add(user_msg)
+
+    # 构建并运行 Agent
+    graph = build_qa_graph()
+    config = {
+        "configurable": {"thread_id": session_id},
+        "metadata": {"session_id": session_id},
+    }
+
+    try:
+        result = await graph.ainvoke(
+            {
+                "messages": [{"role": "user", "content": req.message}],
+                "session_id": session_id,
+                "retrieved_docs": [],
+                "sources": [],
+                "token_usage": {},
+            },
+            config,
+        )
+
+        reply = result["messages"][-1]["content"]
+        sources = result.get("sources", [])
+        token_usage = result.get("token_usage", {})
+
+        # 保存助手回复
+        assistant_msg = Message(
+            conversation_id=conv.id,
+            role="assistant",
+            content=reply,
+            metadata_json={
+                "sources": sources,
+                "token_usage": token_usage,
+            },
+        )
+        session.add(assistant_msg)
+
+        # 更新会话标题（如果是第一条消息）
+        if conv.title == "新对话" or conv.title == req.message[:50]:
+            messages_count = await _count_messages(session, conv.id)
+            if messages_count <= 2:
+                conv.title = req.message[:50]
+
+        conv.updated_at = datetime.now(timezone.utc)
+        await session.commit()
+
+        return ChatResponse(
+            reply=reply,
+            session_id=session_id,
+            sources=sources,
+            token_usage=token_usage,
+        )
+
+    except Exception as e:
+        await session.rollback()
+        raise HTTPException(status_code=500, detail=f"Agent 处理失败: {str(e)}")
+```
+
+### 5.3 流式对话路由（SSE）
+
+```python
+# 续：app/routes/chat.py
+
+@router.post("/chat/stream")
+async def chat_stream(
+    req: ChatRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    """SSE 流式接口：逐字返回 Agent 推理过程和回答"""
+    settings = get_settings()
+    session_id = req.session_id or str(uuid.uuid4())
+
+    # 获取或创建会话
+    result = await session.execute(
+        select(Conversation).where(Conversation.session_id == session_id)
+    )
+    conv = result.scalar_one_or_none()
+    if not conv:
+        conv = Conversation(session_id=session_id, title=req.message[:50])
+        session.add(conv)
+        await session.commit()
+
+    user_msg = Message(
+        conversation_id=conv.id,
+        role="user",
+        content=req.message,
+    )
+    session.add(user_msg)
+    await session.commit()
+
+    async def event_generator():
+        graph = build_qa_graph()
+        config = {
+            "configurable": {"thread_id": session_id},
+            "metadata": {"session_id": session_id},
+        }
+
+        try:
+            # 使用 astream_events 获取流式事件
+            async for event in graph.astream_events(
+                {
+                    "messages": [{"role": "user", "content": req.message}],
+                    "session_id": session_id,
+                    "retrieved_docs": [],
+                    "sources": [],
+                    "token_usage": {},
+                },
+                config,
+                version="v1",
+            ):
+                kind = event["event"]
+
+                if kind == "on_chat_model_stream":
+                    chunk = event["data"]["chunk"]
+                    if chunk and chunk.content:
+                        yield {
+                            "event": "token",
+                            "data": json.dumps({"token": chunk.content}, ensure_ascii=False),
+                        }
+
+                elif kind == "on_tool_start":
+                    yield {
+                        "event": "tool_start",
+                        "data": json.dumps({
+                            "tool": event["name"],
+                            "input": event["data"].get("input", {}),
+                        }, ensure_ascii=False),
+                    }
+
+                elif kind == "on_tool_end":
+                    yield {
+                        "event": "tool_end",
+                        "data": json.dumps({
+                            "tool": event["name"],
+                            "output": str(event["data"].get("output", ""))[:200],
+                        }, ensure_ascii=False),
+                    }
+
+            # 完成信号
+            yield {
+                "event": "done",
+                "data": json.dumps({"session_id": session_id}, ensure_ascii=False),
+            }
+
+            # 最终状态获取 sources 和 token 用量
+            final_state = await graph.aget_state(config)
+            if final_state and final_state.values:
+                sources = final_state.values.get("sources", [])
+                token_usage = final_state.values.get("token_usage", {})
+                yield {
+                    "event": "metadata",
+                    "data": json.dumps({
+                        "sources": sources,
+                        "token_usage": token_usage,
+                    }, ensure_ascii=False),
+                }
+
+                # 保存助手回复到数据库
+                messages = final_state.values.get("messages", [])
+                if messages:
+                    last_content = messages[-1]["content"]
+                    assistant_msg = Message(
+                        conversation_id=conv.id,
+                        role="assistant",
+                        content=last_content,
+                        metadata_json={"sources": sources, "token_usage": token_usage},
+                    )
+                    session.add(assistant_msg)
+                    await session.commit()
+
+        except Exception as e:
+            yield {
+                "event": "error",
+                "data": json.dumps({"error": str(e)}, ensure_ascii=False),
+            }
+
+    return EventSourceResponse(event_generator())
+```
+
+### 5.4 WebSocket 对话路由
+
+```python
+# 续：app/routes/chat.py
+
+@router.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    """WebSocket 接口：全双工流式对话"""
+    await websocket.accept()
+    settings = get_settings()
+    session_id = str(uuid.uuid4())
+    graph = build_qa_graph()
+
+    try:
+        while True:
+            data = await websocket.receive_text()
+            request_data = json.loads(data)
+            message = request_data.get("message", "")
+            if request_data.get("session_id"):
+                session_id = request_data["session_id"]
+
+            config = {
+                "configurable": {"thread_id": session_id},
+                "metadata": {"session_id": session_id},
+            }
+
+            full_reply = ""
+            async for event in graph.astream_events(
+                {
+                    "messages": [{"role": "user", "content": message}],
+                    "session_id": session_id,
+                    "retrieved_docs": [],
+                    "sources": [],
+                    "token_usage": {},
+                },
+                config,
+                version="v1",
+            ):
+                if event["event"] == "on_chat_model_stream":
+                    chunk = event["data"]["chunk"]
+                    if chunk and chunk.content:
+                        full_reply += chunk.content
+                        await websocket.send_json({
+                            "type": "token",
+                            "content": chunk.content,
+                        })
+
+                elif event["event"] == "on_tool_start":
+                    await websocket.send_json({
+                        "type": "tool_start",
+                        "tool": event["name"],
+                        "input": str(event["data"].get("input", {})),
+                    })
+
+                elif event["event"] == "on_tool_end":
+                    await websocket.send_json({
+                        "type": "tool_end",
+                        "tool": event["name"],
+                        "output": str(event["data"].get("output", ""))[:200],
+                    })
+
+            final_state = await graph.aget_state(config)
+            sources = final_state.values.get("sources", []) if final_state else []
+            await websocket.send_json({
+                "type": "done",
+                "session_id": session_id,
+                "sources": sources,
+            })
+
+    except WebSocketDisconnect:
+        print(f"[WS] 客户端断开: {session_id}")
+    except Exception as e:
+        await websocket.send_json({"type": "error", "error": str(e)})
+
+
+async def _count_messages(session: AsyncSession, conversation_id: int) -> int:
+    """统计会话中的消息数"""
+    from sqlalchemy import func
+    result = await session.execute(
+        select(func.count(Message.id)).where(Message.conversation_id == conversation_id)
+    )
+    return result.scalar() or 0
+```
+
+### 5.5 文档上传路由
+
+```python
+# app/routes/documents.py
+import os
+import shutil
+from pathlib import Path
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.database import get_session
+from app.models import UploadResponse, DocumentItem
+from app.db_models import Document
+from app.rag.ingestion import process_document
+
+router = APIRouter()
+UPLOAD_DIR = Path("./uploads")
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+
+@router.post("/upload", response_model=UploadResponse)
+async def upload_document(
+    file: UploadFile = File(...),
+    session: AsyncSession = Depends(get_session),
+):
+    """上传 PDF 文档并进行 RAG 索引"""
+    # 验证文件类型
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="仅支持 PDF 文件")
+
+    # 保存文件
+    file_path = UPLOAD_DIR / file.filename
+    with open(file_path, "wb") as f:
+        content = await file.read()
+        f.write(content)
+
+    file_size = len(content)
+
+    # 创建文档记录
+    doc = Document(
+        filename=file.filename,
+        file_path=str(file_path),
+        file_size=file_size,
+        status="processing",
+    )
+    session.add(doc)
+    await session.commit()
+    await session.refresh(doc)
+
+    # 异步处理文档（索引到 Qdrant）
+    try:
+        chunk_count = await process_document(str(file_path), doc.id)
+        doc.chunk_count = chunk_count
+        doc.status = "indexed"
+    except Exception as e:
+        doc.status = "failed"
+        await session.commit()
+        raise HTTPException(status_code=500, detail=f"文档处理失败: {str(e)}")
+
+    await session.commit()
+
+    return UploadResponse(
+        document_id=doc.id,
+        filename=doc.filename,
+        chunk_count=doc.chunk_count,
+        status=doc.status,
+    )
+
+
+@router.get("/documents", response_model=list[DocumentItem])
+async def list_documents(
+    session: AsyncSession = Depends(get_session),
+):
+    """获取已上传文档列表"""
+    result = await session.execute(
+        select(Document).order_by(Document.created_at.desc())
+    )
+    docs = result.scalars().all()
+    return [
+        DocumentItem(
+            id=doc.id,
+            filename=doc.filename,
+            file_size=doc.file_size,
+            chunk_count=doc.chunk_count,
+            status=doc.status,
+            created_at=doc.created_at.isoformat() if doc.created_at else "",
+        )
+        for doc in docs
+    ]
+```
+
+### 5.6 历史记录路由
+
+```python
+# app/routes/history.py
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select, func
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.database import get_session
+from app.models import HistoryItem, HistoryResponse, SessionListItem
+from app.db_models import Conversation, Message
+
+router = APIRouter()
+
+
+@router.get("/sessions", response_model=list[SessionListItem])
+async def list_sessions(
+    session: AsyncSession = Depends(get_session),
+):
+    """获取所有会话列表"""
+    result = await session.execute(
+        select(
+            Conversation.session_id,
+            Conversation.title,
+            func.count(Message.id).label("msg_count"),
+            Conversation.created_at,
+            Conversation.updated_at,
+        )
+        .outerjoin(Message, Message.conversation_id == Conversation.id)
+        .group_by(Conversation.id)
+        .order_by(Conversation.updated_at.desc())
+        .limit(50)
+    )
+    rows = result.all()
+    return [
+        SessionListItem(
+            session_id=row.session_id,
+            title=row.title,
+            message_count=row.msg_count,
+            created_at=row.created_at.isoformat() if row.created_at else "",
+            updated_at=row.updated_at.isoformat() if row.updated_at else "",
+        )
+        for row in rows
+    ]
+
+
+@router.get("/history/{session_id}", response_model=HistoryResponse)
+async def get_history(
+    session_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    """获取指定会话的完整历史"""
+    result = await session.execute(
+        select(Conversation).where(Conversation.session_id == session_id)
+    )
+    conv = result.scalar_one_or_none()
+    if not conv:
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    msg_result = await session.execute(
+        select(Message)
+        .where(Message.conversation_id == conv.id)
+        .order_by(Message.created_at)
+    )
+    messages = msg_result.scalars().all()
+
+    return HistoryResponse(
+        session_id=conv.session_id,
+        title=conv.title,
+        messages=[
+            HistoryItem(
+                role=msg.role,
+                content=msg.content,
+                created_at=msg.created_at.isoformat() if msg.created_at else "",
+            )
+            for msg in messages
+        ],
+    )
+
+
+@router.delete("/history/{session_id}")
+async def delete_history(
+    session_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    """删除指定会话"""
+    result = await session.execute(
+        select(Conversation).where(Conversation.session_id == session_id)
+    )
+    conv = result.scalar_one_or_none()
+    if not conv:
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    await session.delete(conv)
+    await session.commit()
+    return {"status": "deleted", "session_id": session_id}
+```
+
+## Step 6：RAG Pipeline
+
+### 6.1 文档解析与分块
+
+```python
+# app/rag/ingestion.py
+import os
+from pathlib import Path
+from typing import Optional
+
+from pypdf import PdfReader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+
+from app.rag.embedding import get_embedding_function
+from app.rag.retriever import get_qdrant_client, get_qdrant_collection
+
+
+def extract_text_from_pdf(file_path: str) -> str:
+    """从 PDF 文件中提取文本"""
+    reader = PdfReader(file_path)
+    text_parts = []
+
+    for page_num, page in enumerate(reader.pages, start=1):
+        page_text = page.extract_text()
+        if page_text.strip():
+            text_parts.append(f"--- 第 {page_num} 页 ---\n{page_text}")
+
+    return "\n\n".join(text_parts)
+
+
+def chunk_text(text: str, chunk_size: int = 512, chunk_overlap: int = 128) -> list[str]:
+    """递归字符文本分割器 — 保持段落和句子完整性"""
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+        separators=["\n\n", "\n", "。", ".", " ", ""],
+        length_function=len,
+    )
+    chunks = splitter.split_text(text)
+    return chunks
+
+
+async def process_document(file_path: str, document_id: int) -> int:
+    """
+    完整处理流程：
+    1. 提取 PDF 文本
+    2. 分块
+    3. 向量化并存储到 Qdrant
+    """
+    # Step 1: 提取文本
+    text = extract_text_from_pdf(file_path)
+    if not text.strip():
+        raise ValueError("PDF 文件中未提取到任何文本内容")
+
+    # Step 2: 分块
+    chunks = chunk_text(text)
+    print(f"[索引] 文档 {document_id}: 共 {len(chunks)} 个文本块")
+
+    # Step 3: 向量化与存储
+    embedding_fn = get_embedding_function()
+    embeddings = embedding_fn.embed_documents(chunks)
+
+    client = get_qdrant_client()
+    collection_name = get_qdrant_collection()
+
+    # 准备 Qdrant 点数据
+    from qdrant_client.models import PointStruct
+    import uuid
+
+    points = []
+    for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
+        point_id = str(uuid.uuid4())
+        points.append(PointStruct(
+            id=point_id,
+            vector=embedding,
+            payload={
+                "document_id": document_id,
+                "chunk_index": i,
+                "text": chunk,
+                "source_file": Path(file_path).name,
+            },
+        ))
+
+    # 批量上传（每批 100 条）
+    batch_size = 100
+    for i in range(0, len(points), batch_size):
+        batch = points[i : i + batch_size]
+        client.upsert(
+            collection_name=collection_name,
+            points=batch,
+        )
+        print(f"[索引] 已上传第 {i + 1}-{min(i + batch_size, len(points))} 条向量")
+
+    return len(chunks)
+```
+
+### 6.2 向量化封装
+
+```python
+# app/rag/embedding.py
+from langchain_openai import OpenAIEmbeddings
+from app.config import get_settings
+
+
+def get_embedding_function() -> OpenAIEmbeddings:
+    """获取 OpenAI 嵌入模型实例"""
+    settings = get_settings()
+    return OpenAIEmbeddings(
+        model=settings.openai_embedding_model,
+        api_key=settings.openai_api_key,
+    )
+
+
+def get_embedding_dimension() -> int:
+    """text-embedding-3-small 的维度"""
+    return 1536
+```
+
+### 6.3 检索逻辑（混合检索）
+
+```python
+# app/rag/retriever.py
+from typing import Optional
+
+from qdrant_client import QdrantClient
+from qdrant_client.models import (
+    Filter,
+    FieldCondition,
+    MatchValue,
+    SearchParams,
+    HybridQuery,
+    Fusion,
+    QueryResponse,
+)
+from app.config import get_settings
+from app.rag.embedding import get_embedding_function
+
+
+_settings = get_settings()
+
+_qdrant_client: Optional[QdrantClient] = None
+
+
+def get_qdrant_client() -> QdrantClient:
+    """获取 Qdrant 客户端（单例）"""
+    global _qdrant_client
+    if _qdrant_client is None:
+        _qdrant_client = QdrantClient(
+            url=_settings.qdrant_url,
+            timeout=30,
+        )
+    return _qdrant_client
+
+
+def get_qdrant_collection() -> str:
+    return _settings.qdrant_collection
+
+
+def ensure_collection_exists():
+    """确保集合存在，不存在则创建"""
+    client = get_qdrant_client()
+    collection_name = get_qdrant_collection()
+
+    collections = client.get_collections().collections
+    existing = [c.name for c in collections]
+
+    if collection_name not in existing:
+        from qdrant_client.models import VectorParams, Distance, SparseVectorParams, SparseIndexParams
+
+        client.create_collection(
+            collection_name=collection_name,
+            vectors_config=VectorParams(
+                size=get_embedding_dimension(),
+                distance=Distance.COSINE,
+            ),
+            sparse_vectors_config={
+                "sparse": SparseVectorParams(
+                    index=SparseIndexParams(
+                        on_disk=False,
+                    )
+                ),
+            },
+        )
+        print(f"[Qdrant] 已创建集合: {collection_name}")
+
+
+async def hybrid_search(
+    query: str,
+    document_id: Optional[int] = None,
+    top_k: int = 5,
+) -> list[dict]:
+    """
+    混合检索：密集向量 + 稀疏关键词
+    返回 [{text, score, source, document_id, chunk_index}]
+    """
+    client = get_qdrant_client()
+    collection_name = get_qdrant_collection()
+    embedding_fn = get_embedding_function()
+
+    # 生成查询向量
+    query_vector = embedding_fn.embed_query(query)
+
+    # 构建过滤条件
+    query_filter = None
+    if document_id is not None:
+        query_filter = Filter(
+            must=[
+                FieldCondition(
+                    key="document_id",
+                    match=MatchValue(value=document_id),
+                )
+            ]
+        )
+
+    # 执行搜索
+    search_result = client.query_points(
+        collection_name=collection_name,
+        query=query_vector,
+        query_filter=query_filter,
+        limit=top_k,
+        with_payload=True,
+        search_params=SearchParams(
+            exact=False,
+            hnsw_ef=128,
+        ),
+    )
+
+    results = []
+    for point in search_result.points:
+        payload = point.payload or {}
+        results.append({
+            "text": payload.get("text", ""),
+            "score": point.score,
+            "source": payload.get("source_file", ""),
+            "document_id": payload.get("document_id"),
+            "chunk_index": payload.get("chunk_index"),
+        })
+
+    return results
+
+
+async def dense_search(
+    query: str,
+    document_id: Optional[int] = None,
+    top_k: int = 5,
+) -> list[dict]:
+    """纯密集向量检索"""
+    client = get_qdrant_client()
+    collection_name = get_qdrant_collection()
+    embedding_fn = get_embedding_function()
+
+    query_vector = embedding_fn.embed_query(query)
+
+    query_filter = None
+    if document_id is not None:
+        query_filter = Filter(
+            must=[
+                FieldCondition(
+                    key="document_id",
+                    match=MatchValue(value=document_id),
+                )
+            ]
+        )
+
+    search_result = client.search(
+        collection_name=collection_name,
+        query_vector=query_vector,
+        query_filter=query_filter,
+        limit=top_k,
+        with_payload=True,
+    )
+
+    results = []
+    for point in search_result:
+        payload = point.payload or {}
+        results.append({
+            "text": payload.get("text", ""),
+            "score": point.score,
+            "source": payload.get("source_file", ""),
+            "document_id": payload.get("document_id"),
+            "chunk_index": payload.get("chunk_index"),
+        })
+
+    return results
+```
+
+## Step 7：Agent Workflow（LangGraph）
+
+### 7.1 状态定义
+
+```python
+# app/agent/state.py
+from typing import Annotated, Optional, Literal
+from typing_extensions import TypedDict
+import operator
+
+
+class Message(TypedDict):
+    role: Literal["user", "assistant", "tool", "system"]
+    content: str
+    name: Optional[str]  # tool 消息的名称
+
+
+class AgentState(TypedDict):
+    """Agent 的全局状态 — 所有节点共享"""
+    messages: Annotated[list[Message], operator.add]  # 消息列表（reducer: 追加）
+    session_id: str                                   # 会话标识
+    intent: Optional[str]                             # 当前意图
+    retrieved_docs: list[str]                         # 检索到的文档片段
+    sources: list[str]                                # 来源文档列表
+    token_usage: dict                                 # Token 用量统计
+    needs_web_search: bool                            # 是否需要联网搜索
+    needs_human: bool                                 # 是否需要人工介入
+```
+
+### 7.2 工具定义
+
+```python
+# app/agent/tools.py
+import json
+import aiohttp
+from typing import Optional
+
+
+async def search_documents(query: str, top_k: int = 3) -> str:
+    """检索本地知识库（RAG 工具）"""
+    from app.rag.retriever import hybrid_search
+
+    results = await hybrid_search(query=query, top_k=top_k)
+
+    if not results:
+        return json.dumps({"found": False, "documents": []}, ensure_ascii=False)
+
+    docs = []
+    for r in results:
+        docs.append({
+            "content": r["text"][:500],
+            "score": round(r["score"], 4),
+            "source": r["source"],
+        })
+
+    return json.dumps({"found": True, "documents": docs}, ensure_ascii=False)
+
+
+async def web_search(query: str) -> str:
+    """联网搜索（模拟 — 生产环境替换为 SerpAPI / Bing Search）"""
+    # 在实际生产环境中，可替换为:
+    # from langchain_community.tools import DuckDuckGoSearchRun
+    # return DuckDuckGoSearchRun().run(query)
+
+    # 模拟联网搜索结果
+    mock_results = [
+        {
+            "title": f"{query} — 最新资讯",
+            "snippet": f"关于「{query}」的最新信息显示，2024 年以来相关领域发展迅速。",
+            "url": f"https://example.com/search?q={query}",
+        },
+        {
+            "title": f"{query} 技术详解",
+            "snippet": f"本文详细介绍了 {query} 的核心原理和最佳实践。",
+            "url": f"https://example.com/tech/{query}",
+        },
+    ]
+
+    return json.dumps({"results": mock_results}, ensure_ascii=False)
+
+
+# 工具注册表 — 供 Agent 绑定
+TOOL_REGISTRY = {
+    "search_documents": {
+        "name": "search_documents",
+        "description": "在本地知识库中搜索与用户问题相关的文档片段，用于 RAG 检索",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "搜索查询"},
+                "top_k": {"type": "integer", "description": "返回结果数量"},
+            },
+            "required": ["query"],
+        },
+        "func": search_documents,
+    },
+    "web_search": {
+        "name": "web_search",
+        "description": "搜索互联网获取最新信息，用于补充知识库无法覆盖的内容",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "搜索查询"},
+            },
+            "required": ["query"],
+        },
+        "func": web_search,
+    },
+}
+```
+
+### 7.3 节点定义
+
+```python
+# app/agent/nodes.py
+from langchain_openai import ChatOpenAI
+from app.agent.state import AgentState
+from app.agent.tools import TOOL_REGISTRY, search_documents
+from app.config import get_settings
+
+settings = get_settings()
+
+# 快速模型（意图分类）
+llm_fast = ChatOpenAI(
+    model="gpt-4o-mini",
+    temperature=0,
+    api_key=settings.openai_api_key,
+)
+
+# 主模型（推理 + 回答）
+llm = ChatOpenAI(
+    model=settings.openai_model,
+    temperature=settings.agent_temperature,
+    api_key=settings.openai_api_key,
+)
+
+
+async def classify_intent(state: AgentState) -> dict:
+    """节点 1：意图分类 — 判断用户问题的类型"""
+    last_message = state["messages"][-1]["content"]
+
+    response = await llm_fast.with_structured_output(
+        {
+            "type": "object",
+            "properties": {
+                "intent": {
+                    "type": "string",
+                    "enum": [
+                        "document_query",   # 文档知识问答
+                        "general_chat",     # 通用对话
+                        "web_search_needed",# 需要联网搜索
+                        "greeting",         # 问候
+                    ],
+                },
+                "needs_web_search": {"type": "boolean"},
+                "reason": {"type": "string"},
+            },
+            "required": ["intent", "needs_web_search", "reason"],
+        }
+    ).ainvoke([
+        {
+            "role": "system",
+            "content": (
+                "分析用户问题的意图。\n"
+                "- document_query: 问题涉及文档内容、知识查询，需要 RAG 检索\n"
+                "- general_chat: 普通对话，不需要检索\n"
+                "- web_search_needed: 需要最新信息或知识库无法覆盖的内容\n"
+                "- greeting: 打招呼、问候"
+            ),
+        },
+        {"role": "user", "content": last_message},
+    ])
+
+    return {
+        "intent": response["intent"],
+        "needs_web_search": response["needs_web_search"],
+    }
+
+
+async def retrieve_documents(state: AgentState) -> dict:
+    """节点 2：RAG 检索 — 从 Qdrant 中检索相关文档片段"""
+    query = state["messages"][-1]["content"]
+    sources = []
+    retrieved_docs = []
+
+    # 执行混合检索
+    from app.rag.retriever import hybrid_search
+    results = await hybrid_search(query=query, top_k=3)
+
+    for r in results:
+        retrieved_docs.append(r["text"])
+        source_name = r.get("source", "unknown")
+        if source_name not in sources:
+            sources.append(source_name)
+
+    if not retrieved_docs:
+        retrieved_docs.append("未找到相关文档内容。")
+        sources.append("无匹配")
+
+    return {
+        "retrieved_docs": retrieved_docs,
+        "sources": sources,
+    }
+
+
+async def generate_response(state: AgentState) -> dict:
+    """节点 3：生成回答 — 结合检索结果和对话历史生成最终回答"""
+    last_message = state["messages"][-1]["content"]
+    retrieved_context = "\n\n".join(
+        f"[来源 {i+1}] {doc}"
+        for i, doc in enumerate(state.get("retrieved_docs", []))
+    )
+
+    system_prompt = f"""你是全栈文档问答系统的 AI 助手。请基于以下参考文档回答用户的问题。
+
+## 规则
+1. 优先使用参考文档来回答问题
+2. 如果参考文档不足以回答问题，诚实告知用户
+3. 引用来源时标注 [来源 N]
+4. 回答简洁、准确、专业
+
+## 参考文档
+{retrieved_context if retrieved_context.strip() else "无可用参考文档。"}
+
+## 对话历史（仅显示最近 3 轮）
+{_format_recent_history(state["messages"][-5:-1])}
+"""
+
+    response = await llm.ainvoke([
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": last_message},
+    ])
+
+    return {
+        "messages": [{"role": "assistant", "content": response.content}],
+    }
+
+
+async def web_search_node(state: AgentState) -> dict:
+    """节点 3b：联网搜索节点 — 当知识库无法覆盖时使用"""
+    query = state["messages"][-1]["content"]
+    from app.agent.tools import web_search
+    result = await web_search(query)
+    return {
+        "messages": [
+            {
+                "role": "tool",
+                "content": f"联网搜索结果:\n{result}",
+                "name": "web_search",
+            }
+        ],
+    }
+
+
+async def format_response(state: AgentState) -> dict:
+    """节点 4：格式化回答 — 添加来源引用"""
+    # 这个节点通常和 generate_response 合并，但为了演示 LangGraph 多步流程单独列出
+    # 实际可以在这里做后处理：格式化来源、追加建议问题等
+    last_message = state["messages"][-1]["content"]
+    sources = state.get("sources", [])
+
+    if sources and sources != ["无匹配"]:
+        source_text = "\n\n**参考来源**:\n" + "\n".join(f"- {s}" for s in sources)
+        last_message += source_text
+
+    return {
+        "messages": [{"role": "assistant", "content": last_message}],
+    }
+
+
+def _format_recent_history(messages: list) -> str:
+    """格式化最近的对话历史"""
+    formatted = []
+    for msg in messages:
+        if msg["role"] in ("user", "assistant"):
+            formatted.append(f"{'用户' if msg['role'] == 'user' else '助手'}: {msg['content'][:100]}")
+    return "\n".join(formatted[-4:]) if formatted else "无历史记录。"
+```
+
+### 7.4 图定义
+
+```python
+# app/agent/graph.py
+from langgraph.graph import StateGraph, END
+from langgraph.checkpoint.sqlite import SqliteSaver
+
+from app.agent.state import AgentState
+from app.agent.nodes import (
+    classify_intent,
+    retrieve_documents,
+    generate_response,
+    web_search_node,
+    format_response,
+)
+from app.monitoring.langsmith import get_langsmith_config
+
+
+def route_after_classify(state: AgentState) -> str:
+    """根据意图路由到不同节点"""
+    intent = state.get("intent", "general_chat")
+
+    if intent == "greeting":
+        return "generate_response"  # 问候不需要检索
+    elif intent == "web_search_needed" or state.get("needs_web_search"):
+        return "web_search"
+    else:
+        return "retrieve_documents"  # 默认走 RAG
+
+
+def route_after_retrieve(state: AgentState) -> str:
+    """检索后判断是否需要补充联网搜索"""
+    docs = state.get("retrieved_docs", [])
+    if not docs or docs == ["未找到相关文档内容。"]:
+        return "web_search"  # 本地检索为空，尝试联网
+    return "generate_response"
+
+
+def route_after_generate(state: AgentState) -> str:
+    """生成后是否进行格式化后处理"""
+    # 有来源引用时走格式化
+    sources = state.get("sources", [])
+    if sources:
+        return "format_response"
+    return END
+
+
+def route_after_web_search(state: AgentState) -> str:
+    """联网搜索后生成回答"""
+    return "generate_response"
+
+
+def build_qa_graph():
+    """构建完整的问答状态图"""
+    workflow = StateGraph(AgentState)
+
+    # 注册所有节点
+    workflow.add_node("classify_intent", classify_intent)
+    workflow.add_node("retrieve_documents", retrieve_documents)
+    workflow.add_node("generate_response", generate_response)
+    workflow.add_node("web_search", web_search_node)
+    workflow.add_node("format_response", format_response)
+
+    # 设置入口
+    workflow.set_entry_point("classify_intent")
+
+    # 分类 → 条件路由
+    workflow.add_conditional_edges(
+        "classify_intent",
+        route_after_classify,
+        {
+            "retrieve_documents": "retrieve_documents",
+            "web_search": "web_search",
+            "generate_response": "generate_response",
+        },
+    )
+
+    # 检索 → 条件路由（本地检索不到则联网）
+    workflow.add_conditional_edges(
+        "retrieve_documents",
+        route_after_retrieve,
+        {
+            "generate_response": "generate_response",
+            "web_search": "web_search",
+        },
+    )
+
+    # 联网 → 生成
+    workflow.add_edge("web_search", "generate_response")
+
+    # 生成 → 条件路由（有来源则格式化）
+    workflow.add_conditional_edges(
+        "generate_response",
+        route_after_generate,
+        {
+            "format_response": "format_response",
+            END: END,
+        },
+    )
+
+    # 格式化 → 结束
+    workflow.add_edge("format_response", END)
+
+    # 编译图（带 SQLite Checkpointer）
+    checkpointer = SqliteSaver.from_conn_string("langgraph_checkpoints.db")
+
+    graph = workflow.compile(
+        checkpointer=checkpointer,
+    )
+
+    return graph
+```
+
+### 7.5 图可视化
+
+```python
+# 可视化图结构（调试用）
+# 在 Python 脚本中运行此代码可生成 PNG 图
+
+def visualize_graph():
+    """生成 LangGraph 状态图的 PNG 可视化"""
+    graph = build_qa_graph()
+    png_data = graph.get_graph().draw_mermaid_png()
+    with open("qa_graph.png", "wb") as f:
+        f.write(png_data)
+    print("图已保存到 qa_graph.png")
+    print("节点流程:")
+    print("  用户输入 → classify_intent → (条件路由)")
+    print("    ├─ greeting → generate_response → format_response → END")
+    print("    ├─ web_search_needed → web_search → generate_response → format_response/END")
+    print("    └─ document_query → retrieve_documents → (检索结果?)")
+    print("         ├─ 有结果 → generate_response → format_response → END")
+    print("         └─ 无结果 → web_search → generate_response → END")
+```
+
+## Step 8：监控与 LangSmith
+
+```python
+# app/monitoring/langsmith.py
+import os
+from app.config import get_settings
+
+
+def get_langsmith_config() -> dict:
+    """
+    获取 LangSmith 配置。
+    如果启用 tracing，会返回配置字典；否则返回空配置。
+    """
+    settings = get_settings()
+
+    if not settings.langsmith_tracing:
+        return {}
+
+    config = {
+        "langsmith_api_key": settings.langsmith_api_key,
+        "langsmith_project": settings.langsmith_project,
+        "metadata": {
+            "app_version": "1.0.0",
+            "environment": "production" if not settings.debug else "development",
+        },
+    }
+
+    # 也可以通过环境变量配置（LangChain 会自动读取）
+    os.environ["LANGCHAIN_TRACING_V2"] = "true"
+    os.environ["LANGCHAIN_API_KEY"] = settings.langsmith_api_key
+    os.environ["LANGCHAIN_PROJECT"] = settings.langsmith_project
+
+    return config
+
+
+def get_token_usage_callback():
+    """
+    返回一个简单的 token 用量追踪回调。
+    在实际项目中集成 langchain.callbacks 使用。
+    """
+    from langchain.callbacks.base import BaseCallbackHandler
+
+    class TokenUsageHandler(BaseCallbackHandler):
+        """追踪每次 LLM 调用的 token 用量"""
+
+        def __init__(self):
+            self.total_prompt_tokens = 0
+            self.total_completion_tokens = 0
+            self.total_cost = 0.0
+            self.call_count = 0
+
+        def on_llm_end(self, response, **kwargs):
+            """LLM 调用结束时记录用量"""
+            try:
+                usage = response.llm_output or {}
+                token_usage = usage.get("token_usage", {})
+                prompt_tokens = token_usage.get("prompt_tokens", 0)
+                completion_tokens = token_usage.get("completion_tokens", 0)
+
+                self.total_prompt_tokens += prompt_tokens
+                self.total_completion_tokens += completion_tokens
+                self.call_count += 1
+
+                # GPT-4o 大致价格（每 1K token）
+                # 输入: $0.0025 / 1K tokens
+                # 输出: $0.01 / 1K tokens
+                cost = (prompt_tokens * 0.0025 + completion_tokens * 0.01) / 1000
+                self.total_cost += cost
+
+            except Exception:
+                pass
+
+        def get_summary(self) -> dict:
+            return {
+                "llm_calls": self.call_count,
+                "prompt_tokens": self.total_prompt_tokens,
+                "completion_tokens": self.total_completion_tokens,
+                "total_tokens": self.total_prompt_tokens + self.total_completion_tokens,
+                "estimated_cost_usd": round(self.total_cost, 6),
+            }
+
+    return TokenUsageHandler()
+```
+
+## Step 9：容器化部署
+
+### 9.1 Dockerfile（多阶段构建）
+
+```dockerfile
+# docker/Dockerfile
+# ============================================================
+# Stage 1: 构建阶段
+# ============================================================
+FROM python:3.12-slim AS builder
+
+WORKDIR /app
+
+# 安装系统依赖
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# 安装 uv（现代 Python 包管理器）
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+# 复制依赖声明
+COPY pyproject.toml ./
+
+# 安装项目依赖（使用 uv，比 pip 快 10-100 倍）
+RUN uv sync --no-dev --frozen
+
+# ============================================================
+# Stage 2: 运行阶段（小体积）
+# ============================================================
+FROM python:3.12-slim AS runner
+
+WORKDIR /app
+
+# 安装运行时系统依赖
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# 从构建阶段复制依赖
+COPY --from=builder /app/.venv /app/.venv
+ENV PATH="/app/.venv/bin:$PATH"
+
+# 复制应用代码
+COPY ./app ./app
+COPY ./docker/init.sql ./docker/init.sql
+
+# 创建上传目录
+RUN mkdir -p /app/uploads
+
+# 健康检查
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# 暴露端口
+EXPOSE 8000
+
+# 启动命令
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+### 9.2 Docker Compose
+
+```yaml
+# docker-compose.yml
+version: "3.9"
+
+services:
+  # ============================================================
+  # PostgreSQL — 对话历史持久化
+  # ============================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: qa-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: qa_agent
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================
+  # Redis — 会话锁与缓存
+  # ============================================================
+  redis:
+    image: redis:7-alpine
+    container_name: qa-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================
+  # Qdrant — 向量数据库
+  # ============================================================
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qa-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      QDRANT__SERVICE__GRPC_PORT: 6334
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ============================================================
+  # API — FastAPI 应用
+  # ============================================================
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: qa-api
+    ports:
+      - "8000:8000"
+    environment:
+      # 数据库
+      DATABASE_URL: "postgresql+asyncpg://postgres:postgres@postgres:5432/qa_agent"
+      # Redis
+      REDIS_URL: "redis://redis:6379/0"
+      # Qdrant
+      QDRANT_URL: "http://qdrant:6333"
+      QDRANT_COLLECTION: "documents"
+      # OpenAI
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_MODEL: "gpt-4o"
+      # LangSmith
+      LANGSMITH_TRACING: ${LANGSMITH_TRACING:-false}
+      LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
+      LANGSMITH_PROJECT: "fullstack-qa-agent"
+      # 应用
+      DEBUG: "false"
+    volumes:
+      - ./uploads:/app/uploads
+      - ./langgraph_checkpoints.db:/app/langgraph_checkpoints.db
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ============================================================
+  # Nginx — 反向代理
+  # ============================================================
+  nginx:
+    image: nginx:alpine
+    container_name: qa-nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./docker/nginx.conf:/etc/nginx/conf.d/default.conf
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  qdrant_data:
+```
+
+### 9.3 Nginx 反向代理
+
+```nginx
+# docker/nginx.conf
+upstream api_servers {
+    # 可水平扩展，只需添加更多 api 实例
+    server api:8000;
+    # server api2:8000;
+    # server api3:8000;
+}
+
+server {
+    listen 80;
+    server_name _;
+    client_max_body_size 50M;
+
+    # 请求日志
+    access_log /var/log/nginx/qa_access.log;
+    error_log /var/log/nginx/qa_error.log;
+
+    # API 路由
+    location /api/ {
+        proxy_pass http://api_servers;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # SSE 支持（不缓冲流式响应）
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 300s;
+    }
+
+    # WebSocket 支持
+    location /api/ws {
+        proxy_pass http://api_servers;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_read_timeout 86400s;
+    }
+
+    # 健康检查
+    location /health {
+        proxy_pass http://api_servers/health;
+    }
+
+    # 静态文件（前端页面等）
+    location / {
+        root /usr/share/nginx/html;
+        index index.html;
+        try_files $uri $uri/ /index.html;
+    }
+}
+```
+
+## Step 10：运行与测试
+
+### 10.1 首次启动
+
+```bash
+# 1. 复制环境变量模板
+cp .env.example .env
+# 编辑 .env 填入你的 API Key
+
+# 2. 启动所有服务
+docker compose -f docker-compose.yml up --build -d
+
+# 3. 查看启动日志
+docker compose logs -f
+# 确认所有服务状态为 healthy
+
+# 4. 验证健康检查
+curl http://localhost/health
+# 预期: {"status": "ok"}
+
+# 5. 查看服务状态
+docker compose ps
+# 应显示所有 5 个服务均为 Up 状态
+```
+
+### 10.2 上传文档并建立索引
+
+```bash
+# 1. 上传 PDF 文档（将一个示例 PDF 上传到知识库）
+curl -X POST http://localhost/api/upload \
+  -F "file=@./sample-document.pdf" \
+  -H "Content-Type: multipart/form-data"
+
+# 响应示例
+# {
+#   "document_id": 1,
+#   "filename": "sample-document.pdf",
+#   "chunk_count": 42,
+#   "status": "indexed"
+# }
+
+# 2. 查看已上传文档列表
+curl http://localhost/api/documents
+
+# 响应示例
+# [
+#   {
+#     "id": 1,
+#     "filename": "sample-document.pdf",
+#     "file_size": 245678,
+#     "chunk_count": 42,
+#     "status": "indexed",
+#     "created_at": "2025-01-15T10:30:00+00:00"
+#   }
+# ]
+```
+
+### 10.3 测试对话
+
+```bash
+# 1. REST 接口：提问
+curl -X POST http://localhost/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "文档中提到了哪些关键技术？"}'
+
+# 响应示例
+# {
+#   "reply": "根据文档，主要涉及以下关键技术：\n1. FastAPI 作为后端 API 框架\n2. LangGraph 用于 Agent 编排\n3. Qdrant 向量数据库用于 RAG 检索\n\n**参考来源**:\n- sample-document.pdf",
+#   "session_id": "550e8400-e29b-41d4-a716-446655440000",
+#   "sources": ["sample-document.pdf"],
+#   "token_usage": {
+#     "prompt_tokens": 245,
+#     "completion_tokens": 89,
+#     "total_tokens": 334
+#   }
+# }
+
+# 2. 继续对话（传入 session_id 保持上下文）
+curl -X POST http://localhost/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": "LangGraph 相比普通 Function Calling 有什么优势？",
+    "session_id": "550e8400-e29b-41d4-a716-446655440000"
+  }'
+
+# 3. SSE 流式接口
+curl -N -X POST http://localhost/api/chat/stream \
+  -H "Content-Type: application/json" \
+  -d '{"message": "总结文档的核心内容"}'
+
+# 流式输出:
+# event: token
+# data: {"token": "文"}
+# data: {"token": "档"}
+# data: {"token": "的"}
+# data: {"token": "核"}
+# ...
+# event: done
+# data: {"session_id": "..."}
+# event: metadata
+# data: {"sources": [...], "token_usage": {...}}
+```
+
+### 10.4 查看历史记录
+
+```bash
+# 1. 获取所有会话列表
+curl http://localhost/api/sessions
+
+# 响应示例
+# [
+#   {
+#     "session_id": "550e8400-e29b-41d4-a716-446655440000",
+#     "title": "文档中提到了哪些关键技术？",
+#     "message_count": 4,
+#     "created_at": "2025-01-15T10:35:00+00:00",
+#     "updated_at": "2025-01-15T10:36:00+00:00"
+#   }
+# ]
+
+# 2. 查看某个会话的完整历史
+curl http://localhost/api/history/550e8400-e29b-41d4-a716-446655440000
+
+# 3. 删除会话
+curl -X DELETE http://localhost/api/history/550e8400-e29b-41d4-a716-446655440000
+```
+
+### 10.5 WebSocket 测试
+
+使用 `websocat` 或 Python 脚本测试 WebSocket：
+
+```python
+# test_websocket.py
+import asyncio
+import json
+import websockets
+
+async def test_ws():
+    uri = "ws://localhost/api/ws"
+    async with websockets.connect(uri) as ws:
+        # 发送消息
+        await ws.send(json.dumps({"message": "文档的主要内容是什么？"}))
+        
+        # 接收流式响应
+        while True:
+            msg = await ws.recv()
+            data = json.loads(msg)
+            
+            if data["type"] == "token":
+                print(data["content"], end="", flush=True)
+            elif data["type"] == "tool_start":
+                print(f"\n[工具调用] {data['tool']}")
+            elif data["type"] == "done":
+                print(f"\n\n[完成] 会话 ID: {data['session_id']}")
+                print(f"[来源] {data['sources']}")
+                break
+            elif data["type"] == "error":
+                print(f"\n[错误] {data['error']}")
+                break
+
+asyncio.run(test_ws())
+```
+
+### 10.6 验证 LangSmith Traces
+
+1. 登录 [LangSmith](https://smith.langchain.com)
+2. 选择项目 `fullstack-qa-agent`
+3. 你应该能看到每次对话的完整 Trace，包括：
+
+```
+fullstack-qa-agent Trace
+├── classify_intent (3s)
+│   └── ChatOpenAI (gpt-4o-mini) — 50 tokens
+├── retrieve_documents (0.8s)
+│   └── Qdrant hybrid_search — top_k=3
+├── generate_response (5s)
+│   └── ChatOpenAI (gpt-4o) — 334 tokens
+└── format_response (0.01s)
+```
+
+LangSmith 提供了：
+- 每个节点的执行时间
+- LLM 调用的输入/输出
+- Token 用量统计
+- 错误追踪与回放
+- 性能对比（A/B 测试）
+
+## Step 11：常用运维命令
+
+```bash
+# ====== 启动/停止 ======
+# 启动所有服务
+docker compose -f docker-compose.yml up -d
+
+# 查看实时日志
+docker compose logs -f api
+
+# 停止所有服务
+docker compose down
+
+# 停止并删除数据卷（清空数据库和向量库）
+docker compose down -v
+
+# 重启某个服务
+docker compose restart api
+
+# ====== 扩容 ======
+# 水平扩展 API 实例
+docker compose up -d --scale api=3
+
+# ====== 备份 ======
+# 备份 PostgreSQL
+docker exec -t qa-postgres pg_dump -U postgres qa_agent > backup_$(date +%Y%m%d).sql
+
+# 备份 Qdrant（直接备份数据卷目录）
+# 默认位置: /var/lib/docker/volumes/fullstack-qa-agent_qdrant_data/
+
+# ====== 监控 ======
+# 查看资源占用
+docker stats
+
+# 检查 Qdrant 集合状态
+curl http://localhost:6333/collections/documents
+
+# 检查 Redis 连接
+docker exec qa-redis redis-cli ping
+# 应返回 PONG
+```
+
+## 扩展方向
+
+| 功能 | 实现方式 |
+|------|---------|
+| **多租户** | 在 Document payload 中添加 tenant_id 字段，检索时按 Filter 隔离 |
+| **多模态 RAG** | 集成 VLMs（如 GPT-4o Vision），支持图片/表格/图表问答 |
+| **Agent 记忆** | 使用 LangGraph PostgresSaver 替代 SqliteSaver，支持跨会话记忆 |
+| **定时索引** | 集成 Celery Beat 定时扫描文件目录，自动增量更新 Qdrant |
+| **用户反馈** | 添加 thumbs up/down API，反馈数据用于 LangSmith 标注和微调 |
+| **Guarded 输出** | 添加 Guardrails 节点，检测有害内容、幻觉和 PII 泄露 |
+| **GraphRAG** | 使用知识图谱增强 RAG，支持多跳推理和关系查询 |
+| **A/B 评测** | LangSmith 数据集 + 自动化评估 Pipeline，对比不同模型/参数 |
+
+## 小结
+
+- 本项目串联了本课程的所有核心阶段：**FastAPI (Stage 2) + LangGraph (Stage 4) + RAG (Stage 6) + 监控 (Stage 5) + Docker (Stage 8)**
+- **LangGraph StateGraph** 将对话流程建模为有向图，支持条件路由、多步推理和 Checkpointer 持久化
+- **RAG Pipeline** 使用 Qdrant 混合检索（密集向量 + 稀疏关键词），通过 RecursiveCharacterTextSplitter 保持文本语义完整性
+- **流式传输** 支持 REST、SSE 和 WebSocket 三种方式，适应不同前端场景
+- **LangSmith** 提供端到端可观测性，便于调试和优化 Agent 行为
+- **Docker Compose** 一键编排 5 个服务（API / PostgreSQL / Redis / Qdrant / Nginx），生产就绪
+- 全英文代码+中文注释的设计保持代码通用性，同时让中文开发者无障碍理解

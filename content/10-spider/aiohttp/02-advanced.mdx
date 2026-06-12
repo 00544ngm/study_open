@@ -1,0 +1,405 @@
+---
+title: Aiohttp 并发爬虫实战
+order: 2
+difficulty: core
+estimated_time: 30min
+tags: [Aiohttp, 异步, 并发, HTTP, 爬虫, asyncio]
+---
+
+## Asyncio + Aiohttp 高级模式
+
+```python
+import asyncio
+import aiohttp
+from typing import Any
+
+# === 使用 return_exceptions 避免单个失败导致全部取消 ===
+async def fetch_many(urls: list[str]) -> list[dict]:
+    async with aiohttp.ClientSession() as session:
+        tasks = [fetch_one(session, url) for url in urls]
+        # return_exceptions=True：失败的任务返回异常对象，不传播
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    data = []
+    for url, result in zip(urls, results):
+        if isinstance(result, Exception):
+            print(f"[失败] {url}: {result}")
+            data.append({"url": url, "error": str(result)})
+        else:
+            data.append(result)
+    return data
+
+async def fetch_one(session: aiohttp.ClientSession, url: str) -> dict:
+    async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+        return {"url": url, "status": resp.status, "data": await resp.text()}
+
+# === Python 3.11+ TaskGroup（更安全的并发控制） ===
+async def fetch_with_taskgroup(urls: list[str]) -> list[dict]:
+    results = []
+    async with aiohttp.ClientSession() as session:
+        async with asyncio.TaskGroup() as tg:
+            tasks = [tg.create_task(fetch_one(session, url)) for url in urls]
+
+        # TaskGroup 语义：所有任务完成后继续，任何一个失败则取消其他所有
+        for task in tasks:
+            if task.exception():
+                print(f"任务失败：{task.exception()}")
+            else:
+                results.append(task.result())
+    return results
+
+# === 控制并发度：分批处理 ===
+async def crawl_in_batches(urls: list[str], batch_size: int = 5):
+    """分批并发，每批完成后处理结果再发下一批"""
+    async with aiohttp.ClientSession() as session:
+        for i in range(0, len(urls), batch_size):
+            batch = urls[i:i + batch_size]
+            tasks = [fetch_one(session, url) for url in batch]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for url, result in zip(batch, results):
+                if not isinstance(result, Exception):
+                    yield result
+```
+
+## 信号量限流（Semaphore）增强
+
+基础的 Semaphore 控制并发数，进阶场景还需要考虑**域名级别限流**：
+
+```python
+import asyncio
+import aiohttp
+from collections import defaultdict
+
+class DomainRateLimiter:
+    """按域名限流：每个域名最多 max_per_domain 个并发"""
+
+    def __init__(self, default_limit: int = 5):
+        self.default_limit = default_limit
+        self._semaphores: dict[str, asyncio.Semaphore] = defaultdict(
+            lambda: asyncio.Semaphore(default_limit)
+        )
+
+    def get_semaphore(self, url: str) -> asyncio.Semaphore:
+        from urllib.parse import urlparse
+        domain = urlparse(url).hostname or "unknown"
+        return self._semaphores[domain]
+
+    async def fetch(self, session: aiohttp.ClientSession, url: str) -> str:
+        sem = self.get_semaphore(url)
+        async with sem:
+            async with session.get(url) as resp:
+                return await resp.text()
+
+
+class AdaptiveRateLimiter:
+    """自适应限流：根据响应状态码动态调整"""
+
+    def __init__(self, max_concurrent: int = 10):
+        self.semaphore = asyncio.Semaphore(max_concurrent)
+        self.max_concurrent = max_concurrent
+
+    async def fetch(self, session: aiohttp.ClientSession, url: str) -> aiohttp.ClientResponse:
+        async with self.semaphore:
+            async with session.get(url) as resp:
+                if resp.status == 429:  # Too Many Requests
+                    # 减小并发度
+                    self.max_concurrent = max(1, self.max_concurrent - 1)
+                    self.semaphore = asyncio.Semaphore(self.max_concurrent)
+                    print(f"[限流] 降低并发至 {self.max_concurrent}")
+                return resp
+
+
+# === 使用示例 ===
+async def main():
+    limiter = DomainRateLimiter(default_limit=3)
+    async with aiohttp.ClientSession() as session:
+        tasks = [
+            limiter.fetch(session, "https://httpbin.org/delay/1"),
+            limiter.fetch(session, "https://httpbin.org/delay/2"),
+            limiter.fetch(session, "https://example.com"),
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+```
+
+## 连接池配置
+
+`aiohttp.TCPConnector` 是连接池的核心，合理配置能大幅提升性能：
+
+```python
+import aiohttp
+import ssl
+
+# === 基础连接池配置 ===
+connector = aiohttp.TCPConnector(
+    limit=50,                  # 总并发连接数上限（默认 100）
+    limit_per_host=10,         # 每台主机的最大并发（默认 0 不限）
+    ttl_dns_cache=300,         # DNS 缓存有效期（秒，默认 10）
+    enable_cleanup_closed=True, # 自动清理关闭的连接
+    force_close=False,         # 是否强制关闭连接（默认复用）
+    ssl=False,                 # 跳过 SSL 验证（测试环境）
+)
+
+async with aiohttp.ClientSession(connector=connector) as session:
+    ...
+
+# === 自定义 DNS 解析器 ===
+from aiohttp.resolver import AsyncResolver
+
+resolver = AsyncResolver(
+    nameservers=["8.8.8.8", "1.1.1.1"],  # 使用特定 DNS
+)
+
+connector = aiohttp.TCPConnector(
+    resolver=resolver,
+    limit=100,
+)
+
+# === 连接池状态监控 ===
+connector = aiohttp.TCPConnector(limit=50)
+async with aiohttp.ClientSession(connector=connector) as session:
+    print(f"已打开连接: {len(connector._conns)}")        # 内部实现细节
+```
+
+## 超时与重试进阶
+
+```python
+import asyncio
+import aiohttp
+from asyncio import sleep
+import random
+
+# === ClientTimeout 精细控制 ===
+timeout = aiohttp.ClientTimeout(
+    total=30,             # 整个请求的总超时
+    connect=5,            # 连接建立超时
+    sock_connect=5,       # 每个 socket 连接超时
+    sock_read=10,         # 每个 socket 读取超时
+)
+
+# === 生产级重试装饰器 ===
+async def fetch_with_retry(
+    session: aiohttp.ClientSession,
+    url: str,
+    max_retries: int = 3,
+    base_delay: float = 1.0,
+) -> str:
+    """带指数退避和抖动的重试"""
+    last_error = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            async with session.get(url, timeout=timeout) as resp:
+                if resp.status == 429:
+                    retry_after = int(resp.headers.get("Retry-After", base_delay))
+                    print(f"[限流] 等待 {retry_after}s (尝试 {attempt}/{max_retries})")
+                    await sleep(retry_after)
+                    continue
+
+                resp.raise_for_status()
+                return await resp.text()
+
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            last_error = e
+            if attempt < max_retries:
+                # 指数退避 + 随机抖动
+                delay = base_delay * (2 ** (attempt - 1)) + random.uniform(0, 1)
+                print(f"[重试] {url} 失败 ({attempt}/{max_retries})，{delay:.1f}s 后重试")
+                await sleep(delay)
+            continue
+
+    raise last_error or Exception(f"重试耗尽：{url}")
+
+
+# === 选择性重试（只对 GET 重试） ===
+async def smart_retry(session, method, url, **kwargs):
+    if method.upper() != "GET":
+        # POST/PUT 等非幂等方法不重试
+        async with session.request(method, url, **kwargs) as resp:
+            return resp
+
+    return await fetch_with_retry(session, url)
+```
+
+## Cookie 管理与会话保持
+
+```python
+import aiohttp
+from aiohttp import CookieJar
+
+# === 1. 自定义 Cookie ===
+jar = CookieJar(unsafe=True)  # unsafe=True 允许非 HTTP cookie
+
+async with aiohttp.ClientSession(cookie_jar=jar) as session:
+    # 设置自定义 cookie
+    session.cookie_jar.update_cookies(
+        {"session": "abc123", "token": "eyJxxx"},
+        aiohttp.URL("https://example.com"),
+    )
+
+    resp = await session.get("https://httpbin.org/cookies")
+    data = await resp.json()
+    print(data)  # 包含自定义 cookies
+
+# === 2. 从响应提取 Cookie ===
+async with aiohttp.ClientSession() as session:
+    async with session.get("https://httpbin.org/cookies/set?name=value") as resp:
+        for cookie in session.cookie_jar:
+            print(f"{cookie.key}={cookie.value} (domain={cookie.domain})")
+
+# === 3. 跨请求会话保持 ===
+jar = aiohttp.CookieJar()
+session = aiohttp.ClientSession(cookie_jar=jar)
+
+# 第一次请求：登录（自动保存 cookie）
+await session.post("https://example.com/login", json={"user": "admin", "pass": "123"})
+
+# 后续请求：自动携带 cookie
+resp = await session.get("https://example.com/dashboard")
+```
+
+## 代理轮换
+
+```python
+import aiohttp
+import random
+import asyncio
+
+PROXY_POOL = [
+    "http://proxy1.example.com:8080",
+    "http://proxy2.example.com:8080",
+    "http://proxy3.example.com:8080",
+]
+
+# === 每次请求随机代理 ===
+async def fetch_with_proxy(session, url):
+    proxy = random.choice(PROXY_POOL)
+    try:
+        async with session.get(url, proxy=proxy, timeout=10) as resp:
+            return await resp.text()
+    except aiohttp.ClientError:
+        # 代理失败时换一个重试
+        proxy = random.choice(PROXY_POOL)
+        async with session.get(url, proxy=proxy, timeout=10) as resp:
+            return await resp.text()
+
+# === 带代理验证的轮换 ===
+class ProxyRotator:
+    def __init__(self, proxies: list[str]):
+        self.proxies = proxies
+        self._current = 0
+
+    async def fetch(self, session: aiohttp.ClientSession, url: str, **kwargs):
+        proxy = self.proxies[self._current % len(self.proxies)]
+        self._current += 1
+        try:
+            async with session.get(url, proxy=proxy, **kwargs) as resp:
+                return await resp.text(), proxy
+        except aiohttp.ClientError as e:
+            print(f"[代理失效] {proxy}: {e}")
+            # 尝试下一个
+            proxy = self.proxies[self._current % len(self.proxies)]
+            self._current += 1
+            async with session.get(url, proxy=proxy, **kwargs) as resp:
+                return await resp.text(), proxy
+
+# === 使用认证代理 ===
+async def fetch_with_auth_proxy(session, url):
+    proxy_auth = aiohttp.BasicAuth("username", "password")
+    async with session.get(
+        url,
+        proxy="http://proxy.example.com:8080",
+        proxy_auth=proxy_auth,
+    ) as resp:
+        return await resp.text()
+```
+
+## 大文件流式下载
+
+```python
+import aiohttp
+import asyncio
+import os
+from tqdm.asyncio import tqdm
+
+# === 基础流式下载 ===
+async def download_file(session, url: str, filepath: str):
+    async with session.get(url) as resp:
+        resp.raise_for_status()
+        with open(filepath, "wb") as f:
+            async for chunk in resp.content.iter_chunked(8192):
+                f.write(chunk)
+    print(f"下载完成：{filepath}")
+
+# === 带进度条的流式下载 ===
+async def download_with_progress(session, url: str, filepath: str):
+    async with session.get(url) as resp:
+        resp.raise_for_status()
+        total = int(resp.headers.get("content-length", 0))
+        downloaded = 0
+
+        with open(filepath, "wb") as f, tqdm(
+            desc=filepath.split("/")[-1],
+            total=total,
+            unit="B",
+            unit_scale=True,
+        ) as pbar:
+            async for chunk in resp.content.iter_chunked(8192):
+                f.write(chunk)
+                downloaded += len(chunk)
+                pbar.update(len(chunk))
+
+# === 并发下载多个文件 ===
+async def download_many(urls: list[tuple[str, str]], max_concurrent: int = 3):
+    """并发下载多个文件，控制磁盘 IO 并发"""
+    semaphore = asyncio.Semaphore(max_concurrent)
+
+    async def bounded_download(session, url, path):
+        async with semaphore:
+            return await download_with_progress(session, url, path)
+
+    async with aiohttp.ClientSession() as session:
+        tasks = [bounded_download(session, url, path) for url, path in urls]
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+# === 范围请求（断点续传 / 分片下载） ===
+async def download_range(
+    session: aiohttp.ClientSession,
+    url: str,
+    start: int,
+    end: int,
+    filepath: str,
+):
+    """下载文件的指定字节范围"""
+    headers = {"Range": f"bytes={start}-{end}"}
+    async with session.get(url, headers=headers) as resp:
+        if resp.status == 206:  # Partial Content
+            with open(filepath, "r+b") as f:
+                f.seek(start)
+                f.write(await resp.read())
+
+async def parallel_download(url: str, filepath: str, num_parts: int = 4):
+    """分片并行下载大文件"""
+    async with aiohttp.ClientSession() as session:
+        # 获取文件大小
+        async with session.head(url) as resp:
+            total = int(resp.headers["content-length"])
+
+        part_size = total // num_parts
+        tasks = []
+        for i in range(num_parts):
+            start = i * part_size
+            end = start + part_size - 1 if i < num_parts - 1 else total - 1
+            task = download_range(session, url, start, end, filepath)
+            tasks.append(task)
+
+        await asyncio.gather(*tasks)
+```
+
+| 特性 | 基础篇 | 进阶篇 |
+|------|--------|--------|
+| 并发控制 | asyncio.gather | TaskGroup + return_exceptions + 分批 |
+| 限流 | 简单 Semaphore | 按域名限流 + 自适应限流 |
+| 连接池 | 默认配置 | TCPConnector 调优 + DNS 缓存 |
+| 超时 | ClientTimeout | connect/sock_read 分离 + 指数退避 |
+| Cookie | 自动管理 | 自定义 jar + unsafe + 跨请求保持 |
+| 代理 | 单代理 | 代理轮换 + 自动失效切换 |
+| 下载 | await resp.read() | 流式 chunk + 进度 + 分片并行 |

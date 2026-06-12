@@ -1,0 +1,148 @@
+---
+title: API 逆向工程
+order: 1
+difficulty: advanced
+estimated_time: 30min
+tags: [API, 逆向, 爬虫, 抓包]
+---
+
+## 核心思路
+
+API 逆向的核心是**模拟浏览器发出的请求**，直接获取 JSON 数据：
+
+```
+浏览器加载页面 → 发 XHR/Fetch 请求 → 后端返回 JSON → 渲染
+                     ↓
+             爬虫直接模拟这个请求
+```
+
+## 步骤
+
+1. 打开 DevTools → Network 面板
+2. 刷新页面/触发操作
+3. 筛选 XHR/Fetch 请求
+4. 分析请求 URL、参数、Header
+5. 用代码模拟
+
+## 分析请求
+
+![](https://via.placeholder.com/800x400?text=F12+Network+Panel)
+
+在 Network 面板中关注：
+
+- **请求 URL** — API 端点
+- **Query Params** — `?page=1&limit=20`
+- **Request Headers** — `Authorization`, `Cookie`, `User-Agent`
+- **Request Payload** — POST 请求体
+- **Response** — JSON 数据结构
+
+## 模拟 API 调用
+
+```python
+import requests
+
+# 从 DevTools 复制过来的请求
+headers = {
+    "authorization": "Bearer eyJxxx...",
+    "user-agent": "Mozilla/5.0 ...",
+    "x-requested-with": "XMLHttpRequest",
+    "cookie": "session=abc123",
+}
+
+params = {
+    "page": 1,
+    "page_size": 20,
+    "sort": "newest",
+}
+
+resp = requests.get(
+    "https://api.example.com/v1/articles",
+    headers=headers,
+    params=params,
+)
+data = resp.json()
+
+for article in data["items"]:
+    print(article["title"], article["url"])
+```
+
+## 签名破解
+
+很多 API 有签名验证（sign/hash）：
+
+```python
+# 常见的签名算法
+import hashlib
+import time
+
+def generate_sign(params: dict, secret: str) -> str:
+    # 参数排序 + 拼接 + MD5
+    sorted_keys = sorted(params.keys())
+    raw = "&".join(f"{k}={params[k]}" for k in sorted_keys)
+    raw += f"&secret={secret}"
+    return hashlib.md5(raw.encode()).hexdigest()
+
+timestamp = int(time.time())
+params = {
+    "page": 1,
+    "timestamp": timestamp,
+    "sign": generate_sign({"page": 1, "timestamp": timestamp}, "my_secret"),
+}
+
+# 有些签名在 JS 中生成，需分析源码或使用 Js2Py
+```
+
+## Token 管理
+
+```python
+class TokenManager:
+    def __init__(self, auth_url: str, credentials: dict):
+        self.auth_url = auth_url
+        self.credentials = credentials
+        self.token = None
+
+    def get_token(self) -> str:
+        if self.token:
+            return self.token  # 复用
+        resp = requests.post(self.auth_url, json=self.credentials)
+        data = resp.json()
+        self.token = data["access_token"]
+        return self.token
+
+    def refresh(self):
+        self.token = None
+        return self.get_token()
+
+tm = TokenManager("https://api.example.com/auth", {
+    "username": "user",
+    "password": "pass",
+})
+headers = {"authorization": f"Bearer {tm.get_token()}"}
+```
+
+## WebSocket API
+
+```python
+import asyncio
+import websockets
+import json
+
+async def listen_realtime():
+    async with websockets.connect("wss://api.example.com/ws") as ws:
+        # 发送认证
+        await ws.send(json.dumps({"type": "auth", "token": "xxx"}))
+        # 订阅数据
+        await ws.send(json.dumps({"type": "subscribe", "channel": "trades"}))
+        # 接收实时数据
+        async for msg in ws:
+            data = json.loads(msg)
+            print(data)
+```
+
+| 方法 | 说明 |
+|------|------|
+| Network 面板 | 分析请求 |
+| 签名破解 | 生成签名参数 |
+| Token 管理 | 认证复用 |
+| WebSocket | 实时数据抓取 |
+| JS 逆向 | 破解前端加密逻辑 |

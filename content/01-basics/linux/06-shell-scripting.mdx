@@ -1,0 +1,110 @@
+---
+title: Shell 脚本
+order: 6
+difficulty: intermediate
+estimated_time: 20min
+tags: [Linux, 进阶]
+---
+
+## 入门
+
+```bash
+#!/bin/bash
+# 第一个脚本
+
+echo "Hello, World!"
+
+# 变量
+NAME="agent"
+echo $NAME
+
+# 用户输入
+read -p "Enter your name: " NAME
+echo "Hi, $NAME"
+```
+
+## 核心
+
+```bash
+#!/bin/bash
+
+# 条件判断
+if [ -f "config.yaml" ]; then
+  echo "配置文件存在"
+else
+  echo "配置文件缺失"
+  exit 1
+fi
+
+# 数值比较
+SCORE=85
+if [ $SCORE -ge 60 ]; then
+  echo "及格"
+else
+  echo "不及格"
+fi
+
+# 循环
+for FILE in *.py; do
+  echo "处理 $FILE"
+  chmod +x "$FILE"
+done
+
+# 遍历数字
+for i in {1..5}; do
+  echo "迭代 $i"
+done
+
+# while 循环
+COUNT=0
+while [ $COUNT -lt 3 ]; do
+  echo "第 $((COUNT+1)) 次"
+  ((COUNT++))
+done
+```
+
+## 进阶
+
+```bash
+#!/bin/bash
+set -e  # 出错立即退出
+
+# 函数
+log() {
+  local MSG=$1
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] $MSG"
+}
+
+# 启动 Agent 示例
+start_agent() {
+  log "启动 Agent..."
+  nohup python agent.py > agent.log 2>&1 &
+  PID=$!
+  echo $PID > agent.pid
+  log "Agent 已启动, PID: $PID"
+}
+
+# 命令行参数
+echo "参数数量: $#"
+echo "全部参数: $@"
+echo "第一个参数: $1"
+
+# 错误处理
+if ! python -c "import openai"; then
+  log "错误: openai 未安装"
+  pip install openai
+fi
+
+# 实用脚本：日志监控
+tail -f agent.log | while read line; do
+  if echo "$line" | grep -q "ERROR"; then
+    echo "发现错误: $line"
+    # 发送告警
+  fi
+done
+```
+
+## 练习
+
+1. 写一个脚本，遍历目录下所有 `.py` 文件并统计总行数
+2. 写一个启动脚本，实现 start/stop/restart 三个功能

@@ -1,0 +1,323 @@
+---
+title: BeautifulSoup 解析进阶
+order: 2
+difficulty: core
+estimated_time: 30min
+tags: [BeautifulSoup, HTML, 解析, CSS选择器, lxml, 爬虫]
+---
+
+## CSS 选择器进阶
+
+`select()` 和 `select_one()` 支持完整的 CSS 选择器语法，远比基础教程展示的丰富：
+
+```python
+from bs4 import BeautifulSoup
+
+html = """
+<div id="main">
+  <ul class="list">
+    <li data-price="100" class="item active">商品 A</li>
+    <li data-price="200" class="item">商品 B</li>
+    <li data-price="300" class="item sold-out">商品 C（售罄）</li>
+  </ul>
+  <div class="pagination">
+    <a href="?page=1" class="current">1</a>
+    <a href="?page=2">2</a>
+    <a href="?page=3">3</a>
+  </div>
+</div>
+"""
+
+soup = BeautifulSoup(html, "lxml")
+
+# 伪类选择器
+soup.select("li:nth-child(2)")           # 第二个 li
+soup.select("li:nth-of-type(1)")         # 第一个 li 元素
+soup.select("li:not(.sold-out)")         # 排除售罄
+soup.select("li:first-child")            # 第一个子元素
+soup.select("li:last-child")             # 最后一个子元素
+
+# 属性选择器
+soup.select("[data-price]")              # 有 data-price 属性的元素
+soup.select("[data-price^='1']")         # data-price 以 '1' 开头
+soup.select("[data-price$='00']")        # data-price 以 '00' 结尾
+soup.select("[data-price*='20']")        # data-price 包含 '20'
+
+# 组合选择器
+soup.select("div#main > ul > li")        # 直接子元素
+soup.select("div#main li")               # 后代元素
+soup.select("li.active ~ li")            # 后续兄弟
+soup.select("li.active + li")            # 紧邻后续兄弟
+
+# 一次选择多个
+soup.select("h1, h2, h3, .item, #main") # 逗号分隔多选择器
+```
+
+## 遍历解析树
+
+BeautifulSoup 将 HTML 解析为树结构，熟练掌握节点关系遍历是提取复杂数据的基石：
+
+```python
+html = """
+<div class="container">
+  <h2>商品列表</h2>
+  <ul id="product-list">
+    <li class="product" data-id="1">
+      <span class="name">iPhone</span>
+      <span class="price">¥6999</span>
+    </li>
+  </ul>
+</div>
+"""
+
+soup = BeautifulSoup(html, "lxml")
+li = soup.find("li")
+
+# === 向下遍历 ===
+li.children                    # 直接子节点（列表迭代器）
+list(li.children)              # [<span>iPhone</span>, <span>¥6999</span>]
+li.descendants                 # 所有子孙节点（递归）
+list(li.descendants)           # [<span>iPhone</span>, 'iPhone', <span>¥6999</span>, '¥6999']
+
+# === 向上遍历 ===
+li.parent                      # <ul id="product-list">...</ul>
+li.parents                     # 所有祖先节点生成器
+[p.name for p in li.parents]  # ['ul', 'div', 'body', 'html', '[document]']
+
+# === 左右遍历 ===
+li.next_sibling                # None（只有一个 li）
+li.previous_sibling            # None
+soup.find("h2").next_sibling   # '\n  '（换行符也是节点）
+soup.find("h2").next_sibling.next_sibling  # <ul id="product-list">...
+
+# === 通用遍历 ===
+li.next_element                # <span class="name">iPhone</span>
+li.next_element.next_element   # 'iPhone'
+li.previous_element            # '\n    '
+
+# === 实用模式：找相邻兄弟 ===
+product_li = soup.find("li", class_="product")
+# 所有后续兄弟 product 标签
+for sibling in product_li.find_next_siblings("li"):
+    print(sibling.get("data-id"))
+
+# 所有前面的 h 标签
+for h in product_li.find_previous("h2"):
+    print(h.text)
+```
+
+## find_all 带函数与 Lambda 过滤
+
+`find_all` 的参数可以是一个**函数**，接收 Tag 对象并返回布尔值，实现任意复杂的筛选逻辑：
+
+```python
+from bs4 import BeautifulSoup, Tag
+
+html = """
+<div>
+  <p class="summary">简介文字</p>
+  <p class="content" data-type="article">文章内容</p>
+  <p class="content" data-type="comment">评论内容</p>
+  <div class="sidebar">侧边栏</div>
+  <a href="https://example.com">外链</a>
+  <a href="/relative">内链</a>
+  <img src="pic.jpg" alt="图片" width="200" height="100">
+  <img src="icon.png" alt="图标" width="32" height="32">
+</div>
+"""
+
+soup = BeautifulSoup(html, "lxml")
+
+# 函数过滤器：有 class 且包含 content 的 p 标签
+def is_content_paragraph(tag: Tag) -> bool:
+    return tag.name == "p" and tag.get("class") and "content" in tag["class"]
+
+print(soup.find_all(is_content_paragraph))
+# [<p class="content" data-type="article">...], <p class="content" data-type="comment">...]
+
+# Lambda 表达式
+soup.find_all(lambda tag: tag.name == "a" and not tag["href"].startswith("http"))
+# [<a href="/relative">内链</a>]
+
+# 组合条件：图片宽度大于 100
+soup.find_all(lambda t: t.name == "img" and int(t.get("width", 0)) > 100)
+# [<img src="pic.jpg" ... width="200" ...>]
+
+# 多属性复杂校验
+def is_product_card(tag: Tag) -> bool:
+    if tag.name not in ("div", "li"):
+        return False
+    classes = tag.get("class", [])
+    return any("product" in c for c in classes) and tag.has_attr("data-id")
+
+# 函数过滤器 vs 内置参数——函数最灵活
+```
+
+## 处理格式错误的 HTML
+
+真实网页的 HTML 往往残缺不全，BeautifulSoup 的不同解析器应对能力不同：
+
+```python
+from bs4 import BeautifulSoup
+
+# 典型的格式错误 HTML
+bad_html = """
+<html>
+<body>
+  <div class="content">
+    <p>第一段
+    <p>第二段</p>
+    <br>
+    <span>未闭合的 span
+    <a href="link">链接</a>
+    <table>
+      <tr>
+        <td>单元格1
+        <td>单元格2</td>
+      </tr>
+    </table>
+  </div>
+</body>
+"""
+
+# 解析器对比
+soup_lxml = BeautifulSoup(bad_html, "lxml")      # 最快，最宽容
+soup_html5lib = BeautifulSoup(bad_html, "html5lib")  # 最标准，最慢
+soup_parser = BeautifulSoup(bad_html, "html.parser") # Python 内置，中等
+
+# lxml 自动补全缺失标签
+print(soup_lxml.prettify()[:200])
+
+# 处理常见的编码问题
+soup = BeautifulSoup(
+    requests.get(url).content,
+    "lxml",
+    from_encoding="gbk",          # 指定原始编码
+)
+
+# 处理被截断的 HTML
+def safe_parse(html_text: str) -> BeautifulSoup:
+    """安全解析可能截断的 HTML"""
+    # 补全常见未闭合标签
+    for tag in ["html", "body", "div", "table"]:
+        if html_text.count(f"<{tag}") > html_text.count(f"</{tag}>"):
+            html_text += f"</{tag}>"
+    return BeautifulSoup(html_text, "lxml")
+```
+
+## 高级表格提取
+
+处理带有 colspan/rowspan 的复杂表格：
+
+```python
+from bs4 import BeautifulSoup
+
+complex_table = """
+<table border="1">
+  <thead>
+    <tr>
+      <th>姓名</th>
+      <th colspan="2">联系方式</th>
+      <th rowspan="2">备注</th>
+    </tr>
+    <tr>
+      <th>部门</th>
+      <th>电话</th>
+      <th>邮箱</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>张三</td>
+      <td>技术部</td>
+      <td>138-xxxx</td>
+      <td>zhang@example.com</td>
+      <td>组长</td>
+    </tr>
+  </tbody>
+</table>
+"""
+
+soup = BeautifulSoup(complex_table, "lxml")
+
+# 提取表格为二维列表（处理 colspan/rowspan）
+def table_to_matrix(table) -> list[list[str]]:
+    """将 HTML 表格转为二维矩阵"""
+    rows = table.find_all("tr")
+    matrix = []
+    for row in rows:
+        cells = []
+        for cell in row.find_all(["th", "td"]):
+            text = cell.get_text(strip=True)
+            colspan = int(cell.get("colspan", 1))
+            rowspan = int(cell.get("rowspan", 1))
+            for _ in range(colspan):
+                cells.append(text)
+        matrix.append(cells)
+    return matrix
+
+data = table_to_matrix(soup.find("table"))
+for row in data:
+    print(" | ".join(row))
+
+# 配合 pandas 直接读取
+import pandas as pd
+dfs = pd.read_html(str(soup.find("table")))
+print(dfs[0])
+```
+
+## 性能优化技巧
+
+```python
+from bs4 import BeautifulSoup, SoupStrainer
+import requests
+import time
+
+# === 1. SoupStrainer：只解析需要的部分 ===
+# 场景：只需要所有链接，跳过其余 DOM
+only_links = SoupStrainer("a")
+soup = BeautifulSoup(large_html, "lxml", parse_only=only_links)
+# 内存占用大幅降低，解析速度提升数倍
+
+# 只解析特定 class
+only_content = SoupStrainer(class_="article-content")
+soup = BeautifulSoup(large_html, "lxml", parse_only=only_content)
+
+# === 2. 解析器性能对比 ===
+import timeit
+
+html_snippet = "<div>" * 1000 + "content" + "</div>" * 1000
+
+# lxml（C 扩展）最快
+t1 = timeit.timeit(lambda: BeautifulSoup(html_snippet, "lxml"), number=100)
+
+# html.parser（Python 内置）中等
+t2 = timeit.timeit(lambda: BeautifulSoup(html_snippet, "html.parser"), number=100)
+
+# html5lib（纯 Python，最符合标准）最慢
+# t3 = timeit.timeit(lambda: BeautifulSoup(html_snippet, "html5lib"), number=10)
+# lxml 通常比 html.parser 快 2-5 倍，比 html5lib 快 10-50 倍
+
+# === 3. CSS 选择器 vs find_all ===
+# find_all 按标签名最快
+# CSS 选择器需要解析表达式，略慢但更灵活
+# 经验法则：简单条件用 find_all，复杂条件用 select
+
+# === 4. 查找优化 ===
+# 优先按标签名过滤（最快）
+soup.find_all("a")                    # 快
+soup.find_all(href=True)              # 中等
+soup.find_all(class_="link")          # 最慢（class 是复合属性）
+
+# 组合查找更快
+soup.find_all("a", class_="link")     # 先按标签筛选，再按 class
+```
+
+| 特性 | 基础用法 | 进阶用法 |
+|------|---------|---------|
+| CSS 选择器 | 简单 `.class` `#id` | `:nth-child` `:not()` 属性选择器 |
+| 查找方式 | find/find_all | 函数过滤器 + Lambda |
+| 解析器 | lxml | SoupStrainer + 按需选择 |
+| 表格提取 | 手动遍历 tr/td | colspan/rowspan 处理 + pandas |
+| 性能 | 常规解析 | parse_only + 查找优化 |
+| 错误处理 | 假设 HTML 规范 | 乱码处理 + 标签补全 |

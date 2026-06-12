@@ -1,0 +1,210 @@
+---
+title: Selenium 反检测与并发
+order: 2
+difficulty: advanced
+estimated_time: 35min
+tags: [Selenium, 反检测, 并发, 高级]
+---
+
+## 反检测配置
+
+网站通过 `navigator.webdriver` 等特征检测 Selenium：
+
+```python
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+
+options = Options()
+
+# 1. 无头模式
+options.add_argument("--headless=new")
+
+# 2. 隐藏自动化特征
+options.add_argument("--disable-blink-features=AutomationControlled")
+options.add_experimental_option("excludeSwitches", ["enable-automation"])
+options.add_experimental_option("useAutomationExtension", False)
+
+# 3. 自定义窗口和 UA
+options.add_argument("--window-size=1920,1080")
+options.add_argument(
+    "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/120.0.0.0 Safari/537.36"
+)
+
+# 4. 禁用自动化相关功能
+prefs = {
+    "credentials_enable_service": False,
+    "profile.password_manager_enabled": False,
+}
+options.add_experimental_option("prefs", prefs)
+
+driver = webdriver.Chrome(options=options)
+
+# 5. 注入反检测 JS（关键）
+driver.execute_cdp_cmd(
+    "Page.addScriptToEvaluateOnNewDocument",
+    {
+        "source": """
+        Object.defineProperty(navigator, 'webdriver', {
+            get: () => undefined
+        });
+        Object.defineProperty(navigator, 'plugins', {
+            get: () => [1, 2, 3, 4, 5]
+        });
+        Object.defineProperty(navigator, 'languages', {
+            get: () => ['zh-CN', 'zh', 'en']
+        });
+        """
+    },
+)
+```
+
+## 代理配置
+
+```python
+# 单代理
+options.add_argument("--proxy-server=http://127.0.0.1:7890")
+
+# 代理认证（通过插件）
+import zipfile
+
+def create_proxy_extension(proxy_host: str, proxy_port: int,
+                           username: str, password: str) -> str:
+    """创建带认证的代理插件"""
+    manifest = {
+        "version": "1.0.0",
+        "manifest_version": 2,
+        "name": "Proxy Auth",
+        "permissions": ["proxy", "tabs", "webRequest", "webRequestBlocking"],
+        "background": {
+            "scripts": ["background.js"]
+        }
+    }
+
+    background_js = f"""
+    var config = {{
+        mode: "fixed_servers",
+        rules: {{
+            singleProxy: {{
+                scheme: "http",
+                host: "{proxy_host}",
+                port: {proxy_port}
+            }}
+        }}
+    }};
+    chrome.proxy.settings.set({{value: config, scope: "regular"}}, function(){{}});
+
+    chrome.webRequest.onAuthRequired.addListener(
+        function(details) {{
+            return {{authCredentials: {{username: "{username}", password: "{password}"}}}}
+        }},
+        {{urls: ["<all_urls>"]}},
+        ["blocking"]
+    );
+    """
+
+    plugin_path = "proxy_auth.zip"
+    with zipfile.ZipFile(plugin_path, "w") as zp:
+        zp.writestr("manifest.json", str(manifest))
+        zp.writestr("background.js", background_js)
+    return plugin_path
+
+# 使用
+options.add_extension(create_proxy_extension("proxy.example.com", 8080, "user", "pass"))
+```
+
+## 并发多浏览器
+
+```python
+from concurrent.futures import ThreadPoolExecutor
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+
+def scrape_page(url: str) -> dict:
+    """单页爬取任务"""
+    options = Options()
+    options.add_argument("--headless=new")
+
+    driver = webdriver.Chrome(options=options)
+    try:
+        driver.get(url)
+        title = driver.title
+        text = driver.find_element("tag name", "body").text[:200]
+        return {"url": url, "title": title, "text": text}
+    finally:
+        driver.quit()
+
+def batch_scrape(urls: list[str], max_workers: int = 5):
+    """并发爬取多页"""
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        results = pool.map(scrape_page, urls)
+    return list(results)
+
+urls = [f"https://example.com/page/{i}" for i in range(20)]
+results = batch_scrape(urls, max_workers=5)
+```
+
+## Selenium Grid 分布式
+
+```bash
+# 启动 Grid
+docker run -d -p 4442-4444:4442-4444 --name selenium-hub selenium/hub:4.15
+docker run -d --link selenium-hub selenium/node-chrome:4.15
+docker run -d --link selenium-hub selenium/node-firefox:4.15
+```
+
+```python
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+
+options = Options()
+options.add_argument("--headless=new")
+
+driver = webdriver.Remote(
+    command_executor="http://localhost:4444/wd/hub",
+    options=options,
+)
+```
+
+## 常见问题排查
+
+| 问题 | 原因 | 解决 |
+|------|------|------|
+| `ElementClickInterceptedException` | 元素被遮挡 | 先滚动到元素、等待动画结束 |
+| `StaleElementReferenceException` | DOM 已更新 | 重新查找元素 |
+| `TimeoutException` | 等待超时 | 检查选择器、扩大超时 |
+| `NoSuchElementException` | 元素不存在 | 检查 iframe、确认页面加载完成 |
+| `WebDriverException` | 驱动版本不匹配 | 用 webdriver-manager 更新 |
+| `cannot-find-chrome-binary` | Chrome 未安装 | 指定 binary_location |
+
+## iframe 处理
+
+```python
+# 切换到 iframe
+iframe = driver.find_element(By.TAG_NAME, "iframe")
+driver.switch_to.frame(iframe)
+# 操作 iframe 内元素
+text = driver.find_element(By.ID, "content").text
+
+# 切回主文档
+driver.switch_to.default_content()
+
+# 切回父 iframe
+driver.switch_to.parent_frame()
+```
+
+## 文件下载
+
+```python
+import os
+
+options = Options()
+prefs = {
+    "download.default_directory": os.path.abspath("./downloads"),
+    "download.prompt_for_download": False,
+    "safebrowsing.enabled": False,
+}
+options.add_experimental_option("prefs", prefs)
+driver = webdriver.Chrome(options=options)
+```

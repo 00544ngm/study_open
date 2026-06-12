@@ -1,0 +1,594 @@
+---
+title: 基于 LangGraph 的智能客服系统
+order: 2
+difficulty: core
+estimated_time: 40min
+tags: [LangGraph, 智能客服, 状态机, 对话管理, 人工兜底]
+---
+
+## 概述
+
+上一篇文章用 OpenAI Function Calling 实现了客服 Agent。本文改用 **LangGraph** 构建——以**状态图（StateGraph）** 为核心，将客服流程建模为节点和条件边，天然支持人工兜底、对话记忆、多步推理。
+
+```
+用户输入 → 意图分类 → 知识检索 → 工具执行 → 生成回复
+                              ↓ (兜底)
+                         人工客服
+```
+
+**LangGraph vs Function Calling**：
+
+| 维度 | Function Calling | LangGraph |
+|------|----------------|-----------|
+| 流程控制 | 线性 | 图（循环/条件分支） |
+| 状态管理 | 自行维护 | 内置 State + Checkpointer |
+| 人工介入 | 需额外开发 | 原生 Interrupt 支持 |
+| 多 Agent | 复杂 | 原生支持子图 |
+
+## Step 1：项目结构
+
+```
+langgraph-cs-agent/
+├── agent.py            # LangGraph 图定义
+├── nodes.py            # 各节点逻辑
+├── state.py            # 状态定义
+├── tools.py            # 工具（查询订单、退货）
+├── main.py             # FastAPI 入口
+└── requirements.txt
+```
+
+## Step 2：状态定义
+
+LangGraph 的核心是 **State**——所有节点共享的可序列化状态对象：
+
+```python
+# state.py
+from typing import List, Optional, Literal, Annotated
+from typing_extensions import TypedDict
+import operator
+
+# 对话消息类型
+class Message(TypedDict):
+    role: Literal["user", "assistant", "tool", "human"]
+    content: str
+    name: Optional[str] = None
+
+# Agent 状态（所有节点共享）
+class AgentState(TypedDict):
+    messages: Annotated[List[Message], operator.add]  # 消息历史
+    intent: Optional[str]                             # 当前意图
+    needs_human: bool                                 # 是否需要人工
+    retrieved_docs: List[str]                         # 检索到的知识
+    active_tool_calls: List[dict]                     # 待执行的工具
+    session_id: str                                   # 会话 ID
+```
+
+`Annotated` 中的 `operator.add` 告诉 LangGraph 该字段的 reducer 是追加而非覆盖。
+
+## Step 3：节点定义
+
+LangGraph 的每个节点是一个函数，接收完整 `State`，返回 `State` 的部分更新。
+
+### 3.1 意图分类节点
+
+```python
+# nodes.py
+from langchain_openai import ChatOpenAI
+from state import AgentState
+
+llm_fast = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+
+async def classify_intent(state: AgentState) -> dict:
+    """Step 1: 意图分类"""
+    last_message = state["messages"][-1]["content"]
+
+    response = await llm_fast.with_structured_output(
+        {
+            "type": "object",
+            "properties": {
+                "intent": {
+                    "type": "string",
+                    "enum": [
+                        "order_query", "return_request",
+                        "complaint", "greeting", "faq", "other",
+                    ],
+                },
+                "needs_human": {"type": "boolean"},
+                "reason": {"type": "string"},
+            },
+        }
+    ).ainvoke([
+        {"role": "system", "content": "分析用户意图。如果涉及退款投诉或超出范围，标记 needs_human=true。"},
+        {"role": "user", "content": last_message},
+    ])
+
+    return {
+        "intent": response["intent"],
+        "needs_human": response["needs_human"],
+    }
+```
+
+### 3.2 知识库检索节点
+
+```python
+async def retrieve_knowledge(state: AgentState) -> dict:
+    """Step 2: RAG 检索（使用向量数据库）"""
+    query = state["messages"][-1]["content"]
+
+    from langchain_community.vectorstores import Qdrant
+    from langchain_openai import OpenAIEmbeddings
+
+    vectorstore = Qdrant.from_existing_collection(
+        embedding=OpenAIEmbeddings(),
+        collection_name="knowledge_base",
+        url="http://localhost:6333",
+    )
+    docs = await vectorstore.asimilarity_search(query, k=3)
+
+    return {
+        "retrieved_docs": [doc.page_content for doc in docs],
+    }
+```
+
+### 3.3 工具执行节点
+
+```python
+from tools import TOOL_MAP
+
+async def execute_tools(state: AgentState) -> dict:
+    """Step 3: 调用 LLM 决定工具并执行"""
+    llm = ChatOpenAI(model="gpt-4o", temperature=0)
+
+    # 系统提示 + 上下文
+    system_msg = f"""你是电商客服助手。
+当前意图: {state['intent']}
+相关知识: {chr(10).join(f'- {d}' for d in state.get('retrieved_docs', []))}"""
+
+    # 绑定工具
+    llm_with_tools = llm.bind_tools(TOOL_MAP.values())
+
+    response = await llm_with_tools.ainvoke([
+        {"role": "system", "content": system_msg},
+        *state["messages"],
+    ])
+
+    # 执行工具并收集结果
+    tool_results = []
+    for tool_call in response.tool_calls:
+        tool_fn = TOOL_MAP[tool_call["name"]]
+        result = await tool_fn(**tool_call["args"])
+        tool_results.append({
+            "role": "tool",
+            "content": result,
+            "name": tool_call["name"],
+        })
+
+    # 如果有工具调用，再次调用 LLM 生成最终回复
+    if tool_results:
+        final_response = await llm.ainvoke([
+            {"role": "system", "content": system_msg},
+            *state["messages"],
+            response,  # assistant 的 tool_calls 消息
+            *tool_results,
+        ])
+        return {
+            "messages": [
+                response,
+                *tool_results,
+                {"role": "assistant", "content": final_response.content},
+            ],
+            "active_tool_calls": tool_calls,
+        }
+
+    return {
+        "messages": [{"role": "assistant", "content": response.content}],
+    }
+```
+
+### 3.4 人工兜底节点
+
+```python
+async def human_handoff(state: AgentState) -> dict:
+    """Step 4: 转接人工客服"""
+    return {
+        "messages": [{
+            "role": "assistant",
+            "content": "已为您转接人工客服，请稍候。问题编号：CS-" + state["session_id"],
+        }],
+    }
+```
+
+## Step 4：LangGraph 图定义
+
+```python
+# agent.py
+from langgraph.graph import StateGraph, StateNode, END
+from state import AgentState
+from nodes import (
+    classify_intent, retrieve_knowledge,
+    execute_tools, human_handoff,
+)
+
+def build_cs_graph() -> StateGraph:
+    """构建客服状态图"""
+    workflow = StateGraph(AgentState)
+
+    # 注册节点
+    workflow.add_node("classify", classify_intent)
+    workflow.add_node("retrieve", retrieve_knowledge)
+    workflow.add_node("execute", execute_tools)
+    workflow.add_node("handoff", human_handoff)
+
+    # 入口 → 分类
+    workflow.set_entry_point("classify")
+
+    # 分类 → 条件路由
+    workflow.add_conditional_edges(
+        "classify",
+        router,           # 路由函数
+        {
+            "faq": "retrieve",
+            "order_query": "execute",
+            "return_request": "execute",
+            "human": "handoff",
+            "end": END,
+        },
+    )
+
+    # 检索 → 执行
+    workflow.add_edge("retrieve", "execute")
+
+    # 执行 → 结束
+    workflow.add_edge("execute", END)
+
+    # 人工兜底 → 结束
+    workflow.add_edge("handoff", END)
+
+    return workflow.compile()
+
+
+def router(state: AgentState) -> str:
+    """条件路由：根据意图决定下一节点"""
+    intent = state.get("intent", "other")
+
+    if state.get("needs_human"):
+        return "human"
+
+    intent_map = {
+        "greeting": "end",        # 简单问候直接回复
+        "faq": "faq",             # 需要检索知识库
+        "order_query": "order_query",
+        "return_request": "return_request",
+        "complaint": "human",     # 投诉直接转人工
+        "other": "end",
+    }
+    return intent_map.get(intent, "end")
+```
+
+## Step 5：对话记忆（Checkpointer）
+
+LangGraph 内置 **Checkpointer** 机制，自动保存和恢复对话历史。支持内存、SQLite、Postgres 等后端。
+
+```python
+from langgraph.checkpoint.sqlite import SqliteSaver
+
+# SQLite 持久化（文件级，重启不丢失）
+checkpointer = SqliteSaver.from_conn_string("checkpoints.db")
+
+# 编译时传入
+graph = build_cs_graph()
+app = graph.compile(checkpointer=checkpointer)
+
+# 每轮对话通过 thread_id 关联
+config = {"configurable": {"thread_id": "session-001"}}
+```
+
+### 恢复历史对话
+
+```python
+# 读取历史状态
+saved_state = app.get_state(config)
+print(f"历史消息数: {len(saved_state.values.get('messages', []))}")
+
+# 继续对话
+response = await app.ainvoke(
+    {"messages": [{"role": "user", "content": "我的订单到了吗？"}]},
+    config,
+)
+
+# 查看完整历史
+for msg in response["messages"]:
+    print(f"[{msg['role']}]: {msg['content'][:50]}")
+```
+
+**不同后端对比**：
+
+| 后端 | 优势 | 适用场景 |
+|------|------|---------|
+| MemorySaver | 零配置，速度快 | 开发测试 |
+| SqliteSaver | 文件持久化，无需服务 | 单机部署 |
+| PostgresSaver | 分布式，高可用 | 生产环境多实例 |
+
+## Step 6：人工介入（Interrupt）
+
+LangGraph 支持在任意节点暂停执行，等待人工操作后恢复：
+
+```python
+# agent.py - 在图编译时设置中断点
+app = graph.compile(
+    checkpointer=checkpointer,
+    interrupt_before=["handoff"],  # 进入 handoff 前暂停
+)
+
+# main.py - 处理中断
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+
+class ChatRequest(BaseModel):
+    message: str
+    session_id: str
+
+class HumanResponse(BaseModel):
+    session_id: str
+    action: str            # "approve" | "deny" | "escalate"
+    note: str = ""
+
+@app.post("/api/chat")
+async def chat(req: ChatRequest):
+    config = {"configurable": {"thread_id": req.session_id}}
+
+    # 运行图
+    result = await app.ainvoke(
+        {"messages": [{"role": "user", "content": req.message}]},
+        config,
+    )
+
+    # 检查是否被中断（等待人工）
+    snapshot = app.get_state(config)
+    if snapshot.next:  # 有等待中的节点
+        return {
+            "status": "awaiting_human",
+            "message": "已转接人工客服，请等待回复...",
+            "session_id": req.session_id,
+        }
+
+    return {
+        "status": "ok",
+        "reply": result["messages"][-1]["content"],
+    }
+
+
+@app.post("/api/human-response")
+async def human_response(req: HumanResponse):
+    """人工客服处理中断"""
+    config = {"configurable": {"thread_id": req.session_id}}
+
+    # 用人工回复恢复执行
+    result = await app.ainvoke(
+        None,  # None = 不添加新消息，继续执行
+        config,
+    )
+
+    return {
+        "status": "resolved",
+        "reply": result["messages"][-1]["content"],
+    }
+```
+
+## Step 7：完整工具定义
+
+```python
+# tools.py
+import json
+from datetime import datetime
+
+# 工具 schema
+TOOL_DEFINITIONS = [
+    {
+        "name": "query_order",
+        "description": "查询订单状态",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "order_id": {"type": "string", "description": "订单号"},
+            },
+            "required": ["order_id"],
+        },
+    },
+    {
+        "name": "initiate_return",
+        "description": "发起退货申请",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "order_id": {"type": "string"},
+                "reason": {"type": "string"},
+            },
+            "required": ["order_id", "reason"],
+        },
+    },
+    {
+        "name": "track_shipping",
+        "description": "查询物流信息",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "order_id": {"type": "string"},
+            },
+            "required": ["order_id"],
+        },
+    },
+]
+
+# 工具实现
+async def query_order(order_id: str) -> str:
+    orders = {
+        "1001": {"status": "已发货", "eta": "2024-01-20", "carrier": "顺丰"},
+        "1002": {"status": "待发货", "eta": "2024-01-22", "carrier": "中通"},
+        "1003": {"status": "已完成", "eta": "2024-01-15", "carrier": "圆通"},
+    }
+    info = orders.get(order_id, {"status": "未找到", "eta": "", "carrier": ""})
+    return json.dumps(info, ensure_ascii=False)
+
+
+async def initiate_return(order_id: str, reason: str) -> str:
+    return json.dumps({
+        "return_id": f"R{order_id}",
+        "status": "已提交",
+        "next_step": "请将商品寄回，地址将在短信中发送",
+        "deadline": "请在 7 天内寄出",
+    }, ensure_ascii=False)
+
+
+async def track_shipping(order_id: str) -> str:
+    tracking = {
+        "1001": {"location": "上海分拨中心", "time": "2024-01-18 14:30"},
+        "1002": {"location": "已揽收", "time": "2024-01-19 09:00"},
+    }
+    info = tracking.get(order_id, {"location": "无物流信息", "time": ""})
+    return json.dumps(info, ensure_ascii=False)
+
+
+# LangChain 工具格式
+TOOL_MAP = {
+    "query_order": query_order,
+    "initiate_return": initiate_return,
+    "track_shipping": track_shipping,
+}
+```
+
+## Step 8：FastAPI 整合
+
+```python
+# main.py
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from agent import build_cs_graph
+from langgraph.checkpoint.sqlite import SqliteSaver
+from pydantic import BaseModel
+import uuid
+
+app = FastAPI(title="LangGraph 客服 Agent")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+# 全局图实例
+checkpointer = SqliteSaver.from_conn_string("checkpoints.db")
+cs_graph = build_cs_graph()
+app_graph = cs_graph.compile(checkpointer=checkpointer)
+
+
+class ChatRequest(BaseModel):
+    message: str
+    session_id: str | None = None
+
+
+class ChatResponse(BaseModel):
+    reply: str
+    session_id: str
+    status: str
+
+
+@app.post("/api/chat", response_model=ChatResponse)
+async def chat(req: ChatRequest):
+    session_id = req.session_id or str(uuid.uuid4())
+    config = {"configurable": {"thread_id": session_id}}
+
+    try:
+        result = await app_graph.ainvoke(
+            {"messages": [{"role": "user", "content": req.message}]},
+            config,
+        )
+        last_msg = result["messages"][-1]["content"]
+        return ChatResponse(
+            reply=last_msg,
+            session_id=session_id,
+            status="human" if any(
+                m["role"] == "human" for m in result["messages"]
+            ) else "ok",
+        )
+    except Exception as e:
+        return ChatResponse(
+            reply=f"系统繁忙，请稍后重试（错误: {str(e)}）",
+            session_id=session_id,
+            status="error",
+        )
+
+
+@app.get("/api/history/{session_id}")
+async def get_history(session_id: str):
+    """查看会话历史"""
+    config = {"configurable": {"thread_id": session_id}}
+    try:
+        state = app_graph.get_state(config)
+        return {
+            "session_id": session_id,
+            "messages": [
+                {
+                    "role": m["role"],
+                    "content": m["content"][:200],
+                }
+                for m in state.values.get("messages", [])
+            ],
+        }
+    except Exception:
+        return {"error": "会话不存在"}
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+```
+
+## Step 9：运行
+
+```bash
+# 安装依赖
+pip install langgraph langchain-openai langchain-community qdrant-client fastapi uvicorn
+
+# 启动
+python main.py
+
+# 测试
+curl -X POST http://localhost:8000/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "我想查询订单 1001 的状态", "session_id": "sess-001"}'
+
+# 恢复对话
+curl -X POST http://localhost:8000/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "能帮我退货吗？", "session_id": "sess-001"}'
+```
+
+## 图可视化
+
+LangGraph 可以生成图结构图，方便调试和理解流程：
+
+```python
+from IPython.display import Image, display
+
+# 生成 PNG 图
+png_data = app_graph.get_graph().draw_mermaid_png()
+with open("cs_graph.png", "wb") as f:
+    f.write(png_data)
+
+# 或在 Jupyter 中直接展示
+display(Image(png_data))
+```
+
+## 扩展方向
+
+| 功能 | 实现方式 |
+|------|---------|
+| **多部门路由** | 用 Supervisor Agent 判断转接部门（售后/技术/投诉） |
+| **情感检测** | 添加 sentiment 节点，负面情绪优先转人工 |
+| **知识库热更新** | Qdrant 在线 upsert，无需重启 |
+| **A/B 测试** | 用 LangSmith 追踪不同 prompt 的效果 |
+| **多语言支持** | 添加翻译节点，自动翻译用户输入 |
+
+## 小结
+
+- LangGraph 将客服流程建模为**有向图**，比线性 Function Calling 更灵活
+- **Checkpointer** 自动管理对话记忆，SQLite 即可满足单机需求
+- **Interrupt** 机制原生支持人工兜底，无需额外轮询逻辑
+- 路由函数可以根据意图、情绪、置信度做**细粒度**的流程控制
+- 适合需要复杂状态管理和多步推理的生产级客服系统

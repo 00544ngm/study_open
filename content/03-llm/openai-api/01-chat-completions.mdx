@@ -1,0 +1,115 @@
+---
+title: Chat Completions
+order: 1
+difficulty: beginner
+estimated_time: 20min
+tags: [OpenAI, LLM]
+---
+
+## 入门
+
+```python
+from openai import AsyncOpenAI
+
+client = AsyncOpenAI(api_key="sk-...")
+
+response = await client.chat.completions.create(
+    model="gpt-4o",
+    messages=[
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "什么是 AI Agent？"}
+    ]
+)
+print(response.choices[0].message.content)
+```
+
+## 核心
+
+### Agent 开发中的高级用法
+
+```python
+from openai import AsyncOpenAI
+
+client = AsyncOpenAI()
+
+# 流式响应（Agent 对话的关键）
+async def stream_chat(messages: list) -> str:
+    stream = await client.chat.completions.create(
+        model="gpt-4o",
+        messages=messages,
+        stream=True,
+    )
+    full_response = ""
+    async for chunk in stream:
+        if chunk.choices[0].delta.content:
+            token = chunk.choices[0].delta.content
+            full_response += token
+            yield token
+    return full_response
+
+# Tool Calling（让 LLM 调用工具）
+tools = [{
+    "type": "function",
+    "function": {
+        "name": "search_web",
+        "description": "搜索互联网获取最新信息",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "搜索关键词"}
+            },
+            "required": ["query"]
+        }
+    }
+}]
+
+response = await client.chat.completions.create(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "搜索今天的AI新闻"}],
+    tools=tools,
+    tool_choice="auto"
+)
+
+# 处理工具调用
+if response.choices[0].message.tool_calls:
+    for tool_call in response.choices[0].message.tool_calls:
+        if tool_call.function.name == "search_web":
+            args = json.loads(tool_call.function.arguments)
+            result = await search_web(args["query"])
+```
+
+## 进阶
+
+```python
+# 多轮对话 + Tool Calling 循环
+async def agent_loop(messages: list, tools: list, max_rounds: int = 5):
+    for _ in range(max_rounds):
+        response = await client.chat.completions.create(
+            model="gpt-4o",
+            messages=messages,
+            tools=tools,
+        )
+
+        msg = response.choices[0].message
+        messages.append(msg)
+
+        # 如果没有工具调用，返回结果
+        if not msg.tool_calls:
+            return msg.content
+
+        # 执行工具调用
+        for tool_call in msg.tool_calls:
+            result = await execute_tool(tool_call)
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tool_call.id,
+                "content": result
+            })
+
+    return messages[-1].content
+```
+
+## 练习
+
+1. 用 Tool Calling 实现一个天气查询 Agent
+2. 实现多轮对话中的记忆管理（保留最近 N 轮对话）

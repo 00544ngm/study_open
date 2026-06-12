@@ -1,0 +1,196 @@
+---
+title: Selenium 完全指南
+order: 1
+difficulty: beginner
+estimated_time: 30min
+tags: [Selenium, 浏览器, 自动化, 爬虫]
+---
+
+## 安装
+
+```bash
+pip install selenium webdriver-manager
+```
+
+`webdriver-manager` 自动管理浏览器驱动，不用手动下载 chromedriver。
+
+## 基础用法
+
+```python
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.chrome import ChromeDriverManager
+
+# 启动浏览器
+driver = webdriver.Chrome(
+    service=Service(ChromeDriverManager().install())
+)
+
+driver.get("https://example.com")
+print(driver.title)
+driver.quit()
+```
+
+## 八大定位方式
+
+```python
+# 优先级从高到低
+driver.find_element(By.ID, "username")           # ID 最快
+driver.find_element(By.CLASS_NAME, "item")        # Class
+driver.find_element(By.NAME, "email")             # Name 属性
+driver.find_element(By.TAG_NAME, "input")         # 标签名
+driver.find_element(By.LINK_TEXT, "登录")         # 精确链接文本
+driver.find_element(By.PARTIAL_LINK_TEXT, "登")   # 模糊链接文本
+driver.find_element(By.CSS_SELECTOR, "#form .btn")  # CSS 选择器
+driver.find_element(By.XPATH, "//div[@id='main']")  # XPath
+
+# 查找多个
+elements = driver.find_elements(By.CLASS_NAME, "item")
+```
+
+## 常用操作
+
+```python
+# 输入
+driver.find_element(By.ID, "search").send_keys("Python 爬虫")
+
+# 点击
+driver.find_element(By.ID, "submit").click()
+
+# 获取文本和属性
+text = driver.find_element(By.CLASS_NAME, "title").text
+href = driver.find_element(By.TAG_NAME, "a").get_attribute("href")
+html = driver.page_source               # 整个页面 HTML
+
+# 下拉框
+from selenium.webdriver.support.ui import Select
+select = Select(driver.find_element(By.ID, "city"))
+select.select_by_value("beijing")       # value 属性
+select.select_by_visible_text("北京")   # 显示文本
+select.select_by_index(1)               # 索引
+
+# 滚动
+driver.execute_script("window.scrollTo(0, document.body.scrollHeight)")
+driver.execute_script("arguments[0].scrollIntoView()", element)
+
+# 执行 JS
+driver.execute_script("return navigator.userAgent")
+```
+
+## 等待策略
+
+```python
+# 隐式等待（全局，设一次即可）
+driver.implicitly_wait(10)  # 最多等 10 秒
+
+# 显式等待（推荐，精准控制）
+wait = WebDriverWait(driver, 10)
+
+# 等待元素可见
+element = wait.until(
+    EC.visibility_of_element_located((By.ID, "result"))
+)
+
+# 等待元素可点击
+button = wait.until(
+    EC.element_to_be_clickable((By.ID, "submit"))
+)
+
+# 等待元素消失
+wait.until(
+    EC.invisibility_of_element_located((By.LOADING, "#loading"))
+)
+
+# 等待文本出现
+wait.until(
+    EC.text_to_be_present_in_element((By.ID, "status"), "完成")
+)
+
+# 等待指定 URL
+wait.until(EC.url_contains("/dashboard"))
+```
+
+## Cookie 管理
+
+```python
+# 获取所有 cookie
+cookies = driver.get_cookies()
+
+# 添加 cookie
+driver.add_cookie({"name": "session", "value": "abc123"})
+
+# 清除
+driver.delete_all_cookies()
+
+# 保持登录态：先手动登录，然后保存
+import json
+cookies = driver.get_cookies()
+with open("cookies.json", "w") as f:
+    json.dump(cookies, f)
+
+# 下次直接加载
+driver.get("https://example.com")
+with open("cookies.json") as f:
+    for cookie in json.load(f):
+        driver.add_cookie(cookie)
+driver.refresh()  # 刷新后登录态恢复
+```
+
+## 实战：爬取动态加载列表
+
+```python
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+
+def scrape_infinite_scroll(url: str, max_items: int = 100):
+    """爬取无限滚动页面"""
+    driver = webdriver.Chrome()
+    driver.get(url)
+    items = []
+    last_count = 0
+
+    while len(items) < max_items:
+        # 滚动到底部
+        driver.execute_script(
+            "window.scrollTo(0, document.body.scrollHeight)"
+        )
+
+        # 等待新元素加载
+        WebDriverWait(driver, 5).until(
+            lambda d: len(d.find_elements(By.CLASS_NAME, "item")) > last_count
+        )
+
+        # 获取当前所有元素
+        elements = driver.find_elements(By.CLASS_NAME, "item")
+        for elem in elements[last_count:]:
+            items.append({
+                "title": elem.find_element(By.CLASS_NAME, "title").text,
+                "url": elem.find_element(By.TAG_NAME, "a").get_attribute("href"),
+            })
+
+        last_count = len(elements)
+        if last_count == 0:
+            break  # 没有新内容
+
+    driver.quit()
+    return items[:max_items]
+```
+
+## Selenium 与 Playwright 对比
+
+| 特性 | Selenium | Playwright |
+|------|----------|------------|
+| 浏览器支持 | Chrome/Firefox/Safari | Chrome/Firefox/WebKit |
+| 速度 | 中等 | 更快 |
+| 等待机制 | 显式/隐式等待 | auto-wait 内置 |
+| 网络拦截 | 有限 | 强大（route） |
+| 多标签页 | 需手动切换 | 自动上下文管理 |
+| 文档生态 | 成熟 | 快速成长 |
+| 适用场景 | 存量项目、兼容性测试 | 新项目、爬虫 |
+
+> 建议：新项目优先 Playwright，维护老项目或需要兼容 Selenium Grid 时用 Selenium。两者都掌握最好。

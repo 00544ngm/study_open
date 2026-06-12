@@ -1,0 +1,317 @@
+---
+title: IP 代理池与指纹绕过
+order: 1
+difficulty: advanced
+estimated_time: 40min
+tags: [反爬, 代理, 指纹, 封禁]
+---
+
+## 反爬分层防御
+
+```
+第一层：IP 频率限制
+第二层：User-Agent / 请求头检测
+第三层：浏览器指纹检测
+第四层：行为分析（鼠标轨迹、时间间隔）
+第五层：验证码
+第六层：JS 挑战（Cloudflare 5 秒盾）
+```
+
+## IP 代理池
+
+```python
+import requests
+import random
+import time
+from typing import Optional
+
+class ProxyPool:
+    """IP 代理池"""
+
+    def __init__(self):
+        self.proxies: list[dict] = []
+        self.blacklist: set = set()
+        self.last_check = 0
+
+    def fetch_proxies(self):
+        """从代理源获取新代理（示例用免费源）"""
+        urls = [
+            "https://api.proxyscrape.com/v2/?request=getproxies&protocol=http",
+            "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/proxies.json",
+        ]
+        for url in urls:
+            try:
+                resp = requests.get(url, timeout=10)
+                # 解析代理列表...
+                pass
+            except:
+                continue
+
+    def get_proxy(self) -> Optional[dict]:
+        """获取一个可用代理"""
+        available = [p for p in self.proxies
+                     if p["ip"] not in self.blacklist]
+        if not available:
+            return None
+        return random.choice(available)
+
+    def report_failed(self, proxy: dict):
+        """标记代理失败"""
+        self.blacklist.add(proxy["ip"])
+
+    def report_success(self, proxy: dict):
+        """成功则加分，优先使用"""
+        proxy["score"] = proxy.get("score", 0) + 1
+```
+
+## 收费代理方案
+
+```python
+# 1. 动态代理：每次请求不同 IP
+proxies = {
+    "http": "http://user:pass@proxy.example.com:8080",
+    "https": "http://user:pass@proxy.example.com:8080",
+}
+# 代理商自动轮转 IP
+
+# 2. 隧道代理：固定网关，自动切换
+proxies = {
+    "http": "http://tunnel:token@proxy.example.com:8080",
+}
+
+# 3. 住宅代理：IP 来自真实家庭宽带，最难被封
+proxies = {
+    "http": "http://residential:token@proxy.example.com:8080",
+}
+```
+
+## 请求头伪装
+
+```python
+import random
+
+class HeadersManager:
+    """请求头管理，随机切换"""
+
+    BROWSERS = [
+        {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ...",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Connection": "keep-alive",
+            "Upgrade-Insecure-Requests": "1",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+            "Sec-Fetch-User": "?1",
+        },
+        # 更多浏览器配置...
+    ]
+
+    @classmethod
+    def random(cls) -> dict:
+        return random.choice(cls.BROWSERS).copy()
+
+    @classmethod
+    def mobile(cls) -> dict:
+        return {
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) ...",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "zh-CN,zh;q=0.9",
+            "X-Requested-With": "XMLHttpRequest",
+        }
+
+# 使用
+resp = requests.get(url, headers=HeadersManager.random())
+```
+
+## 浏览器指纹绕过
+
+```python
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+
+class FingerprintBypass:
+    """绕过浏览器指纹检测"""
+
+    @staticmethod
+    def get_stealth_options() -> Options:
+        options = Options()
+
+        # 基础配置
+        options.add_argument("--disable-blink-features=AutomationControlled")
+        options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        options.add_experimental_option("useAutomationExtension", False)
+
+        # 禁用 WebRTC 防 IP 泄露
+        options.add_argument("--disable-webrtc")
+        options.add_argument("--enforce-webrtc-ip-permission-check")
+
+        # 随机窗口大小
+        import random
+        width = random.randint(1000, 1920)
+        height = random.randint(700, 1080)
+        options.add_argument(f"--window-size={width},{height}")
+
+        return options
+
+    @staticmethod
+    def apply_stealth_js(driver):
+        """注入反指纹 JS"""
+        stealth_js = """
+        // 隐藏 webdriver
+        Object.defineProperty(navigator, 'webdriver', {
+            get: () => undefined
+        });
+
+        // 伪造 plugins
+        Object.defineProperty(navigator, 'plugins', {
+            get: () => [1, 2, 3, 4, 5]
+        });
+
+        // 伪造 languages
+        Object.defineProperty(navigator, 'languages', {
+            get: () => ['zh-CN', 'zh', 'en']
+        });
+
+        // 覆盖 chrome 对象
+        window.chrome = {
+            runtime: {},
+            loadTimes: function() {},
+            csi: function() {},
+            app: {}
+        };
+
+        // 覆盖权限查询
+        const originalQuery = window.navigator.permissions.query;
+        window.navigator.permissions.query = (parameters) => (
+            parameters.name === 'notifications' ?
+                Promise.resolve({state: Notification.permission}) :
+                originalQuery(parameters)
+        );
+        """
+        driver.execute_cdp_cmd(
+            "Page.addScriptToEvaluateOnNewDocument",
+            {"source": stealth_js}
+        )
+```
+
+## Cloudflare 5 秒盾
+
+```python
+# 方案 1：使用 cloudscraper
+import cloudscraper
+
+scraper = cloudscraper.create_scraper()
+resp = scraper.get("https://cf-protected-site.com")
+print(resp.text)
+
+# 方案 2：使用 undetected-chromedriver
+import undetected_chromedriver as uc
+
+driver = uc.Chrome()
+driver.get("https://cf-protected-site.com")
+print(driver.page_source)
+
+# 方案 3：Playwright + stealth 插件
+from playwright.sync_api import sync_playwright
+
+with sync_playwright() as p:
+    browser = p.chromium.launch(args=[
+        "--disable-blink-features=AutomationControlled"
+    ])
+    context = browser.new_context(
+        user_agent="Mozilla/5.0 ...",
+        viewport={"width": 1920, "height": 1080},
+    )
+    page = context.new_page()
+    page.goto("https://cf-protected-site.com")
+    # 等待 5 秒盾自动通过
+    page.wait_for_load_state("networkidle")
+```
+
+## 请求频率控制
+
+```python
+import time
+import random
+
+class RateController:
+    """智能频率控制，模拟人类行为"""
+
+    def __init__(self, min_delay: float = 1.0, max_delay: float = 3.0):
+        self.min_delay = min_delay
+        self.max_delay = max_delay
+        self.request_times = []  # 滑动窗口
+
+    def wait(self):
+        """智能等待"""
+        # 基础随机延迟
+        delay = random.uniform(self.min_delay, self.max_delay)
+
+        # 检测最近 60 秒请求数
+        now = time.time()
+        self.request_times = [t for t in self.request_times if now - t < 60]
+        recent_count = len(self.request_times)
+
+        # 如果请求过快，增加等待
+        if recent_count > 30:  # 每分钟超过 30 次
+            delay *= 2
+
+        # 加入随机抖动，避免规律性
+        delay += random.uniform(-0.3, 0.3)
+        delay = max(0.5, delay)
+
+        time.sleep(delay)
+        self.request_times.append(time.time())
+
+    def auto_adjust(self, success: bool):
+        """根据成功/失败自动调整"""
+        if not success:
+            self.min_delay *= 1.5
+            self.max_delay *= 1.5
+        else:
+            # 逐渐恢复
+            self.min_delay = max(1.0, self.min_delay * 0.95)
+            self.max_delay = max(3.0, self.max_delay * 0.95)
+```
+
+## 全副武装的请求
+
+```python
+class AntiCrawlSession:
+    """全副武装的爬虫会话"""
+
+    def __init__(self):
+        self.session = requests.Session()
+        self.rate = RateController()
+        self.proxies = ProxyPool()
+
+    def get(self, url: str, **kwargs):
+        headers = kwargs.pop("headers", HeadersManager.random())
+        proxy = self.proxies.get_proxy()
+
+        try:
+            self.rate.wait()
+            resp = self.session.get(
+                url,
+                headers=headers,
+                proxies=proxy,
+                timeout=15,
+                **kwargs,
+            )
+
+            if resp.status_code == 200:
+                self.rate.auto_adjust(success=True)
+                self.proxies.report_success(proxy)
+                return resp
+            else:
+                self.rate.auto_adjust(success=False)
+                self.proxies.report_failed(proxy)
+                # 重试...
+        except Exception as e:
+            self.rate.auto_adjust(success=False)
+            self.proxies.report_failed(proxy)
+            raise
+```

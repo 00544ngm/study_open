@@ -1,0 +1,76 @@
+---
+title: 文件操作
+order: 5
+difficulty: beginner
+estimated_time: 15min
+tags: [Python, 基础]
+---
+
+## 入门
+
+```python
+# 读取文件
+with open("config.json", "r") as f:
+    content = f.read()
+
+# 写入文件
+with open("output.txt", "w") as f:
+    f.write("Hello, Agent!")
+```
+
+## 核心
+
+### Agent 中的文件操作场景
+
+```python
+import json
+import os
+from pathlib import Path
+from typing import Any, Dict
+
+class FileMemory:
+    """基于文件的长期记忆存储"""
+    def __init__(self, storage_dir: str = "memory"):
+        self.storage_dir = Path(storage_dir)
+        self.storage_dir.mkdir(exist_ok=True)
+
+    def save(self, key: str, data: Dict[str, Any]):
+        path = self.storage_dir / f"{key}.json"
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+    def load(self, key: str) -> Dict[str, Any]:
+        path = self.storage_dir / f"{key}.json"
+        if not path.exists():
+            return {}
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    def list_keys(self) -> list[str]:
+        return [f.stem for f in self.storage_dir.glob("*.json")]
+
+# 使用
+memory = FileMemory()
+memory.save("conversation_001", {"messages": [], "context": {}})
+data = memory.load("conversation_001")
+```
+
+## 进阶
+
+### 使用 aiofiles 进行异步文件操作
+
+```python
+import aiofiles
+import asyncio
+import json
+
+async def save_conversation(session_id: str, messages: list):
+    path = f"conversations/{session_id}.json"
+    async with aiofiles.open(path, "w", encoding="utf-8") as f:
+        await f.write(json.dumps(messages, ensure_ascii=False))
+```
+
+## 练习
+
+1. 实现一个日志系统，将 Agent 的每次调用记录到文件（包含时间戳、输入、输出）
+2. 用 Pathlib 实现递归查找某目录下所有 .md 文件

@@ -1,0 +1,165 @@
+---
+title: Streaming 与人机协同
+order: 4
+difficulty: advanced
+estimated_time: 25min
+tags: [LangGraph, Streaming, Human-in-the-loop]
+---
+
+## 入门
+
+LangGraph 支持流式输出节点结果，以及通过中断机制实现人机协同。
+
+## 核心
+
+### 流式输出
+
+```python
+from langgraph.graph import StateGraph, START, END
+from typing import TypedDict, List
+
+class State(TypedDict):
+    messages: List[str]
+
+async def generate(state: State):
+    """模拟 LLM 逐步生成"""
+    result = ""
+    for word in ["AI", "Agent", "是", "自主", "系统", "。"]:
+        result += word
+        # astream_events 会捕获每个 yield
+        yield {"messages": [word]}
+
+builder = StateGraph(State)
+builder.add_node("generate", generate)
+builder.add_edge(START, "generate")
+builder.add_edge("generate", END)
+graph = builder.compile()
+
+# 流式调用
+async for event in graph.astream_events(
+    {"messages": []},
+    version="v2"
+):
+    kind = event["event"]
+    if kind == "on_chain_stream":
+        data = event["data"]
+        print(f"节点 {event['name']}: {data}")
+```
+
+### 人机协同 (Interrupt)
+
+```python
+from langgraph.graph import StateGraph, START, END, Command
+from typing import TypedDict, List, Optional
+
+class ApprovalState(TypedDict):
+    question: str
+    draft_answer: str
+    approved: Optional[bool]
+    final_answer: str
+
+def draft(state: ApprovalState):
+    """Agent 生成草稿"""
+    draft = f"关于「{state['question']}」的初步回答..."
+    return {"draft_answer": draft}
+
+def human_review(state: ApprovalState) -> Command:
+    """中断等待人工审批"""
+    print(f"草稿: {state['draft_answer']}")
+    # interrupt 暂停执行，返回控制权给调用方
+    from langgraph.types import interrupt
+    approval = interrupt({"draft": state["draft_answer"]})
+
+    if approval.get("approved"):
+        return Command(goto="finalize", update={"approved": True})
+    else:
+        return Command(goto="revise", update={"approved": False})
+
+def revise(state: ApprovalState):
+    return {"draft_answer": f"修改版: {state['draft_answer']}"}
+
+def finalize(state: ApprovalState):
+    return {"final_answer": state["draft_answer"]}
+
+builder = StateGraph(ApprovalState)
+builder.add_node("draft", draft)
+builder.add_node("human_review", human_review)
+builder.add_node("revise", revise)
+builder.add_node("finalize", finalize)
+
+builder.add_edge(START, "draft")
+builder.add_edge("draft", "human_review")
+builder.add_edge("revise", "human_review")
+builder.add_edge("finalize", END)
+
+graph = builder.compile(interrupt_before=["human_review"])
+```
+
+### 执行审批流程
+
+```python
+# 第一步：运行到 interrupt
+config = {"configurable": {"thread_id": "approval-1"}}
+result = graph.invoke(
+    {"question": "MCP 协议是什么？", "draft_answer": "", "approved": None, "final_answer": ""},
+    config
+)
+
+# 检查中断状态
+state = graph.get_state(config)
+print(f"中断在节点: {state.next}")
+# ('human_review',)
+
+# 第二步：人工审批通过
+result = graph.invoke(
+    Command(resume={"approved": True, "comment": "没问题"}),
+    config
+)
+print(result["final_answer"])
+```
+
+## 进阶
+
+### 动态中断
+
+```python
+def conditional_interrupt(state):
+    """根据条件决定是否需要中断"""
+    from langgraph.types import interrupt
+
+    # 只对高复杂度问题要求审批
+    if len(state["question"]) > 50:
+        approval = interrupt({"reason": "问题较长，需要人工确认"})
+        if not approval.get("approved"):
+            return "rejected"
+    return "continue"
+```
+
+### 流式 + 中断组合
+
+```python
+# 实时推送生成结果，需要审批时暂停
+async def streaming_with_approval():
+    config = {"configurable": {"thread_id": "stream-approval-1"}}
+
+    async for event in graph.astream_events(
+        {"question": "..."},
+        config,
+        version="v2"
+    ):
+        if event["event"] == "on_chain_stream":
+            print(f"生成: {event['data']}")
+        elif event["event"] == "on_chain_interrupt":
+            print(f"等待审批: {event['data']}")
+            # 在流式处理中注入审批结果
+            graph.invoke(
+                Command(resume={"approved": True}),
+                {"configurable": {"thread_id": "stream-approval-1"}}
+            )
+```
+
+## 练习
+
+1. 实现一个流式生成节点，用 astream_events 逐词输出
+2. 添加 interrupt 节点，在生成回答前要求人工确认
+3. 组合流式 + 中断：实时展示生成过程，复杂问题时暂停等待审批

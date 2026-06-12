@@ -1,0 +1,630 @@
+---
+title: LoRA 微调进阶：Unsloth、超参调优与生产部署
+order: 2
+difficulty: advanced
+estimated_time: 45min
+tags: [LoRA, Unsloth, QLoRA, 超参调优, 模型合并, vLLM, 推理优化]
+---
+
+## 概述
+
+本文延续 LoRA 基础，聚焦**生产级微调实践**：使用 Unsloth 实现 2x 训练加速、掌握数据集格式转换与混合策略、深入超参调优、多 LoRA 合并，以及 vLLM / TGI 推理优化与量化部署。适合已掌握基础 LoRA 流程的开发者。
+
+## Unsloth 加速训练
+
+[Unsloth](https://github.com/unslothai/unsloth) 通过手写 CUDA 内核优化，将 LoRA 训练速度提升 **2x**、内存降低 **50%**，且与 HuggingFace 生态完全兼容。
+
+```bash
+pip install unsloth
+```
+
+### 加载模型：对比标准方式
+
+标准加载需要手动配置 `BitsAndBytesConfig`、设置 `device_map`，而 Unsloth 一行即可：
+
+```python
+from unsloth import FastLanguageModel
+import torch
+
+model, tokenizer = FastLanguageModel.from_pretrained(
+    model_name="Qwen/Qwen2.5-7B-Instruct",
+    max_seq_length=4096,          # 关键参数：直接影响显存占用
+    dtype=None,                   # 自动检测最佳 dtype
+    load_in_4bit=True,            # QLoRA 量化
+)
+```
+
+Unsloth 自动应用了优化后的量化内核，比标准 `bitsandbytes` 节省约 30% 显存。
+
+### LoRA 配置
+
+```python
+model = FastLanguageModel.get_peft_model(
+    model,
+    r=16,
+    target_modules=[
+        "q_proj", "k_proj", "v_proj", "o_proj",
+        "gate_proj", "up_proj", "down_proj",  # 同时训练 MLP 层
+    ],
+    lora_alpha=16,
+    lora_dropout=0,               # Unsloth 建议 dropout=0 以加速
+    bias="none",
+    use_gradient_checkpointing="unsloth",  # Unsloth 优化版 checkpointing
+    random_state=42,
+    max_seq_length=4096,
+)
+```
+
+### 训练
+
+```python
+from unsloth import is_bfloat16_supported
+from transformers import TrainingArguments
+from trl import SFTTrainer
+
+trainer = SFTTrainer(
+    model=model,
+    tokenizer=tokenizer,
+    train_dataset=dataset,
+    dataset_text_field="text",
+    max_seq_length=4096,
+    args=TrainingArguments(
+        output_dir="./output",
+        per_device_train_batch_size=2,
+        gradient_accumulation_steps=4,
+        warmup_steps=5,
+        learning_rate=2e-4,
+        fp16=not is_bfloat16_supported(),
+        bf16=is_bfloat16_supported(),
+        logging_steps=1,
+        optim="adamw_8bit",
+        lr_scheduler_type="cosine",
+        num_train_epochs=3,
+        save_strategy="epoch",
+        report_to="none",
+    ),
+)
+trainer.train()
+```
+
+**Unsloth 独家特性**：训练完成后会自动记录显存节省和速度提升数据，方便对比。
+
+## 数据集高级准备
+
+### 聊天模板（Chat Template）
+
+现代基座模型（Qwen、Llama、Mistral）各有自己的聊天模板。必须使用 `apply_chat_template` 而非手动拼接，否则可能出现奇怪的生成行为。
+
+```python
+from transformers import AutoTokenizer
+
+tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-7B-Instruct")
+
+# 场景一：ShareGPT 多轮对话
+conversations = [
+    {
+        "conversations": [
+            {"from": "human", "value": "什么是 Python 装饰器？"},
+            {"from": "gpt", "value": "装饰器是一种高阶函数，可以在不修改原函数的情况下扩展功能。"},
+            {"from": "human", "value": "能给我一个例子吗？"},
+            {"from": "gpt", "value": "当然可以：\n\n```python\ndef log(func):\n    def wrapper(*args, **kwargs):\n        print(f'调用 {func.__name__}')\n        return func(*args, **kwargs)\n    return wrapper\n\n@log\ndef hello():\n    print('Hello')\n```"},
+        ]
+    },
+]
+
+def format_sharegpt(conversation, tokenizer):
+    """将 ShareGPT 格式转为模型聊天模板"""
+    roles = {"human": "user", "gpt": "assistant"}
+    messages = [
+        {"role": roles[msg["from"]], "content": msg["value"]}
+        for msg in conversation["conversations"]
+    ]
+    return tokenizer.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=False
+    )
+
+# 场景二：Alpaca 指令格式
+def format_alpaca(example, tokenizer):
+    """将 Alpaca 格式转为聊天模板"""
+    if example.get("input"):
+        user_content = f"### Instruction:\n{example['instruction']}\n\n### Input:\n{example['input']}\n\n### Response:\n{example['output']}"
+    else:
+        user_content = f"### Instruction:\n{example['instruction']}\n\n### Response:\n{example['output']}"
+
+    return tokenizer.apply_chat_template(
+        [{"role": "assistant", "content": user_content}],
+        tokenize=False, add_generation_prompt=False,
+    )
+```
+
+> **为什么不能直接拼 prompt？** 每个模型的分词器对特殊 token（`<|im_start|>`, `<|endoftext|>` 等）的处理不同。`apply_chat_template` 保证格式与预训练一致，避免灾难性遗忘。
+
+### 数据混合与质量控制
+
+```python
+from datasets import load_dataset, concatenate_datasets, Dataset
+import hashlib
+
+# 混合多个数据源
+datasets_list = [
+    load_dataset("json", data_files="data/custom_data.jsonl")["train"],
+    load_dataset("json", data_files="data/domain_knowledge.jsonl")["train"],
+    load_dataset("json", data_files="data/synthetic_data.jsonl")["train"],
+]
+combined = concatenate_datasets(datasets_list)
+print(f"合并后样本数: {len(combined)}")
+
+# 基于内容去重
+def dedup(example):
+    text = example.get("instruction", "") + example.get("output", "")
+    hash_val = hashlib.md5(text.encode()).hexdigest()
+    if hash_val in seen_hashes:
+        return False
+    seen_hashes.add(hash_val)
+    return True
+
+seen_hashes = set()
+combined = combined.filter(dedup)
+print(f"去重后样本数: {len(combined)}")
+
+# 过滤低质量样本（过短或过长）
+combined = combined.filter(
+    lambda x: 50 < len(x.get("output", "")) < 4096
+)
+```
+
+**数据混合黄金比例**：
+
+| 数据来源 | 占比 | 作用 |
+|---------|------|------|
+| 领域数据 | 60% | 核心能力 |
+| 通用指令 | 20% | 保持泛化 |
+| 合成数据 | 10% | 补覆盖 |
+| 原始语料 | 10% | 保持基座能力 |
+
+## 超参调优指南
+
+### LoRA 秩（r）与 alpha 的数学关系
+
+$$h = W_0 x + \Delta W x = W_0 x + \frac{\alpha}{r} BA x$$
+
+- **r（秩）**：控制表达能力和参数量。r 越大，LoRA 能学到的变换越复杂。
+- **alpha（缩放因子）**：控制 LoRA 对原始权重的影响强度。
+
+**选择策略**：
+
+| r | alpha | 参数增量（7B） | 效果 | 适用场景 |
+|---|-------|---------------|------|---------|
+| 8 | 16 | ~4M | 基准 | 通用指令微调 |
+| 16 | 16 | ~8M | 更强 | 领域适应 |
+| 32 | 32 | ~16M | 最佳 | 复杂任务、风格迁移 |
+| 64 | 64 | ~32M | 冗余 | 几乎无需（≈全量10%） |
+
+**经验法则**：`alpha = r` 或 `alpha = 2r`。alpha 远大于 r 会导致训练不稳定。
+
+### 学习率搜索
+
+```python
+from transformers import TrainingArguments
+
+# LoRA 学习率推荐区间：1e-4 ~ 5e-4
+# QLoRA 推荐区间：1e-4 ~ 3e-4（量化噪声需更小步长）
+# 全量微调：1e-5 ~ 5e-5
+
+results = {}
+for lr in [1e-4, 2e-4, 3e-4, 5e-4]:
+    trainer = SFTTrainer(
+        model=model,
+        args=TrainingArguments(
+            learning_rate=lr,
+            num_train_epochs=1,
+            logging_steps=10,
+            output_dir=f"./output/lr_{lr}",
+            report_to="none",
+        ),
+        train_dataset=dataset,
+        tokenizer=tokenizer,
+        dataset_text_field="text",
+    )
+    trainer.train()
+    # 记录最终 loss
+    final_loss = trainer.state.log_history[-1].get("loss", "N/A")
+    results[lr] = final_loss
+    print(f"LR={lr}: final loss={final_loss}")
+```
+
+### 学习率调度器对比
+
+```python
+# 常用调度器
+# "linear"            : 线性衰减，简单稳定（默认）
+# "cosine"            : 余弦衰减，后期更平滑，推荐
+# "constant"          : 恒定的，适合很短训练（< 100 steps）
+# "cosine_with_restarts" : 余弦重启，突破局部最优
+# "inverse_sqrt"      : 平方根倒数衰减，适合超长训练
+
+# 推荐配置
+training_args = TrainingArguments(
+    learning_rate=2e-4,
+    lr_scheduler_type="cosine",
+    warmup_ratio=0.03,        # 3% steps 预热，非固定步数
+    # 或
+    # warmup_steps=100,       # 固定步数预热
+)
+```
+
+### 完整训练配置模板
+
+```python
+training_args = TrainingArguments(
+    output_dir="./output",
+    # 核心
+    num_train_epochs=3,
+    learning_rate=2e-4,
+    lr_scheduler_type="cosine",
+    warmup_ratio=0.03,
+    # Batch
+    per_device_train_batch_size=2,
+    gradient_accumulation_steps=4,     # 等效 batch_size = 2*4 = 8
+    # 优化器
+    optim="adamw_8bit",                # 省显存
+    # 精度
+    fp16=not is_bfloat16_supported(),
+    bf16=is_bfloat16_supported(),
+    # 保存
+    save_strategy="epoch",
+    save_total_limit=3,
+    # 日志
+    logging_steps=10,
+    report_to="none",
+    # 加速
+    gradient_checkpointing=True,
+    dataloader_num_workers=2,
+)
+```
+
+## 消费级 GPU 优化大全
+
+一张 RTX 3060 12GB 也能微调 7B 模型。以下是所有可用的优化技术：
+
+```python
+from unsloth import FastLanguageModel, is_bfloat16_supported
+
+model, tokenizer = FastLanguageModel.from_pretrained(
+    model_name="Qwen/Qwen2.5-7B-Instruct",
+    max_seq_length=2048,                    # 1. 缩短序列长度
+    load_in_4bit=True,                      # 2. 4-bit 量化
+    dtype=None,
+)
+
+model = FastLanguageModel.get_peft_model(
+    model,
+    r=8,                                    # 3. 减小秩
+    target_modules=["q_proj", "v_proj"],    # 4. 减少目标模块
+    use_gradient_checkpointing="unsloth",   # 5. 梯度检查点
+)
+
+trainer = SFTTrainer(
+    model=model,
+    args=TrainingArguments(
+        per_device_train_batch_size=1,       # 6. 最小 batch
+        gradient_accumulation_steps=8,       # 7. 累积补偿
+        optim="adamw_8bit",                  # 8. 8-bit 优化器
+        fp16=not is_bfloat16_supported(),
+        bf16=is_bfloat16_supported(),
+        dataloader_num_workers=0,            # 9. Windows 兼容
+    ),
+    packing=True,                            # 10. 序列打包
+)
+```
+
+**显存预估公式**（以 7B 模型为例）：
+
+$$显存 \approx 模型权重 + 量化开销 + 激活值 + 优化器状态$$
+
+| 配置 | 显存估算 | 可运行 GPU |
+|------|---------|-----------|
+| 全量微调 fp16 | ~60GB | A100 |
+| LoRA fp16 | ~20GB | RTX 3090 |
+| QLoRA 4-bit (Unsloth) | ~8GB | RTX 3060 |
+| QLoRA + 全部优化 | ~6GB | RTX 2060 (通过 CPU offload) |
+
+### Flash Attention 2
+
+```bash
+pip install flash-attn --no-build-isolation
+```
+
+```python
+model, tokenizer = FastLanguageModel.from_pretrained(
+    ...,
+    attn_implementation="flash_attention_2",
+)
+```
+
+FA2 在长序列场景下可减少 **40%** 显存占用并提升 **2x** 训练速度。
+
+## 模型合并策略
+
+### 基础合并：LoRA → 完整权重
+
+```python
+from peft import PeftModel
+from transformers import AutoModelForCausalLM, AutoTokenizer
+import torch
+
+base_model = AutoModelForCausalLM.from_pretrained(
+    "Qwen/Qwen2.5-7B-Instruct",
+    torch_dtype=torch.bfloat16,
+    device_map="auto",
+)
+tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-7B-Instruct")
+
+# 加载 LoRA 并合并到基座
+model = PeftModel.from_pretrained(base_model, "./output/checkpoint-500")
+merged = model.merge_and_unload()
+merged.save_pretrained("./merged-model")
+tokenizer.save_pretrained("./merged-model")
+```
+
+### 多 LoRA 融合：Task Arithmetic
+
+当你有多个针对不同能力的 LoRA（如代码、数学、写作），可以融合为一个全能模型：
+
+```python
+import torch
+
+def task_arithmetic_merge(base_model, lora_paths, weights=None):
+    """
+    Task Arithmetic: 加权合并多个 LoRA 适配器
+    lora_paths: {"code": "./lora-code/", "math": "./lora-math/"}
+    weights: {"code": 0.7, "math": 0.3}  # 各任务权重
+    """
+    if weights is None:
+        n = len(lora_paths)
+        weights = {k: 1.0 / n for k in lora_paths}
+
+    base_sd = base_model.state_dict()
+    merged_sd = {}
+
+    for task_name, path in lora_paths.items():
+        lora_sd = torch.load(f"{path}/adapter_model.bin")
+        for key in base_sd:
+            # 提取 delta = LoRA 权重 - 基座权重
+            if key in lora_sd:
+                delta = lora_sd[key] - base_sd[key]
+                if key not in merged_sd:
+                    merged_sd[key] = base_sd[key].clone()
+                merged_sd[key] += weights[task_name] * delta
+
+    model = type(base_model)(base_model.config)
+    model.load_state_dict(merged_sd)
+    return model
+```
+
+### TIES-Merging（更稳定）
+
+TIES-Merging 通过三步提高多任务融合的稳定性：
+
+1. **TRIM**：移除幅度最小的 20% delta 值（噪声裁剪）
+2. **ELECT SIGN**：对每个参数，选择多数任务的符号方向
+3. **MERGE**：平均符号一致的 delta
+
+```python
+def ties_merge(base_model, lora_paths, trim_fraction=0.2):
+    base_sd = base_model.state_dict()
+    task_deltas = []
+
+    # 收集所有 delta
+    for path in lora_paths:
+        lora_sd = torch.load(f"{path}/adapter_model.bin")
+        deltas = {}
+        for key in base_sd:
+            if key in lora_sd:
+                deltas[key] = lora_sd[key] - base_sd[key]
+        task_deltas.append(deltas)
+
+    merged = {}
+    for key in base_sd:
+        # Step 1: Trim - 按幅度裁剪
+        all_deltas = torch.stack([d[key] for d in task_deltas])
+        mask = torch.abs(all_deltas) > torch.quantile(
+            torch.abs(all_deltas), trim_fraction, dim=0
+        )
+        trimmed = all_deltas * mask
+
+        # Step 2: Elect sign
+        sign_votes = torch.sign(trimmed).sum(dim=0)
+        winner_sign = torch.sign(sign_votes)
+
+        # Step 3: Merge
+        positive_mask = (winner_sign > 0).float()
+        negative_mask = (winner_sign < 0).float()
+        merged_delta = (trimmed * positive_mask).sum(dim=0) / (
+            (mask * positive_mask).sum(dim=0) + 1e-8
+        )
+        merged_delta -= (trimmed * negative_mask).sum(dim=0) / (
+            (mask * negative_mask).sum(dim=0) + 1e-8
+        )
+
+        merged[key] = base_sd[key] + merged_delta
+
+    return merged
+```
+
+### Model Soups
+
+将多次训练的 checkpoint 平均，通常能提升 0.5-1% 的准确率：
+
+```python
+def model_soup(checkpoint_dirs, output_path):
+    """多个 checkpoint 权重的简单平均"""
+    weights_list = [
+        torch.load(f"{cp}/adapter_model.bin")
+        for cp in checkpoint_dirs
+    ]
+    soup = {}
+    for key in weights_list[0]:
+        soup[key] = torch.stack([w[key] for w in weights_list]).mean(dim=0)
+
+    os.makedirs(output_path, exist_ok=True)
+    torch.save(soup, f"{output_path}/adapter_model.bin")
+    print(f"Model soup saved with {len(checkpoint_dirs)} checkpoints")
+```
+
+## 推理优化与部署
+
+### vLLM：生产级推理引擎
+
+[vLLM](https://github.com/vllm-project/vllm) 的 PagedAttention + Continuous Batching 使吞吐提升 **10-20x**。
+
+```bash
+pip install vllm
+```
+
+```python
+from vllm import LLM, SamplingParams
+
+# 加载合并后的完整模型
+llm = LLM(
+    model="./merged-model",
+    tensor_parallel_size=1,       # 多 GPU：设 >1
+    gpu_memory_utilization=0.9,   # 显存利用率
+    max_model_len=8192,           # 最大上下文
+    enforce_eager=False,          # 启用 CUDA graph
+)
+
+sampling_params = SamplingParams(
+    temperature=0.7,
+    top_p=0.9,
+    max_tokens=1024,
+)
+
+outputs = llm.generate([
+    "什么是 Agent？",
+    "解释 Transformer 的 Self-Attention 机制",
+], sampling_params)
+
+for output in outputs:
+    print(f"Prompt: {output.prompt[:50]}...")
+    print(f"Output: {output.outputs[0].text}\n")
+```
+
+### 多 LoRA 动态切换
+
+vLLM 支持在运行时动态加载/卸载 LoRA 适配器，无需重启：
+
+```python
+llm = LLM(
+    model="Qwen/Qwen2.5-7B-Instruct",
+    enable_lora=True,
+    max_lora_rank=32,
+    max_num_seqs=16,
+)
+
+# 动态加载适配器
+llm.load_lora(
+    lora_path="./lora-code/",
+    lora_name="code-adapter",
+)
+llm.load_lora(
+    lora_path="./lora-medical/",
+    lora_name="medical-adapter",
+)
+
+# 每个请求指定不同适配器
+outputs_code = llm.generate(
+    ["用 Python 实现快速排序"],
+    SamplingParams(temperature=0.1, max_tokens=512, lora_name="code-adapter"),
+)
+outputs_med = llm.generate(
+    ["糖尿病的早期症状有哪些？"],
+    SamplingParams(temperature=0.3, max_tokens=512, lora_name="medical-adapter"),
+)
+```
+
+### AWQ 量化推理
+
+```bash
+pip install autoawq
+```
+
+```python
+from awq import AutoAWQForCausalLM
+from transformers import AutoTokenizer
+
+# 量化
+model = AutoAWQForCausalLM.from_pretrained("./merged-model")
+tokenizer = AutoTokenizer.from_pretrained("./merged-model")
+
+model.quantize(
+    tokenizer,
+    quant_config={
+        "zero_point": True,
+        "q_group_size": 128,
+        "w_bit": 4,
+        "version": "GEMM",
+    },
+)
+model.save_quantized("./model-awq")
+tokenizer.save_pretrained("./model-awq")
+
+# 推理
+quantized = AutoAWQForCausalLM.from_pretrained("./model-awq")
+inputs = tokenizer("你好", return_tensors="pt").to("cuda")
+outputs = quantized.generate(**inputs, max_new_tokens=100)
+tokenizer.decode(outputs[0])
+```
+
+AWQ 相比 4-bit 的 GPTQ 在相同压缩率下，推理速度更快且精度损失更小。
+
+### TGI 部署
+
+```bash
+# Text Generation Inference（HuggingFace 官方方案）
+docker run --gpus all -p 8080:80 \
+  -v ./merged-model:/model \
+  ghcr.io/huggingface/text-generation-inference:latest \
+  --model-id /model \
+  --max-total-tokens 8192 \
+  --quantize awq
+
+# OpenAI 兼容 API
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "tgi",
+    "messages": [{"role": "user", "content": "什么是微调？"}],
+    "max_tokens": 512
+  }'
+```
+
+## 性能参考
+
+| 配置 | GPU | 训练速度 | 峰值显存 | 推理吞吐 |
+|------|-----|---------|---------|---------|
+| LoRA r=16 | RTX 4090 24GB | ~500 tok/s | ~16GB | ~120 tok/s |
+| QLoRA r=16 | RTX 4090 24GB | ~350 tok/s | ~10GB | ~120 tok/s |
+| QLoRA + Unsloth | RTX 4090 24GB | ~800 tok/s | ~9GB | ~120 tok/s |
+| QLoRA + Unsloth | RTX 3060 12GB | ~250 tok/s | ~7GB | ~60 tok/s |
+| QLoRA + 全优化 | RTX 2060 6GB | ~100 tok/s | ~5.5GB | ~30 tok/s |
+| AWQ 4-bit + vLLM | RTX 4090 | — | — | ~800 tok/s |
+
+## 常见问题排查
+
+| 问题 | 原因 | 解决 |
+|------|------|------|
+| CUDA OOM | 显存不足 | 降低 max_seq_length / batch_size，开启 checkpointing |
+| loss 不下降 | 学习率过大或过小 | 在 1e-4 ~ 3e-4 范围内搜索 |
+| 生成乱码 | chat template 不匹配 | 使用 `apply_chat_template` |
+| 模型不遵循指令 | 数据质量差或混合比例不当 | 检查数据格式、增加通用指令数据 |
+| 合并后质量下降 | merge 精度损失 | 使用 `merge_and_unload()` 而非手动合并 |
+
+## 小结
+
+- **训练**：Unsloth 是当前最佳的 LoRA 训练加速库，搭配 QLoRA 可在消费级 GPU 上微调 7B 模型
+- **数据**：质量 > 数量，混合策略参考 60% 领域 + 20% 通用 + 10% 合成 + 10% 原始
+- **超参**：r=16, alpha=16, lr=2e-4, cosine + warmup 是通用起点
+- **优化**：4-bit + 梯度检查点 + packing + Flash Attention 2 组合使用
+- **部署**：vLLM（多 LoRA 切换）或 TGI（docker 一键部署）做生产推理
+- **量化**：AWQ 在压缩率和精度间取得最佳平衡

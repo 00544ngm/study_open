@@ -1,0 +1,157 @@
+---
+title: 流式响应与高级用法
+order: 3
+difficulty: advanced
+estimated_time: 30min
+tags: [PydanticAI, Agent, Streaming, Python]
+---
+
+## 流式响应
+
+PydanticAI 原生支持流式输出，适合实时展示场景：
+
+```python
+from pydantic_ai import Agent
+
+agent = Agent("openai:gpt-4o")
+
+async def main():
+    async with agent.run_stream("用 500 字解释量子计算") as result:
+        async for chunk in result.stream():
+            print(chunk, end="", flush=True)
+```
+
+## 结构化流式输出
+
+即使是结构化输出也可以流式获取部分结果：
+
+```python
+from pydantic import BaseModel
+from pydantic_ai import Agent
+
+class Essay(BaseModel):
+    title: str
+    sections: list[str]
+    conclusion: str
+
+agent = Agent("openai:gpt-4o", result_type=Essay)
+
+async def main():
+    async with agent.run_stream("写一篇关于 AI 安全的短文") as result:
+        async for partial in result.stream():
+            if partial.sections:
+                print(f"已生成 {len(partial.sections)} 个段落...")
+```
+
+## 多 Agent 协作
+
+PydanticAI 支持多个 Agent 组合工作：
+
+```python
+from pydantic_ai import Agent
+from pydantic import BaseModel
+
+class ResearchResult(BaseModel):
+    findings: list[str]
+    sources: list[str]
+
+class Summary(BaseModel):
+    overview: str
+    key_points: list[str]
+    recommendation: str
+
+# 研究员 Agent
+researcher = Agent(
+    "openai:gpt-4o",
+    result_type=ResearchResult,
+    system_prompt="你是一个研究员，返回结构化的研究发现。",
+)
+
+# 分析师 Agent
+analyst = Agent(
+    "openai:gpt-4o",
+    result_type=Summary,
+    system_prompt="基于研究发现生成摘要和建议。",
+)
+
+async def main():
+    # 第一步：研究
+    research = await researcher.run("研究 RAG 技术的最新进展")
+    findings = research.data
+
+    # 第二步：分析
+    analysis = await analyst.run(
+        f"基于以下研究发现生成摘要：{findings.findings}"
+    )
+    print(analysis.data.overview)
+    print(analysis.data.recommendation)
+```
+
+## Agent 作为工具
+
+将一个 Agent 注册为另一个 Agent 的工具，实现嵌套调用：
+
+```python
+from pydantic_ai import Agent, RunContext
+
+translator = Agent(
+    "openai:gpt-4o",
+    system_prompt="将用户输入翻译成英文。",
+)
+
+main_agent = Agent("openai:gpt-4o")
+
+@main_agent.tool
+def translate_text(ctx: RunContext[str], text: str) -> str:
+    """将中文翻译成英文"""
+    result = translator.run_sync(text)
+    return result.data
+
+result = main_agent.run_sync("帮我翻译并解释这句话：机器学习很强大")
+print(result.data)
+```
+
+## 结果验证与重试
+
+```python
+from pydantic import BaseModel, Field
+from pydantic_ai import Agent
+
+class ValidatedOutput(BaseModel):
+    code: str = Field(pattern=r"^[A-Z]{3}-\d{4}$")
+    value: float = Field(ge=0, le=100)
+
+agent = Agent(
+    "openai:gpt-4o",
+    result_type=ValidatedOutput,
+    result_retries=3,  # 验证失败自动重试
+)
+
+result = agent.run_sync("生成一个代码和数值")
+print(result.data)
+```
+
+如果 LLM 返回的结果验证失败（比如 `value` 超出 0-100 范围），PydanticAI 自动重试，直到得到合法结果。
+
+## 日志与监控
+
+PydanticAI 集成 Logfire 进行监控：
+
+```python
+import logfire
+from pydantic_ai import Agent
+
+logfire.configure()
+agent = Agent("openai:gpt-4o")
+
+result = agent.run_sync("你好")
+```
+
+所有 LLM 调用、工具执行、延迟都会自动记录。
+
+| 概念 | 说明 |
+|------|------|
+| run_stream | 流式运行 |
+| stream() | 逐块获取输出 |
+| result_retries | 结构化输出验证重试次数 |
+| Logfire | 内置监控与日志 |

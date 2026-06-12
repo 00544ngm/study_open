@@ -1,0 +1,203 @@
+---
+title: Dify 工作流与高级集成
+order: 2
+difficulty: intermediate
+estimated_time: 30min
+tags: [Dify, 工作流, API, Agent, 自动化]
+---
+
+## 工作流编排
+
+Dify 工作流是可视化的 LLM 调用链：
+
+```
+开始 → LLM 节点 → 代码节点 → 条件分支 → 结束
+```
+
+节点类型：
+
+| 节点 | 用途 |
+|------|------|
+| LLM | 调用大模型 |
+| 知识检索 | 查询知识库 |
+| 代码 | 运行 Python/JS 代码 |
+| 条件分支 | if/else 逻辑 |
+| 变量聚合 | 合并多路输出 |
+| HTTP 请求 | 调用外部 API |
+| 工具 | 使用预置工具 |
+| 迭代 | 循环处理列表 |
+
+## 构建 RAG 工作流
+
+```
+开始 → 知识检索 → LLM(基于检索结果回答) → 结束
+```
+
+配置：
+
+1. **开始节点**: 用户输入 `{{query}}`
+2. **知识检索**: 关联知识库，查询变量 `{{query}}`
+3. **LLM**: 系统提示词 + 检索结果 `{{result}}` 作为上下文
+4. **结束**: 返回 LLM 输出
+
+## 代码节点
+
+```python
+# Dify 内置 Python 代码节点
+def main(arg1: str, arg2: list) -> dict:
+    """
+    arg1: 用户输入
+    arg2: 知识检索结果列表
+    """
+    processed = [item["title"] for item in arg2 if item["score"] > 0.7]
+    return {
+        "summary": f"处理了 {len(processed)} 条结果",
+        "items": processed,
+    }
+```
+
+## 自定义工具
+
+通过 OpenAPI/Swagger 或自定义 API 添加工具：
+
+```yaml
+# openapi.yaml
+openapi: 3.0.0
+info:
+  title: 天气查询
+  version: 1.0.0
+paths:
+  /weather:
+    get:
+      parameters:
+        - name: city
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 天气信息
+```
+
+Dify 自动解析为 Agent 可用的工具。
+
+## API 集成
+
+```python
+import requests
+import json
+
+DIFY_URL = "http://localhost:3000/v1"
+API_KEY = "app-xxxxx"
+
+def run_workflow(inputs: dict, user: str = "default"):
+    """运行 Dify 工作流"""
+    resp = requests.post(
+        f"{DIFY_URL}/workflows/run",
+        json={
+            "inputs": inputs,
+            "response_mode": "blocking",
+            "user": user,
+        },
+        headers={"Authorization": f"Bearer {API_KEY}"},
+    )
+    return resp.json()
+
+def stream_chat(query: str, conversation_id: str = ""):
+    """流式聊天"""
+    resp = requests.post(
+        f"{DIFY_URL}/chat-messages",
+        json={
+            "query": query,
+            "response_mode": "streaming",
+            "conversation_id": conversation_id,
+            "user": "user-123",
+        },
+        headers={"Authorization": f"Bearer {API_KEY}"},
+        stream=True,
+    )
+    for line in resp.iter_lines():
+        if line:
+            data = json.loads(line.decode()[6:])  # skip "data: "
+            if data["event"] == "message":
+                yield data["answer"]
+            elif data["event"] == "message_end":
+                yield f"\n[完成: token={data.get('metadata',{}).get('usage',{})}]"
+```
+
+## 通过 MCP 集成 Dify
+
+```python
+# 通过 MCP 让外部 Agent 调用 Dify 工作流
+@mcp.tool()
+def run_dify_workflow(workflow_name: str, inputs: dict) -> str:
+    """在 Dify 上运行指定工作流"""
+    # workflow_name 映射到 Dify 应用
+    apps = {
+        "customer_service": "app-cs-xxx",
+        "content_review": "app-review-xxx",
+    }
+    api_key = apps.get(workflow_name)
+    if not api_key:
+        return f"未知工作流: {workflow_name}"
+
+    resp = requests.post(
+        f"{DIFY_URL}/workflows/run",
+        json={"inputs": inputs, "response_mode": "blocking", "user": "agent"},
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+    return resp.json()["data"]["outputs"]
+```
+
+## 批量处理
+
+```python
+import asyncio
+import aiohttp
+
+async def batch_process(items: list[str]):
+    """批量处理文本"""
+    async with aiohttp.ClientSession() as session:
+        tasks = []
+        for item in items:
+            tasks.append(
+                session.post(
+                    f"{DIFY_URL}/workflows/run",
+                    json={
+                        "inputs": {"text": item},
+                        "response_mode": "blocking",
+                        "user": "batch",
+                    },
+                    headers={"Authorization": f"Bearer {API_KEY}"},
+                )
+            )
+        results = await asyncio.gather(*tasks)
+        return [await r.json() for r in results]
+```
+
+## Dify 在团队中的定位
+
+```
+开发效率:
+  非技术人员 → Dify 搭建原型
+  技术人员 → Dify 快速验证 → 代码重写
+
+协作模式:
+  • 运营: Dify 配置知识库、调试 Prompt
+  • 后端: Dify API 集成到现有系统
+  • 产品: Dify 快速验证产品 idea
+
+生产建议:
+  • 复杂业务逻辑用代码节点
+  • 敏感信息用变量/密钥管理
+  • 大量请求用独立部署 + 负载均衡
+```
+
+| 场景 | Dify 优势 |
+|------|----------|
+| 快速原型 | 可视化搭建，无须编码 |
+| 非技术团队 | 运营可自行维护知识库 |
+| RAG 应用 | 内置完整知识库 pipeline |
+| 多模型切换 | 统一管理所有模型供应商 |
+| 监控分析 | 内置日志和 Token 追踪 |

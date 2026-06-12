@@ -1,0 +1,643 @@
+---
+title: MCP 协议深入
+order: 2
+difficulty: advanced
+estimated_time: 35min
+tags: [MCP, 协议, 传输层, 消息格式, 认证, 错误处理]
+---
+
+## 入门
+
+MCP（Model Context Protocol）基于 JSON-RPC 2.0 规范，定义了 AI 模型与外部工具通信的标准化协议。本文深入协议底层——传输层、消息生命周期、认证机制和高级特性。
+
+## 核心
+
+### 1. 传输层：stdio vs SSE
+
+MCP 支持三种传输方式：
+
+```text
+┌─────────────────────────────────────────────────┐
+│                    MCP Protocol                   │
+├─────────────────────────────────────────────────┤
+│  Transport Layer                                 │
+│  ┌──────────┐  ┌──────────┐  ┌──────────────┐  │
+│  │  stdio   │  │   SSE    │  │  Streaming   │  │
+│  │ (本地)   │  │ (HTTP)   │  │ (WebSocket)  │  │
+│  └──────────┘  └──────────┘  └──────────────┘  │
+└─────────────────────────────────────────────────┘
+```
+
+**stdio 传输**——子进程通信：
+
+```
+┌─────────────┐    stdin/stdout     ┌─────────────┐
+│   Host     │ ◄═══════════════►   │  MCP Server │
+│ (Claude    │                     │  (子进程)    │
+│  Desktop)  │                     │              │
+└─────────────┘                     └─────────────┘
+```
+
+```python
+# stdio 传输：MCP Server 作为子进程运行
+# 客户端通过 stdin/stdout 交换 JSON-RPC 消息
+
+# 启动 server 时：
+# claude_desktop --mcp-server python mcp_server.py
+# Host 启动子进程，通过 stdio 管道通信
+
+# 服务端代码示例 - FastMCP 默认使用 stdio
+from mcp.server.fastmcp import FastMCP
+
+mcp = FastMCP("local-tools")
+
+@mcp.tool()
+def read_file(path: str) -> str:
+    """读取本地文件"""
+    with open(path, "r") as f:
+        return f.read()
+
+if __name__ == "__main__":
+    mcp.run()  # 默认传输 = stdio
+```
+
+**SSE 传输**——远程通信：
+
+```
+┌─────────────┐  SSE (Server-Sent Events)  ┌─────────────┐
+│   Host     │ ◄────────────────────────── │  MCP Server │
+│ (浏览器)   │  POST /message              │  (远程)     │
+│            │ ──────────────────────────► │              │
+└─────────────┘                             └─────────────┘
+```
+
+```python
+# SSE 传输：通过 HTTP 远程通信
+import asyncio
+from mcp.server.fastmcp import FastMCP
+
+mcp = FastMCP("remote-tools")
+
+@mcp.tool()
+def search_web(query: str) -> str:
+    """搜索网络"""
+    return f"Searching for: {query}"
+
+# 通过 SSE 暴露服务
+if __name__ == "__main__":
+    # FastMCP 自动检测并切换
+    mcp.run(transport="sse")
+    # 或使用低级 API
+    # from mcp.server.sse import SseServerTransport
+    # ...
+```
+
+| 特性 | stdio | SSE |
+|---|---|---|
+| 延迟 | 极低（进程内管道） | 中等（HTTP 网络开销） |
+| 安全性 | 本地运行，天然隔离 | 需要认证和 HTTPS |
+| 部署 | 随 Host 启动 | 独立部署 |
+| 适用场景 | 本地工具、文件系统 | 远程 API、Web 服务 |
+| 连接管理 | 进程生命周期 | HTTP 长连接 |
+
+### 2. 消息格式（JSON-RPC 2.0）
+
+MCP 所有通信使用 JSON-RPC 2.0 格式。包含三种消息类型：
+
+```text
+请求 (Request)      → Host → Server
+通知 (Notification) → Host → Server（无响应）
+响应 (Response)     → Server → Host
+```
+
+**请求格式：**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req-001",
+  "method": "tools/call",
+  "params": {
+    "name": "search_notes",
+    "arguments": {
+      "query": "MCP protocol"
+    }
+  }
+}
+```
+
+**响应格式：**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req-001",
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "搜索完成，找到 3 条结果..."
+      }
+    ],
+    "isError": false
+  }
+}
+```
+
+**错误响应：**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req-001",
+  "error": {
+    "code": -32603,
+    "message": "Internal error",
+    "data": {
+      "details": "数据库连接超时"
+    }
+  }
+}
+```
+
+**通知格式（无响应）：**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "notifications/initialized",
+  "params": {
+    "capabilities": {
+      "tools": {},
+      "resources": {}
+    }
+  }
+}
+```
+
+### 3. 请求生命周期
+
+一个完整的 MCP 请求生命周期：
+
+```
+Host                          Server
+  │                              │
+  │──▶ initialize (capabilities) │
+  │◀── initialized + version     │  ← 版本协商
+  │                              │
+  │──▶ notifications/initialized │
+  │                              │
+  │──▶ tools/list                │
+  │◀── [tool definitions]        │  ← 工具发现
+  │                              │
+  │──▶ tools/call                │
+  │    name="search"             │
+  │    arguments={query="..."}   │
+  │                              │
+  │    [Server 执行工具逻辑]      │
+  │                              │
+  │◀── {content: [...],          │  ← 执行完成
+  │      isError: false}         │
+  │                              │
+  │──▶ resources/subscribe       │
+  │    uri="notes://latest"      │
+  │                              │  ← 订阅资源变更
+  │◀── notifications/resource    │
+  │    _updated                  │
+  │                              │
+  │──▶ resources/read            │
+  │◀── {contents: [...]}         │
+```
+
+**版本协商**在初始化阶段完成：
+
+```python
+# MCP Server 声明支持的能力
+{
+  "protocolVersion": "2024-11-05",
+  "capabilities": {
+    "tools": {},           # 支持工具调用
+    "resources": {},       # 支持资源访问
+    "prompts": {},         # 支持提示模板
+    "logging": {},         # 支持日志输出
+    "experimental": {}     # 实验性功能
+  },
+  "serverInfo": {
+    "name": "my-mcp-server",
+    "version": "1.0.0"
+  }
+}
+```
+
+### 4. 认证机制
+
+MCP 协议层不定义认证方式，但实践中有三种常见方案：
+
+**方案一：API Key 认证（SSE 传输）**
+
+```python
+import os
+from mcp.server.fastmcp import FastMCP
+from mcp.server.models import InitializationOptions
+
+mcp = FastMCP("authenticated-server")
+
+@mcp.tool()
+def access_sensitive_data(token: str = None) -> str:
+    """需要 token 鉴权的工具"""
+    expected = os.environ.get("MCP_API_KEY", "")
+    if token != expected:
+        return {"isError": True, "content": [{"type": "text", "text": "认证失败"}]}
+    return "敏感数据..."
+
+# 客户端设置 Header
+import httpx
+
+async def call_mcp():
+    headers = {"Authorization": "Bearer lsv2_xxx"}
+    async with httpx.AsyncClient(headers=headers) as client:
+        # 通过 SSE 端点调用
+        response = await client.post(
+            "http://localhost:8000/message",
+            json={"jsonrpc": "2.0", "id": "1", "method": "tools/call", "params": {}},
+        )
+```
+
+**方案二：OAuth 2.0（企业场景）**
+
+```text
+流程：
+1. Host 引导用户跳转授权页面
+2. 用户授权后获取授权码
+3. Host 用授权码换取 access_token
+4. 所有后续请求携带 access_token
+5. Token 过期后刷新
+```
+
+**方案三：mTLS（服务间通信）**
+
+```text
+用于 MCP Server 之间的通信：
+- 双向证书认证
+- 适合微服务架构
+- 配置管理较复杂
+```
+
+### 5. 错误处理
+
+MCP 标准错误码（JSON-RPC 规范）：
+
+| 错误码 | 名称 | 说明 |
+|---|---|---|
+| -32700 | Parse Error | JSON 解析失败 |
+| -32600 | Invalid Request | 请求格式不正确 |
+| -32601 | Method Not Found | 调用的方法不存在 |
+| -32602 | Invalid Params | 参数校验失败 |
+| -32603 | Internal Error | 服务端内部错误 |
+| -32000 ~ -32099 | Server Error | 自定义服务端错误 |
+
+自定义错误处理：
+
+```python
+from mcp.server.fastmcp import FastMCP
+from mcp.types import ErrorData
+import json
+
+mcp = FastMCP("robust-server")
+
+class McpError(Exception):
+    def __init__(self, code: int, message: str, details: dict = None):
+        self.code = code
+        self.message = message
+        self.details = details or {}
+
+@mcp.tool()
+def query_database(query: str) -> str:
+    """带完善错误处理的数据库查询"""
+    try:
+        # 模拟数据库查询
+        if not query:
+            raise McpError(-32001, "查询语句不能为空")
+
+        if len(query) > 1000:
+            raise McpError(-32002, "查询语句过长", {
+                "max_length": 1000,
+                "actual_length": len(query),
+            })
+
+        # 执行查询...
+        return f"查询结果: {query}"
+
+    except McpError as e:
+        return {
+            "isError": True,
+            "content": [{
+                "type": "text",
+                "text": json.dumps({
+                    "error": e.message,
+                    "details": e.details,
+                }, ensure_ascii=False),
+            }]
+        }
+    except Exception as e:
+        return {
+            "isError": True,
+            "content": [{"type": "text", "text": f"未知错误: {str(e)}"}]
+        }
+```
+
+### 6. 工具发现
+
+MCP Server 通过 `tools/list` 方法暴露其工具清单，Host 在初始化时调用：
+
+```python
+from typing import Any
+from mcp.server.fastmcp import FastMCP
+
+mcp = FastMCP("discoverable-server")
+
+# 工具的定义会自动包含：
+# - name: 函数名
+# - description: docstring
+# - inputSchema: 参数 JSON Schema（自动推断）
+
+@mcp.tool(description="搜索知识库文档")
+async def search_knowledge_base(
+    query: str,
+    limit: int = 10,
+    category: str = None,
+) -> str:
+    """
+    搜索知识库中的文档内容。
+
+    Args:
+        query: 搜索关键词，支持模糊匹配
+        limit: 返回结果数量上限（默认 10，最大 50）
+        category: 可选，按分类过滤
+    """
+    return f"搜索 query={query}, limit={limit}, category={category}"
+
+# 对应的 tools/list 响应：
+{
+  "tools": [{
+    "name": "search_knowledge_base",
+    "description": "搜索知识库中的文档内容。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "搜索关键词，支持模糊匹配"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "返回结果数量上限（默认 10，最大 50）",
+          "default": 10
+        },
+        "category": {
+          "type": "string",
+          "description": "可选，按分类过滤",
+          "nullable": true
+        }
+      },
+      "required": ["query"]
+    }
+  }]
+}
+```
+
+**动态工具发现**——根据运行时条件暴露不同工具：
+
+```python
+from mcp.server.fastmcp import FastMCP
+
+mcp = FastMCP("dynamic-server")
+
+tools_registry = {}
+
+def register_tool(name: str, description: str, enabled: bool = True):
+    """条件注册工具"""
+    if enabled:
+        tools_registry[name] = {"name": name, "description": description}
+
+# 根据环境变量决定暴露哪些工具
+register_tool("read_database", "读取数据库", enabled=os.getenv("DB_ENABLED") == "true")
+register_tool("send_email", "发送邮件", enabled=os.getenv("EMAIL_ENABLED") == "true")
+
+# 在 tools/list 中动态返回
+@mcp.tool()
+def list_available_tools() -> str:
+    """列出当前可用的工具列表"""
+    return json.dumps(list(tools_registry.keys()), ensure_ascii=False)
+```
+
+## 进阶
+
+### 7. 资源订阅与变更通知
+
+资源订阅允许 Host 实时感知数据变化：
+
+```python
+import asyncio
+from mcp.server.fastmcp import FastMCP
+
+mcp = FastMCP("reactive-server")
+
+# 观察者模式：资源变更时通知所有订阅者
+subscribers = set()
+
+@mcp.resource("notes://realtime")
+def realtime_notes() -> str:
+    """获取实时笔记"""
+    return get_current_notes()
+
+@mcp.tool()
+def subscribe_notes():
+    """订阅笔记更新（由 Host 调用）"""
+    subscriber_id = id(subscribers)
+    subscribers.add(subscriber_id)
+    return f"订阅成功 (id: {subscriber_id})"
+
+@mcp.tool()
+def update_notes(content: str):
+    """更新笔记内容并通知所有订阅者"""
+    save_notes(content)
+    # 发送通知到所有订阅的 Host
+    for sub in subscribers:
+        # 实际通过 MCP 协议发送 notifications/resource_updated
+        notify_resource_changed(sub, "notes://realtime")
+    return f"已更新并通知 {len(subscribers)} 个订阅者"
+
+
+# 低级 API 示例：手动处理订阅
+from mcp.server.models import InitializationOptions
+from mcp.types import ResourceUpdatedNotification
+
+async def resource_change_listener():
+    """监听文件变化并推送通知"""
+    last_mtime = 0
+    while True:
+        current_mtime = os.path.getmtime("data.json")
+        if current_mtime > last_mtime:
+            last_mtime = current_mtime
+            # 发送资源更新通知
+            notification = ResourceUpdatedNotification(
+                method="notifications/resources/updated",
+                params={"uri": "file://data.json"},
+            )
+            await mcp.send_notification(notification)
+        await asyncio.sleep(1)
+```
+
+### 8. 进度报告
+
+对于耗时操作，MCP 支持进度报告：
+
+```python
+from mcp.server.fastmcp import FastMCP
+from mcp.types import ProgressNotification
+import asyncio
+
+mcp = FastMCP("progress-server")
+
+@mcp.tool()
+async def batch_process(items: list[str]) -> str:
+    """批量处理并报告进度"""
+    results = []
+    total = len(items)
+
+    for i, item in enumerate(items):
+        # 模拟处理时间
+        await asyncio.sleep(0.5)
+
+        # 发送进度通知
+        progress = ProgressNotification(
+            method="notifications/progress",
+            params={
+                "progress": i + 1,
+                "total": total,
+                "message": f"处理 {item} ({i + 1}/{total})",
+            },
+        )
+        await mcp.send_notification(progress)
+        results.append(f"{item}: 完成")
+
+    return "\n".join(results)
+```
+
+### 9. 日志输出
+
+MCP Server 可以向 Host 发送日志消息：
+
+```python
+import logging
+from mcp.server.fastmcp import FastMCP
+
+mcp = FastMCP("logging-server")
+logger = logging.getLogger("mcp-server")
+
+# 设置日志级别 - Host 可以远程配置
+@mcp.tool()
+def set_log_level(level: str):
+    """动态设置日志级别"""
+    numeric_level = getattr(logging, level.upper(), None)
+    if not isinstance(numeric_level, int):
+        return {"isError": True, "content": [{"type": "text", "text": f"无效级别: {level}"}]}
+    logger.setLevel(numeric_level)
+    return f"日志级别已设为 {level}"
+
+# 日志会自动通过 MCP logging 通道发送到 Host
+```
+
+### 10. 测试 MCP Server
+
+```python
+"""测试 MCP Server 的工具"""
+import json
+import subprocess
+import asyncio
+
+class McpClientTester:
+    """模拟 MCP Host 行为，用于测试 Server"""
+
+    def __init__(self, command: list[str]):
+        self.process = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+    def send_request(self, method: str, params: dict = None) -> dict:
+        """发送 JSON-RPC 请求"""
+        request = {
+            "jsonrpc": "2.0",
+            "id": "1",
+            "method": method,
+            "params": params or {},
+        }
+        self.process.stdin.write(json.dumps(request) + "\n")
+        self.process.stdin.flush()
+
+        response = self.process.stdout.readline()
+        return json.loads(response)
+
+    def test_initialize(self):
+        """测试初始化握手"""
+        result = self.send_request("initialize", {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {"name": "test-client", "version": "1.0"},
+        })
+        assert "protocolVersion" in result.get("result", {})
+        print("✓ 初始化成功")
+
+    def test_tools_list(self):
+        """测试工具发现"""
+        # 先发 initialized 通知
+        self.send_notification("notifications/initialized", {})
+
+        result = self.send_request("tools/list")
+        assert "tools" in result.get("result", {})
+        print(f"✓ 发现 {len(result['result']['tools'])} 个工具")
+
+    def send_notification(self, method: str, params: dict):
+        notification = {
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": params,
+        }
+        self.process.stdin.write(json.dumps(notification) + "\n")
+        self.process.stdin.flush()
+
+    def close(self):
+        self.process.terminate()
+
+# 运行测试
+tester = McpClientTester(["python", "mcp_server.py"])
+tester.test_initialize()
+tester.test_tools_list()
+tester.close()
+```
+
+### MCP 协议检查清单
+
+开发 MCP Server 时逐项检查：
+
+- [ ] 初始化握手是否正确（版本协商）
+- [ ] 工具 Schema 是否精确（参数类型、必填、描述）
+- [ ] 错误处理是否覆盖所有边界情况
+- [ ] 长耗时操作是否支持进度报告
+- [ ] 资源变更是否及时通知订阅者
+- [ ] 认证/鉴权是否完善
+- [ ] 日志级别是否可动态配置
+- [ ] SSE 模式下的 CORS 配置
+- [ ] 超时和重连处理
+
+## 练习
+
+1. 分别用 stdio 和 SSE 两种传输方式启动同一个 MCP Server，测试延迟差异
+2. 编写一个支持进度报告的 MCP 工具，处理大量文件时每 10% 报告一次进度
+3. 实现一个带 API Key 认证的 MCP Server，用 curl 模拟 Host 请求
+4. 编写单元测试，验证你的 MCP Server 在所有错误场景下的响应格式

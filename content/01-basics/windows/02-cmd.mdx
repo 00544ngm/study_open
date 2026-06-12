@@ -1,0 +1,41 @@
+---
+title: CMD 经典命令
+order: 2
+difficulty: beginner
+estimated_time: 10min
+tags: [Windows, 基础]
+---
+
+## 入门
+
+```cmd
+:: 文件操作
+dir            :: 列出文件
+cd Desktop     :: 切换目录
+type file.txt  :: 查看文件
+del file.txt   :: 删除文件
+copy a.txt b.txt :: 复制
+move a.txt dir\  :: 移动
+mkdir dir      :: 创建目录
+rmdir /s dir   :: 删除目录树
+
+:: 清理
+cls            :: 清屏
+ipconfig       :: 查看网络配置
+ping google.com :: 网络测试
+```
+
+## 核心
+
+```cmd
+:: 系统管理
+tasklist                  :: 查看进程列表
+taskkill /F /IM chrome.exe  :: 强制终止进程
+systeminfo                :: 查看系统信息
+netstat -ano              :: 查看端口占用
+```
+
+## 练习
+
+1. 用 CMD 创建一个目录结构 `project/src/app`
+2. 使用 `netstat -ano | findstr :8000` 查看端口占用

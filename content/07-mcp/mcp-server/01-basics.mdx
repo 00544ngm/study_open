@@ -1,0 +1,109 @@
+---
+title: MCP Server 开发基础
+order: 1
+difficulty: advanced
+estimated_time: 25min
+tags: [MCP, Server]
+---
+
+## 入门
+
+MCP Server 通过 stdio 或 HTTP 与 Client 通信，暴露工具供 Agent 调用。
+
+```python
+# 最简单的 MCP Server
+from mcp.server import Server, NotificationOptions
+from mcp.server.models import InitializationOptions
+
+app = Server("calculator")
+
+@app.list_tools()
+async def list_tools():
+    return [
+        {
+            "name": "add",
+            "description": "两数相加",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "a": {"type": "number"},
+                    "b": {"type": "number"}
+                },
+                "required": ["a", "b"]
+            }
+        }
+    ]
+
+@app.call_tool()
+async def call_tool(name: str, arguments: dict):
+    if name == "add":
+        result = arguments["a"] + arguments["b"]
+        return {"content": [{"type": "text", "text": str(result)}]}
+    raise ValueError(f"未知工具: {name}")
+```
+
+## 核心
+
+### 项目结构
+
+```text
+mcp-server/
+├── server.py          # 主入口
+├── tools/             # 工具模块
+│   ├── __init__.py
+│   ├── calculator.py
+│   └── search.py
+└── requirements.txt   # mcp 依赖
+```
+
+### 使用 uvx 发布
+
+```bash
+# 通过 uvx 运行（无需安装）
+uvx mcp-server-calc
+
+# 在 Claude Desktop 中配置
+# claude_desktop_config.json
+{
+  "mcpServers": {
+    "calculator": {
+      "command": "uvx",
+      "args": ["mcp-server-calc"]
+    }
+  }
+}
+```
+
+### 资源 (Resources)
+
+```python
+# 暴露静态资源和动态内容
+@app.list_resources()
+async def list_resources():
+    return [
+        {
+            "uri": "file:///app/config.json",
+            "name": "Agent 配置",
+            "mimeType": "application/json"
+        }
+    ]
+
+@app.read_resource()
+async def read_resource(uri: str):
+    if uri == "file:///app/config.json":
+        return {
+            "contents": [
+                {
+                    "uri": uri,
+                    "mimeType": "application/json",
+                    "text": '{"model": "gpt-4", "temperature": 0.7}'
+                }
+            ]
+        }
+    raise ValueError(f"未知资源: {uri}")
+```
+
+## 练习
+
+1. 创建一个 MCP Server，实现 "当前时间" 和 "天气查询" 两个工具
+2. 用 uvx 运行该 Server，在 Claude Desktop 中配置并使用

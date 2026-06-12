@@ -1,0 +1,99 @@
+---
+title: ComfyUI 基础入门
+order: 1
+difficulty: beginner
+estimated_time: 25min
+tags: [ComfyUI, Stable Diffusion, 图像生成]
+---
+
+## 安装
+
+```bash
+git clone https://github.com/comfyanonymous/ComfyUI.git
+cd ComfyUI
+pip install -r requirements.txt
+
+# 启动
+python main.py
+```
+
+浏览器打开 `http://localhost:8188` 进入工作台。
+
+## 核心概念
+
+ComfyUI 的核心是**节点图**：每个节点执行一个操作，连线组成工作流。
+
+| 节点类型 | 作用 |
+|---------|------|
+| CheckpointLoader | 加载 Stable Diffusion 模型 |
+| CLIPTextEncode | 输入提示词 |
+| KSampler | 采样器，控制生成过程 |
+| VAEDecode | 将潜空间解码为图像 |
+| SaveImage | 保存/显示结果 |
+
+## 基础工作流
+
+最简单的文生图流：
+
+```
+CheckpointLoader → CLIPTextEncode(正向) → KSampler → VAEDecode → SaveImage
+                    CLIPTextEncode(负向) ↗
+```
+
+对应节点连接：
+
+- **CheckpointLoader** → 模型到 KSampler
+- **CLIPTextEncode** (正向 prompt) → KSampler positive
+- **CLIPTextEncode** (负向 prompt) → KSampler negative
+- **KSampler** → latent 到 VAEDecode
+- **VAEDecode** → 图像到 SaveImage
+
+## 提示词基础
+
+```text
+正向: masterpiece, best quality, 1girl, cityscape, sunset,
+      detailed background, cinematic lighting
+
+负向: nsfw, lowres, bad anatomy, bad hands, text, watermark,
+      extra fingers, mutated, ugly
+```
+
+## 关键参数
+
+| 参数 | 说明 | 常用值 |
+|------|------|--------|
+| steps | 采样步数 | 20-30 |
+| CFG | 提示词跟随度 | 3.5-7 |
+| sampler_name | 采样器 | DPM++ 2M Karras |
+| scheduler | 调度器 | karras |
+| denoise | 重绘强度 | 0.3-0.8 |
+| seed | 随机种子 | -1 (随机) |
+
+## 图生图
+
+在基础工作流中增加 LoadImage 节点，将图像输入 KSampler 的 latent：
+
+```
+LoadImage → VAEEncode → KSampler(latent_image) → VAEDecode → SaveImage
+```
+
+降低 `denoise`（如 0.4）保持原图结构，提高 `denoise`（如 0.8）做更大改动。
+
+## 工作流管理
+
+```bash
+# 自定义节点目录
+ComfyUI/custom_nodes/
+
+# 工作流文件（JSON 格式）
+# 在 ComfyUI 中 Save/Load 即可导出导入
+```
+
+社区节点推荐：
+
+| 节点包 | 功能 |
+|--------|------|
+| ComfyUI-Manager | 节点管理、安装 |
+| WAS Node Suite | 图像处理、遮罩、文字 |
+| ComfyUI-Impact-Pack | 分段、放大、修脸 |
+| Efficiency Nodes | 简化工作流 |

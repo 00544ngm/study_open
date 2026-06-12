@@ -1,0 +1,176 @@
+---
+title: Qdrant 高级功能
+order: 2
+difficulty: advanced
+estimated_time: 25min
+tags: [Qdrant, 向量数据库, 搜索]
+---
+
+## 入门
+
+Qdrant 支持过滤、索引、分组等高级功能，能大幅提升检索效率。
+
+## 核心
+
+### 带过滤的搜索
+
+```python
+from qdrant_client import QdrantClient
+from qdrant_client.http.models import Filter, FieldCondition, MatchValue, Range
+
+client = QdrantClient("localhost", port=6333)
+
+# 构建过滤器
+filter_condition = Filter(
+    must=[
+        FieldCondition(
+            key="category",
+            match=MatchValue(value="agent")
+        ),
+        FieldCondition(
+            key="timestamp",
+            range=Range(gte=1700000000)
+        )
+    ]
+)
+
+# 带过滤的向量搜索
+results = client.search(
+    collection_name="documents",
+    query_vector=[0.1, 0.2, ...],  # 768 维向量
+    query_filter=filter_condition,
+    limit=10,
+    with_payload=True
+)
+```
+
+### Payload 索引
+
+```python
+from qdrant_client.http.models import PayloadSchemaType
+
+# 为常用过滤字段创建索引，提升查询性能
+client.create_payload_index(
+    collection_name="documents",
+    field_name="category",
+    field_schema=PayloadSchemaType.KEYWORD
+)
+
+client.create_payload_index(
+    collection_name="documents",
+    field_name="timestamp",
+    field_schema=PayloadSchemaType.INTEGER
+)
+
+client.create_payload_index(
+    collection_name="documents",
+    field_name="author",
+    field_schema=PayloadSchemaType.KEYWORD
+)
+```
+
+### 批量写入优化
+
+```python
+from qdrant_client.http.models import PointStruct
+import uuid
+
+# 批量 upsert 提高写入性能
+points = [
+    PointStruct(
+        id=str(uuid.uuid4()),
+        vector=[0.1] * 768,
+        payload={
+            "title": f"文档 {i}",
+            "category": "tech",
+            "timestamp": 1700000000 + i
+        }
+    )
+    for i in range(1000)
+]
+
+# 每批 100 条写入
+batch_size = 100
+for i in range(0, len(points), batch_size):
+    client.upsert(
+        collection_name="documents",
+        points=points[i:i + batch_size],
+        wait=False  # 异步写入
+    )
+```
+
+## 进阶
+
+### 分组搜索
+
+```python
+# 按 category 分组，每组取 Top-3
+from qdrant_client.http.models import SearchGroupsRequest
+
+results = client.search_groups(
+    collection_name="documents",
+    query_vector=[0.1] * 768,
+    group_by="category",
+    group_size=3,
+    limit=10
+)
+
+for group in results.groups:
+    print(f"分类: {group.id}")
+    for hit in group.hits:
+        print(f"  - {hit.payload['title']} ({hit.score})")
+```
+
+### Scroll 批量导出
+
+```python
+# 遍历整个集合
+next_offset = None
+while True:
+    records, next_offset = client.scroll(
+        collection_name="documents",
+        limit=100,
+        offset=next_offset,
+        with_payload=True,
+        with_vectors=False
+    )
+
+    for record in records:
+        print(f"ID: {record.id}, Payload: {record.payload}")
+
+    if next_offset is None:
+        break
+```
+
+### 多向量与命名向量
+
+```python
+# 每个点可包含多个命名向量
+client.upsert(
+    collection_name="multi-vector-collection",
+    points=[
+        PointStruct(
+            id=1,
+            vector={
+                "title": [0.1] * 384,      # 标题向量（小维度）
+                "content": [0.2] * 768,    # 内容向量（大维度）
+                "image": [0.3] * 512       # 图片向量
+            },
+            payload={"title": "示例文档"}
+        )
+    ]
+)
+
+# 对特定命名向量搜索
+results = client.search(
+    collection_name="multi-vector-collection",
+    query_vector=("content", [0.2] * 768),  # 指定 content 向量
+    limit=10
+)
+```
+
+## 练习
+
+1. 为文档集合创建 category 和 timestamp 的 Payload 索引
+2. 实现带分类过滤的搜索，只返回特定类别的结果
+3. 使用 Scroll API 批量导出所有文档，统计每个类别的数量

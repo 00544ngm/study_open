@@ -1,0 +1,243 @@
+---
+title: Pandas 数据清洗
+order: 1
+difficulty: intermediate
+estimated_time: 40min
+tags: [Pandas, 数据清洗, ETL, Python]
+---
+
+## 安装
+
+```bash
+pip install pandas numpy
+```
+
+## 读取数据
+
+```python
+import pandas as pd
+
+# 从 CSV 读取
+df = pd.read_csv("raw_data.csv")
+
+# 从 JSON 读取
+df = pd.read_json("raw_data.json")
+
+# 从列表创建
+data = [
+    {"title": "文章1", "views": 100, "date": "2024-01-01"},
+    {"title": "文章2", "views": 200, "date": "2024-01-02"},
+]
+df = pd.DataFrame(data)
+```
+
+## 快速预览
+
+```python
+# 前 5 行
+df.head()
+
+# 基本信息
+df.info()
+
+# 统计摘要
+df.describe()
+
+# 列名
+df.columns.tolist()
+
+# 数据类型
+df.dtypes
+```
+
+## 处理缺失值
+
+爬虫经常遇到缺失字段：
+
+```python
+# 检测缺失
+df.isnull().sum()
+df.isna().sum()
+
+# 删除含缺失的行
+df_clean = df.dropna()
+
+# 删除指定列有缺失的行
+df_clean = df.dropna(subset=["title", "url"])
+
+# 填充缺失
+df["views"].fillna(0, inplace=True)
+df["description"].fillna("", inplace=True)
+
+# 用均值/中位数填充
+df["price"].fillna(df["price"].median(), inplace=True)
+
+# 前向填充（时间序列常用）
+df.sort_values("date", inplace=True)
+df["price"].fillna(method="ffill", inplace=True)
+```
+
+## 去重
+
+```python
+# 完全重复
+df.drop_duplicates(inplace=True)
+
+# 按指定列去重（保留第一个）
+df.drop_duplicates(subset=["title", "url"], keep="first", inplace=True)
+
+# 按指定列去重（保留最后一个）
+df.drop_duplicates(subset=["title"], keep="last", inplace=True)
+
+# 检查重复
+df.duplicated(subset=["url"]).sum()
+```
+
+## 数据标准化
+
+```python
+# 去除收尾空格
+df["title"] = df["title"].str.strip()
+df["content"] = df["content"].str.strip()
+
+# 统一大小写
+df["email"] = df["email"].str.lower()
+df["tag"] = df["tag"].str.upper()
+
+# 替换文本
+df["content"] = df["content"].str.replace(r"\s+", " ", regex=True)
+
+# 提取数字
+df["price_num"] = df["price"].str.extract(r"(\d+\.?\d*)")
+
+# 日期标准化
+df["date"] = pd.to_datetime(df["date"], errors="coerce")
+```
+
+## 类型转换
+
+```python
+# 数值转换
+df["views"] = pd.to_numeric(df["views"], errors="coerce")
+df["price"] = pd.to_numeric(df["price"], errors="coerce")
+
+# 日期转换
+df["publish_date"] = pd.to_datetime(df["publish_date"])
+
+# 类别转换（省内存）
+df["category"] = df["category"].astype("category")
+
+# 布尔转换
+df["is_active"] = df["status"].apply(lambda x: x == "active")
+```
+
+## 清洗实战管线
+
+```python
+import pandas as pd
+import re
+
+def clean_scraped_data(df: pd.DataFrame) -> pd.DataFrame:
+    """完整的数据清洗管线"""
+
+    # 1. 复制以防修改原始数据
+    df = df.copy()
+
+    # 2. 基本信息记录
+    print(f"原始行数: {len(df)}")
+    print(f"原始列数: {len(df.columns)}")
+
+    # 3. 删除完全空的行列
+    df.dropna(how="all", inplace=True)
+
+    # 4. 去重（按 URL 去重）
+    if "url" in df.columns:
+        before = len(df)
+        df.drop_duplicates(subset=["url"], keep="first", inplace=True)
+        print(f"去重移除: {before - len(df)} 行")
+
+    # 5. 移除 URL 为空的行
+    if "url" in df.columns:
+        df = df[df["url"].notna() & (df["url"] != "")]
+
+    # 6. 清洗标题
+    if "title" in df.columns:
+        df["title"] = (
+            df["title"]
+            .str.strip()
+            .str.replace(r"\s+", " ", regex=True)
+        )
+        # 删除标题过短的行
+        df = df[df["title"].str.len() >= 2]
+
+    # 7. 标准化日期
+    if "date" in df.columns:
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        # 删除日期解析失败的行
+        df = df[df["date"].notna()]
+
+    # 8. 填充缺失
+    if "description" in df.columns:
+        df["description"] = df["description"].fillna("")
+    if "views" in df.columns:
+        df["views"] = (
+            pd.to_numeric(df["views"], errors="coerce")
+            .fillna(0)
+            .astype(int)
+        )
+
+    # 9. 重置索引
+    df.reset_index(drop=True, inplace=True)
+
+    print(f"清洗后行数: {len(df)}")
+    return df
+
+# 使用
+raw_df = pd.read_csv("scraped_articles.csv")
+clean_df = clean_scraped_data(raw_df)
+clean_df.to_csv("cleaned_articles.csv", index=False)
+```
+
+## 异常值处理
+
+```python
+import numpy as np
+
+# Z-score 方法
+def remove_outliers_zscore(df, column, threshold=3):
+    z_scores = np.abs(
+        (df[column] - df[column].mean()) / df[column].std()
+    )
+    return df[z_scores < threshold]
+
+# IQR 方法
+def remove_outliers_iqr(df, column):
+    Q1 = df[column].quantile(0.25)
+    Q3 = df[column].quantile(0.75)
+    IQR = Q3 - Q1
+    return df[
+        (df[column] >= Q1 - 1.5 * IQR) &
+        (df[column] <= Q3 + 1.5 * IQR)
+    ]
+
+# 价格异常检测
+df_clean = remove_outliers_iqr(df, "price")
+```
+
+## 字段映射与合并
+
+```python
+# 字段重命名
+df.rename(columns={
+    "article_title": "title",
+    "publish_time": "date",
+}, inplace=True)
+
+# 多表合并
+articles = pd.read_csv("articles.csv")
+authors = pd.read_csv("authors.csv")
+merged = articles.merge(authors, on="author_id", how="left")
+
+# 追加新数据
+all_data = pd.concat([existing_df, new_df], ignore_index=True)
+```

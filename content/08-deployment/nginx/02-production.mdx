@@ -1,0 +1,479 @@
+---
+title: Nginx 生产配置
+order: 2
+difficulty: core
+estimated_time: 30min
+tags: [Nginx, 反向代理, SSL, 负载均衡, 安全]
+---
+
+## 反向代理与负载均衡
+
+生产环境中 Nginx 最核心的用途是反向代理和负载均衡。以下是一个面向 AI Agent 平台的生产级配置。
+
+### 上游服务器组
+
+```nginx
+# upstream 定义后端服务器池
+upstream agent_api {
+    # 加权轮询，weight 越高分配越多请求
+    server 10.0.1.10:8000 weight=3;
+    server 10.0.1.11:8000 weight=2;
+    server 10.0.1.12:8000 weight=2;
+
+    # 健康检查（需 ngx_http_upstream_hc_module）
+    keepalive 32;
+}
+
+upstream agent_ws {
+    # WebSocket 上游，使用 IP hash 保持会话
+    ip_hash;
+    server 10.0.1.10:8001;
+    server 10.0.1.11:8001;
+    server 10.0.1.12:8001;
+}
+```
+
+负载均衡策略：
+
+| 策略 | 指令 | 适用场景 |
+|------|------|----------|
+| 轮询 | 默认 | 后端性能均等 |
+| 加权轮询 | `weight=N` | 后端性能不均 |
+| IP hash | `ip_hash` | 需要会话保持 |
+| 最少连接 | `least_conn` | 长请求差异大 |
+| 随机 | `random` | 测试流量分发 |
+
+## SSL 终止
+
+Let's Encrypt 自动化证书管理是生产环境标配。
+
+```bash
+# 安装 certbot
+sudo apt install certbot python3-certbot-nginx
+
+# 获取证书（自动修改 nginx 配置）
+sudo certbot --nginx -d api.agent.example.com -d ws.agent.example.com
+
+# 查看证书状态
+sudo certbot certificates
+
+# 自动续期（certbot 默认添加 systemd timer）
+sudo certbot renew --dry-run
+```
+
+### SSL 最佳实践配置
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name api.agent.example.com;
+
+    # 证书路径
+    ssl_certificate     /etc/letsencrypt/live/api.agent.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/api.agent.example.com/privkey.pem;
+
+    # 仅使用安全协议
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    # 优先使用现代加密套件
+    ssl_ciphers 'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384';
+    ssl_prefer_server_ciphers on;
+
+    # DH 参数（生成: openssl dhparam -out /etc/nginx/dhparam.pem 2048）
+    ssl_dhparam /etc/nginx/dhparam.pem;
+
+    # HSTS（强制浏览器使用 HTTPS）
+    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+
+    # OCSP Stapling（提升握手性能）
+    ssl_stapling on;
+    ssl_stapling_verify on;
+    resolver 8.8.8.8 8.8.4.4 valid=300s;
+    resolver_timeout 5s;
+}
+```
+
+## 安全头部
+
+AI Agent 平台涉及 API 密钥和用户数据，安全头部不可省略。
+
+```nginx
+server {
+    # ...
+    # 防止点击劫持
+    add_header X-Frame-Options "SAMEORIGIN" always;
+
+    # 防止 MIME 类型嗅探
+    add_header X-Content-Type-Options "nosniff" always;
+
+    # 启用浏览器 XSS 过滤器
+    add_header X-XSS-Protection "1; mode=block" always;
+
+    # 内容安全策略
+    add_header Content-Security-Policy "
+        default-src 'self';
+        script-src 'self' 'strict-dynamic';
+        style-src 'self' 'unsafe-inline';
+        img-src 'self' data:;
+        connect-src 'self' wss://api.agent.example.com;
+        frame-ancestors 'none';
+    " always;
+
+    # Referrer 策略
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+    # 权限控制
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+}
+```
+
+## 速率限制
+
+API 网关必须实施速率限制，防止滥用和 DDoS。
+
+```nginx
+# 定义限制区域（共享内存）
+# $binary_remote_addr 按 IP 限流
+limit_req_zone $binary_remote_addr zone=api_limit:10m rate=30r/s;
+limit_req_zone $binary_remote_addr zone=login_limit:10m rate=5r/m;
+
+# 按 API Key 限流（需透传 header）
+limit_req_zone $http_x_api_key zone=key_limit:10m rate=100r/s;
+
+server {
+    # 全局 API 限流
+    location /api/ {
+        limit_req zone=api_limit burst=50 nodelay;
+        limit_req_status 429;
+        limit_req_log_level warn;
+
+        proxy_pass http://agent_api/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+
+        # 请求体大小限制
+        client_max_body_size 10m;
+        client_body_buffer_size 128k;
+    }
+
+    # 登录接口严格限流
+    location /api/v1/auth/login {
+        limit_req zone=login_limit burst=3 nodelay;
+        proxy_pass http://agent_api/;
+    }
+
+    # LLM 调用接口按 API Key 限流
+    location /api/v1/chat/completions {
+        limit_req zone=key_limit burst=20 nodelay;
+        proxy_pass http://agent_api/;
+    }
+}
+```
+
+## Gzip 压缩
+
+对 API 响应启用压缩，减少带宽消耗。
+
+```nginx
+http {
+    # 开启压缩
+    gzip on;
+    gzip_comp_level 6;          # 1-9，推荐 6（平衡速度和压缩比）
+    gzip_min_length 1000;       # 小于 1KB 的不压缩
+    gzip_buffers 16 8k;
+    gzip_proxied any;           # 代理请求也压缩
+    gzip_types
+        text/plain
+        text/css
+        application/json
+        application/javascript
+        text/xml
+        application/xml
+        application/xml+rss
+        image/svg+xml;
+    gzip_vary on;               # 添加 Vary: Accept-Encoding
+    gzip_disable "msie6";       # 兼容旧浏览器
+
+    # Brotli 压缩（需要额外模块，更高效）
+    # brotli on;
+    # brotli_comp_level 6;
+    # brotli_types text/plain application/json application/javascript;
+}
+```
+
+## 静态文件服务
+
+AI Agent 前端或文档站点通过 Nginx 直接提供静态文件。
+
+```nginx
+server {
+    listen 80;
+    server_name agent.example.com;
+    root /var/www/agent-frontend/dist;
+    index index.html;
+
+    # 静态资源缓存（hash 文件名可长期缓存）
+    location /assets/ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        add_header ETag "$uri";
+    }
+
+    # 常规文件缓存
+    location ~* \.(jpg|jpeg|png|gif|ico|svg|webp)$ {
+        expires 30d;
+        add_header Cache-Control "public, max-age=2592000";
+    }
+
+    location ~* \.(css|js)$ {
+        expires 7d;
+        add_header Cache-Control "public, max-age=604800";
+    }
+
+    # SPA 路由（所有非文件请求返回 index.html）
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # 禁止访问隐藏文件
+    location ~ /\. {
+        deny all;
+        access_log off;
+        log_not_found off;
+    }
+}
+```
+
+## 健康检查
+
+Nginx 内置被动健康检查，商业版支持主动检查。以下是社区版实现：
+
+```nginx
+upstream agent_api {
+    server 10.0.1.10:8000 max_fails=3 fail_timeout=30s;
+    server 10.0.1.11:8000 max_fails=3 fail_timeout=30s;
+    server 10.0.1.12:8000 max_fails=3 fail_timeout=30s;
+}
+
+server {
+    location /health {
+        # 内部端点，不对外暴露
+        internal;
+        proxy_pass http://agent_api/health;
+        proxy_next_upstream error timeout invalid_header http_500 http_502 http_503;
+        proxy_next_upstream_tries 3;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 5s;
+    }
+}
+```
+
+### 主动健康检查（OpenResty / Nginx Plus）
+
+```nginx
+# Nginx Plus 配置
+upstream agent_api {
+    zone agent_api 64k;
+    server 10.0.1.10:8000;
+    server 10.0.1.11:8000;
+
+    # 主动健康检查（每 5 秒检查）
+    health_check interval=5s fails=3 passes=2 uri=/health;
+}
+```
+
+## 完整的生产网关配置
+
+将上述所有要素整合为一个完整配置：
+
+```nginx
+# /etc/nginx/nginx.conf
+
+user nginx;
+worker_processes auto;
+worker_rlimit_nofile 65535;
+
+events {
+    multi_accept on;
+    worker_connections 65535;
+    use epoll;
+}
+
+http {
+    # 基础优化
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    keepalive_timeout 65;
+    keepalive_requests 1000;
+    types_hash_max_size 2048;
+    server_tokens off;
+
+    # MIME 类型
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+
+    # 日志格式
+    log_format json escape=json '{'
+        '"timestamp":"$time_iso8601",'
+        '"remote_addr":"$remote_addr",'
+        '"request":"$request",'
+        '"status":$status,'
+        '"body_bytes":$body_bytes_sent,'
+        '"request_time":$request_time,'
+        '"upstream_addr":"$upstream_addr",'
+        '"upstream_status":$upstream_status,'
+        '"http_referer":"$http_referer",'
+        '"http_user_agent":"$http_user_agent",'
+        '"http_x_forwarded_for":"$http_x_forwarded_for"'
+    '}';
+
+    access_log /var/log/nginx/access.log json buffer=32k flush=5s;
+    error_log /var/log/nginx/error.log warn;
+
+    # Gzip
+    gzip on;
+    gzip_comp_level 6;
+    gzip_types application/json application/javascript text/plain text/css;
+
+    # 速率限制区域
+    limit_req_zone $binary_remote_addr zone=api:10m rate=30r/s;
+
+    # SSL
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 10m;
+
+    # 上游服务器组
+    upstream agent_api {
+        least_conn;
+        server 10.0.1.10:8000 max_fails=3 fail_timeout=30s;
+        server 10.0.1.11:8000 max_fails=3 fail_timeout=30s;
+        keepalive 32;
+    }
+
+    # HTTP → HTTPS 重定向
+    server {
+        listen 80 default_server;
+        server_name _;
+        return 301 https://$host$request_uri;
+    }
+
+    # HTTPS 服务
+    server {
+        listen 443 ssl http2;
+        server_name api.agent.example.com;
+
+        # SSL 配置
+        ssl_certificate /etc/letsencrypt/live/api.agent.example.com/fullchain.pem;
+        ssl_certificate_key /etc/letsencrypt/live/api.agent.example.com/privkey.pem;
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_ciphers HIGH:!aNULL:!MD5;
+        ssl_prefer_server_ciphers on;
+
+        # 安全头部
+        add_header X-Frame-Options "SAMEORIGIN" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-XSS-Protection "1; mode=block" always;
+        add_header Strict-Transport-Security "max-age=63072000" always;
+
+        # API 代理
+        location /api/ {
+            limit_req zone=api burst=20 nodelay;
+            proxy_pass http://agent_api/;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+
+            # 超时设置
+            proxy_connect_timeout 10s;
+            proxy_send_timeout 30s;
+            proxy_read_timeout 60s;
+
+            # 缓冲
+            proxy_buffering on;
+            proxy_buffer_size 4k;
+            proxy_buffers 8 8k;
+            proxy_busy_buffers_size 16k;
+        }
+
+        # WebSocket 代理
+        location /ws/ {
+            proxy_pass http://agent_api/ws/;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+            proxy_set_header Host $host;
+            proxy_read_timeout 86400s;  # WebSocket 长连接
+        }
+
+        # 健康检查端点
+        location /health {
+            proxy_pass http://agent_api/health;
+            proxy_connect_timeout 5s;
+            proxy_read_timeout 5s;
+            access_log off;
+        }
+    }
+}
+```
+
+## 性能调优
+
+### 内核参数优化
+
+```bash
+# /etc/sysctl.conf
+net.ipv4.ip_local_port_range = 1024 65535
+net.ipv4.tcp_tw_reuse = 1
+net.core.somaxconn = 65535
+net.ipv4.tcp_max_syn_backlog = 65535
+net.core.netdev_max_backlog = 5000
+net.ipv4.tcp_fin_timeout = 30
+```
+
+### 测试与重载
+
+```bash
+# 测试配置语法
+sudo nginx -t
+
+# 平滑重载（不中断连接）
+sudo nginx -s reload
+
+# 查看活动连接
+curl http://localhost/nginx_status
+
+# 压测
+ab -n 10000 -c 100 https://api.agent.example.com/api/v1/health
+```
+
+## 日志分析
+
+### 基于 JSON 日志的监控
+
+```bash
+# 统计 5xx 错误
+tail -n 10000 /var/log/nginx/access.log | jq -c 'select(.status >= 500)'
+
+# 请求时间分布
+tail -n 10000 /var/log/nginx/access.log |
+  jq -r '.request_time' |
+  awk '{if($1>1) slow++; if($1>5) v_slow++; total++} END {
+    print "Total:", total, "Slow(>1s):", slow, "VerySlow(>5s):", v_slow
+  }'
+
+# 上游响应时间
+tail -n 1000 /var/log/nginx/access.log | jq -r '.upstream_addr' | sort | uniq -c | sort -rn
+```
+
+## 练习
+
+1. 基于上述配置，为你的 Agent 平台编写 Nginx 配置：包含 API 网关、SSL 终止、WebSocket、速率限制
+2. 使用 certbot 为域名配置 Let's Encrypt 证书，并验证 HSTS 头部正确返回
+3. 使用 `ab` 或 `wrk` 对配置进行压测，观察 `keepalive` 和 `gzip` 对性能的影响
+4. 为静态资源目录配置缓存策略，并通过浏览器 DevTools 验证缓存命中

@@ -1,0 +1,110 @@
+---
+title: Aiohttp 异步爬虫
+order: 1
+difficulty: intermediate
+estimated_time: 25min
+tags: [Aiohttp, 异步, HTTP, 爬虫]
+---
+
+## 安装
+
+```bash
+pip install aiohttp
+```
+
+## 基础用法
+
+```python
+import aiohttp
+import asyncio
+
+async def fetch(session: aiohttp.ClientSession, url: str) -> str:
+    async with session.get(url) as resp:
+        return await resp.text()
+
+async def main():
+    async with aiohttp.ClientSession() as session:
+        html = await fetch(session, "https://example.com")
+        print(len(html))
+
+asyncio.run(main())
+```
+
+## 并发爬取
+
+```python
+async def fetch_one(session, url):
+    try:
+        async with session.get(url, timeout=10) as resp:
+            return {"url": url, "status": resp.status, "size": len(await resp.text())}
+    except Exception as e:
+        return {"url": url, "error": str(e)}
+
+async def crawl(urls: list[str]):
+    async with aiohttp.ClientSession() as session:
+        tasks = [fetch_one(session, url) for url in urls]
+        return await asyncio.gather(*tasks)
+
+urls = [f"https://httpbin.org/delay/{i}" for i in range(1, 6)]
+results = asyncio.run(crawl(urls))
+```
+
+## 超时与重试
+
+```python
+timeout = aiohttp.ClientTimeout(total=30, connect=5)
+
+async def fetch_with_retry(session, url, retries=3):
+    for i in range(retries):
+        try:
+            async with session.get(url, timeout=timeout) as resp:
+                return await resp.text()
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            if i == retries - 1:
+                raise
+            await asyncio.sleep(2 ** i)
+```
+
+## 并发限流
+
+```python
+from asyncio import Semaphore
+
+class RateLimiter:
+    def __init__(self, max_concurrent=10):
+        self.semaphore = Semaphore(max_concurrent)
+
+    async def fetch(self, session, url):
+        async with self.semaphore:
+            async with session.get(url) as resp:
+                return await resp.text()
+
+limiter = RateLimiter(5)
+async with aiohttp.ClientSession() as session:
+    tasks = [limiter.fetch(session, url) for url in urls]
+    results = await asyncio.gather(*tasks)
+```
+
+## JSON 与二进制
+
+```python
+# JSON 响应
+async with session.get(url) as resp:
+    data = await resp.json()
+
+# POST JSON
+async with session.post(url, json={"key": "value"}) as resp:
+    result = await resp.json()
+
+# 下载文件
+async with session.get(img_url) as resp:
+    with open("image.jpg", "wb") as f:
+        f.write(await resp.read())
+```
+
+| 特性 | Requests | Aiohttp |
+|------|----------|---------|
+| 同步/异步 | 同步 | 异步 |
+| 并发 | 线程池 | asyncio gather |
+| 性能 | 中等 | 高 |
+| 学习曲线 | 简单 | 中等 |

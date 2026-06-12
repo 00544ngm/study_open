@@ -1,0 +1,63 @@
+---
+title: 文件权限
+order: 5
+difficulty: intermediate
+estimated_time: 15min
+tags: [Linux, 进阶]
+---
+
+## 入门
+
+```bash
+# 查看权限
+ls -l                    # 显示文件权限
+# 输出: -rwxr-xr-x  user group size date name
+#       ^^^^        权限位
+
+# 权限构成: r=读(4) w=写(2) x=执行(1)
+# 三组: 所有者 | 所属组 | 其他人
+
+chmod 755 script.sh      # rwxr-xr-x
+chmod 644 config.yaml    # rw-r--r--
+chmod +x run.sh          # 添加执行权限
+```
+
+## 核心
+
+```bash
+# 符号模式
+chmod u+x file           # 所有者加执行权限
+chmod g-w file           # 所属组去掉写权限
+chmod o=r file           # 其他人设为只读
+chmod a+x file           # 所有人加执行权限
+
+# 递归修改
+chmod -R 755 scripts/    # 目录及内部全部修改
+chmod +x *.py            # 批量添加执行权限
+
+# 更改所有者
+sudo chown user:admin config.json
+sudo chown -R user:admin project/
+```
+
+## 进阶
+
+```bash
+# SSH 密钥必须 600 权限
+chmod 600 ~/.ssh/id_rsa
+chmod 700 ~/.ssh
+
+# 默认权限掩码
+umask                    # 查看: 0022
+umask 0027               # 设置更严格默认权限
+
+# 特殊权限
+chmod u+s executable     # SUID - 以所有者身份执行
+chmod g+s directory      # SGID - 继承组权限
+chmod +t /tmp            # Sticky Bit - 防删除
+```
+
+## 练习
+
+1. 创建一个脚本文件，添加执行权限后运行
+2. 将 SSH 私钥文件权限改为 600，公钥改为 644

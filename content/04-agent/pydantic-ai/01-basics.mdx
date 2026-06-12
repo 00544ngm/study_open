@@ -1,0 +1,104 @@
+---
+title: PydanticAI 基础入门
+order: 1
+difficulty: beginner
+estimated_time: 25min
+tags: [PydanticAI, Agent, Python]
+---
+
+## 安装
+
+```bash
+pip install pydantic-ai-slim
+# 或完整版（包含 logfire 等依赖）
+pip install pydantic-ai
+```
+
+## 第一个 Agent
+
+PydanticAI 的核心是 `Agent` 类。你指定一个模型，Agent 自动处理对话、工具调用和结构化输出。
+
+```python
+from pydantic_ai import Agent
+
+agent = Agent("openai:gpt-4o")
+
+result = agent.run_sync("用一句话解释什么是 Agent")
+print(result.data)
+```
+
+Agent 默认以字符串形式返回结果。但你也可以指定输出类型。
+
+## 带结构化输出的 Agent
+
+```python
+from pydantic_ai import Agent
+from pydantic import BaseModel
+
+class Joke(BaseModel):
+    setup: str
+    punchline: str
+
+agent = Agent("openai:gpt-4o", result_type=Joke)
+
+result = agent.run_sync("给我讲一个关于 Python 的笑话")
+print(f"Setup: {result.data.setup}")
+print(f"Punchline: {result.data.punchline}")
+```
+
+通过 `result_type` 参数传入 Pydantic 模型，Agent 自动返回结构化的 JSON 对象，无需手动解析。
+
+## 系统提示词
+
+```python
+agent = Agent(
+    "openai:gpt-4o",
+    system_prompt="你是一个乐于助人的 Python 导师，回复简洁明了。",
+)
+
+result = agent.run_sync("解释一下装饰器是什么")
+print(result.data)
+```
+
+也可以用 `system_prompt` 装饰器动态生成：
+
+```python
+from datetime import date
+
+agent = Agent("openai:gpt-4o")
+
+@agent.system_prompt
+def add_date() -> str:
+    return f"当前日期：{date.today()}"
+```
+
+## 对话历史
+
+PydanticAI 的消息存储在新版的 `MessageHistory` 中（v0.2+），支持保留上下文：
+
+```python
+from pydantic_ai import Agent
+from pydantic_ai.messages import ModelMessage
+
+agent = Agent("openai:gpt-4o")
+
+# 第一轮
+result1 = agent.run_sync("我的名字是 Alice")
+# 获取当前消息历史
+history = result1.all_messages()
+
+# 第二轮，传入历史
+result2 = agent.run_sync("我叫什么名字？", message_history=history)
+print(result2.data)  # 输出 Alice
+```
+
+## 关键概念
+
+| 概念 | 说明 |
+|------|------|
+| Agent | 核心类，封装 LLM + 工具 + 输出类型 |
+| run_sync | 同步运行 |
+| run | 异步运行（await） |
+| result_type | 指定输出 Pydantic 模型 |
+| system_prompt | 系统提示词 |
+| message_history | 对话上下文传递 |

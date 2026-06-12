@@ -1,0 +1,109 @@
+---
+title: Grafana 告警
+order: 3
+difficulty: advanced
+estimated_time: 20min
+tags: [Grafana, 告警]
+---
+
+## 入门
+
+Grafana 告警规则基于面板查询，满足条件时发送通知。
+
+```text
+评估周期: 每 30s 检查一次条件
+条件:     查询结果是否超过阈值
+联系人:   通知接收人 (邮件、飞书、Slack 等)
+```
+
+## 核心
+
+### 创建告警规则
+
+```promql
+# 告警条件查询
+# 面板 A: 最近 5 分钟错误率
+sum(rate(agent_errors_total[5m])) 
+/ sum(rate(agent_requests_total[5m])) * 100
+
+# 条件: 当 B 的值为 5 (即 5%) 时触发
+```
+
+### 通知渠道配置
+
+```yaml
+# provisioning/contact-points.yaml
+apiVersion: 1
+contactPoints:
+  - name: feishu
+    receivers:
+      - uid: feishu-webhook
+        type: webhook
+        settings:
+          url: https://open.feishu.cn/open-apis/bot/v2/hook/xxx
+          httpMethod: POST
+```
+
+### 告警规则模板
+
+```yaml
+# provisioning/rules/agent-alerts.yaml
+apiVersion: 1
+groups:
+  - name: agent-alerts
+    interval: 30s
+    rules:
+      - alert: HighErrorRate
+        expr: |
+          sum(rate(agent_errors_total[5m])) 
+          / sum(rate(agent_requests_total[5m])) * 100
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Agent 错误率 {{ $value | humanize }}%"
+          
+      - alert: NoTraffic
+        expr: rate(agent_requests_total[5m]) == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "10 分钟无任何请求"
+```
+
+## 进阶
+
+### 静默和抑制
+
+```text
+Silence:  在维护期间静默指定告警
+Mute Timing: 按时间周期静默 (如夜间)
+```
+
+### 飞书通知集成
+
+```python
+import requests
+
+# 飞书自定义机器人
+def send_feishu_alert(message: str):
+    url = "https://open.feishu.cn/open-apis/bot/v2/hook/xxx"
+    data = {
+        "msg_type": "post",
+        "content": {
+            "post": {
+                "zh_cn": {
+                    "title": "Agent 告警",
+                    "content": [[{"tag": "text", "text": message}]]
+                }
+            }
+        }
+    }
+    requests.post(url, json=data)
+```
+
+## 练习
+
+1. 创建一个当错误率 > 5% 的告警规则，配置飞书通知
+2. 设置静默规则，让维护期间的告警不触发

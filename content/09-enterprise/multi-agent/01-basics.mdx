@@ -1,0 +1,61 @@
+---
+title: 多 Agent 系统架构
+order: 1
+difficulty: advanced
+estimated_time: 30min
+tags: [企业级, Agent]
+---
+
+## 核心
+
+### 多 Agent 架构模式
+
+```python
+from typing import TypedDict, Literal
+from langgraph.graph import StateGraph, END
+
+class OrchestratorState(TypedDict):
+    task: str
+    plan: list
+    results: dict
+    final: str
+
+def decompose_task(state: OrchestratorState) -> OrchestratorState:
+    """将任务分解为子任务"""
+    plan = ["search_info", "analyze_data", "generate_report"]
+    return {"plan": plan}
+
+def route_task(state: OrchestratorState) -> Literal["search", "analyze", "report"]:
+    step = state["plan"][0] if state["plan"] else None
+    return {"search": "search", "analyze": "analyze", "report": "report"}.get(step)
+
+# 定义子 Agent
+def search_agent(state: OrchestratorState) -> OrchestratorState:
+    return {"results": {"search": "搜索结果..."}}
+
+def analyze_agent(state: OrchestratorState) -> OrchestratorState:
+    return {"results": {"analysis": "分析结果..."}}
+
+def report_agent(state: OrchestratorState) -> OrchestratorState:
+    return {"final": "最终报告..."}
+
+# 构建多 Agent 系统
+builder = StateGraph(OrchestratorState)
+builder.add_node("decompose", decompose_task)
+builder.add_node("search", search_agent)
+builder.add_node("analyze", analyze_agent)
+builder.add_node("report", report_agent)
+
+builder.set_entry_point("decompose")
+builder.add_conditional_edges("decompose", route_task)
+builder.add_edge("search", "analyze")
+builder.add_edge("analyze", "report")
+builder.add_edge("report", END)
+
+system = builder.compile()
+```
+
+## 练习
+
+1. 实现一个三 Agent 协作系统：研究 Agent → 写作 Agent → 审核 Agent
+2. 为每个 Agent 设置独立的模型和系统提示词

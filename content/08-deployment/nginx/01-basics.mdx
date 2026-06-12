@@ -1,0 +1,60 @@
+---
+title: Nginx 基础
+order: 1
+difficulty: intermediate
+estimated_time: 15min
+tags: [Nginx, 部署]
+---
+
+## 入门
+
+```nginx
+# nginx.conf
+server {
+    listen 80;
+    server_name api.example.com;
+
+    location / {
+        proxy_pass http://localhost:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+```
+
+## 核心
+
+```nginx
+# Agent 平台 API 网关
+upstream agent_api {
+    server api1:8000;
+    server api2:8000;
+}
+
+server {
+    listen 443 ssl;
+    server_name agent.example.com;
+
+    # API 路由
+    location /api/ {
+        proxy_pass http://agent_api/;
+        proxy_set_header Host $host;
+
+        # WebSocket 支持
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+
+    # 静态文件
+    location /static/ {
+        root /var/www/agent;
+        expires 7d;
+    }
+}
+```
+
+## 练习
+
+1. 配置 Nginx 反向代理到 FastAPI，包含 WebSocket 支持
+2. 添加 SSL 证书配置（Let's Encrypt）

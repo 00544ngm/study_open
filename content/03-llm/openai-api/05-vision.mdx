@@ -1,0 +1,173 @@
+---
+title: 多模态与图片理解
+order: 5
+difficulty: intermediate
+estimated_time: 25min
+tags: [OpenAI, 多模态, Vision, GPT-4V]
+---
+
+## 入门
+
+GPT-4o 支持图片输入，可以对图像进行分析、描述、提取文字等。
+
+## 核心
+
+### 图片理解
+
+```python
+from openai import OpenAI
+import base64
+
+client = OpenAI()
+
+def image_to_base64(image_path: str) -> str:
+    with open(image_path, "rb") as f:
+        return base64.b64encode(f.read()).decode()
+
+# 方式1: Base64 编码
+response = client.chat.completions.create(
+    model="gpt-4o",
+    messages=[
+        {"role": "user", "content": [
+            {"type": "text", "text": "这张图里有什么？"},
+            {"type": "image_url", "image_url": {
+                "url": f"data:image/png;base64,{image_to_base64('chart.png')}"
+            }}
+        ]}
+    ]
+)
+print(response.choices[0].message.content)
+
+# 方式2: URL 直链
+response = client.chat.completions.create(
+    model="gpt-4o",
+    messages=[
+        {"role": "user", "content": [
+            {"type": "text", "text": "描述这张架构图"},
+            {"type": "image_url", "image_url": {
+                "url": "https://example.com/architecture.png"
+            }}
+        ]}
+    ]
+)
+```
+
+### 提取结构化信息
+
+```python
+from pydantic import BaseModel
+from typing import List
+
+class ReceiptItem(BaseModel):
+    name: str
+    quantity: int
+    price: float
+
+class Receipt(BaseModel):
+    store_name: str
+    date: str
+    items: List[ReceiptItem]
+    total: float
+
+# 从收据图片提取信息
+response = client.beta.chat.completions.parse(
+    model="gpt-4o",
+    messages=[
+        {"role": "system", "content": "从收据图片中提取信息"},
+        {"role": "user", "content": [
+            {"type": "text", "text": "提取收据信息"},
+            {"type": "image_url", "image_url": {
+                "url": f"data:image/jpeg;base64,{image_to_base64('receipt.jpg')}"
+            }}
+        ]}
+    ],
+    response_format=Receipt,
+)
+
+receipt = response.choices[0].message.parsed
+print(f"{receipt.store_name} - 总计: {receipt.total}")
+```
+
+## 进阶
+
+### Agent 多模态能力
+
+```python
+class VisionAgent:
+    def __init__(self):
+        self.client = OpenAI()
+
+    async def analyze_screenshot(self, image_path: str, question: str) -> str:
+        """分析截图并回答问题"""
+        response = self.client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "你是 Agent 调试助手，分析截图并回答问题"},
+                {"role": "user", "content": [
+                    {"type": "text", "text": question},
+                    {"type": "image_url", "image_url": {
+                        "url": f"data:image/png;base64,{image_to_base64(image_path)}"
+                    }}
+                ]}
+            ],
+            max_tokens=1024,
+        )
+        return response.choices[0].message.content
+
+    async def extract_text_from_image(self, image_path: str) -> str:
+        """OCR：从图片中提取文字"""
+        response = self.client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "user", "content": [
+                    {"type": "text", "text": "提取这张图片中的所有文字，保持原格式"},
+                    {"type": "image_url", "image_url": {
+                        "url": f"data:image/png;base64,{image_to_base64(image_path)}"
+                    }}
+                ]}
+            ]
+        )
+        return response.choices[0].message.content
+
+# 使用：分析错误截图
+agent = VisionAgent()
+result = await agent.analyze_screenshot(
+    "error_screenshot.png",
+    "这个错误是什么原因？如何修复？"
+)
+```
+
+### 图片 + 工具结合
+
+```python
+# 客服 Agent 分析用户上传的商品图片
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "inspect_product_image",
+            "description": "分析商品图片，检测瑕疵",
+            "parameters": {"type": "object", "properties": {
+                "image_description": {"type": "string"},
+                "defects": {"type": "array", "items": {"type": "string"}}
+            }, "required": ["image_description", "defects"]}
+        }
+    }
+]
+
+# 用户上传了商品损坏的图片
+response = client.chat.completions.create(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": [
+        {"type": "text", "text": "我的商品收到了但是有损坏"},
+        {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,..."}}
+    ]}],
+    tools=tools,
+)
+```
+
+## 练习
+
+1. 用 GPT-4o 分析一张架构图，描述组件之间的关系
+2. 实现 Receipt 提取器，从收据照片中提取商品清单和总额
+3. 让 Agent 读取错误截图后自动搜索解决方案

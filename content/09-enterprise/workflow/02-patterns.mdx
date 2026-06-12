@@ -1,0 +1,200 @@
+---
+title: 工作流模式与实战
+order: 2
+difficulty: advanced
+estimated_time: 30min
+tags: [Workflow, 自动化, 企业级]
+---
+
+## 入门
+
+企业级 Agent 工作流需要处理状态持久化、错误重试、人工审批等场景。
+
+## 核心
+
+### 有状态工作流
+
+```python
+import json
+from datetime import datetime
+import redis.asyncio as redis
+
+class WorkflowState:
+    """工作流状态管理（基于 Redis）"""
+
+    def __init__(self, redis_client):
+        self.redis = redis_client
+
+    async def create_workflow(self, workflow_id: str, initial_data: dict):
+        state = {
+            "id": workflow_id,
+            "status": "pending",
+            "current_step": 0,
+            "data": initial_data,
+            "errors": [],
+            "created_at": datetime.now().isoformat(),
+            "updated_at": datetime.now().isoformat()
+        }
+        await self.redis.set(
+            f"workflow:{workflow_id}",
+            json.dumps(state)
+        )
+        return state
+
+    async def get_state(self, workflow_id: str) -> dict:
+        data = await self.redis.get(f"workflow:{workflow_id}")
+        return json.loads(data) if data else None
+
+    async def update_step(self, workflow_id: str, step: int, result: dict):
+        state = await self.get_state(workflow_id)
+        state["current_step"] = step
+        state["data"].update(result)
+        state["updated_at"] = datetime.now().isoformat()
+        await self.redis.set(f"workflow:{workflow_id}", json.dumps(state))
+        return state
+
+    async def fail(self, workflow_id: str, error: str):
+        state = await self.get_state(workflow_id)
+        state["status"] = "failed"
+        state["errors"].append(error)
+        await self.redis.set(f"workflow:{workflow_id}", json.dumps(state))
+        return state
+```
+
+### 错误重试机制
+
+```python
+import asyncio
+from tenacity import retry, stop_after_attempt, wait_exponential
+
+class RobustWorkflow:
+    def __init__(self, state_manager: WorkflowState):
+        self.state = state_manager
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10)
+    )
+    async def execute_step(self, step_name: str, action):
+        """带指数退避重试的步骤执行"""
+        try:
+            return await action()
+        except Exception as e:
+            print(f"步骤 {step_name} 失败: {e}")
+            raise
+
+    async def run(self, workflow_id: str):
+        state = await self.state.get_state(workflow_id)
+        steps = [
+            ("数据验证", self.validate_data),
+            ("调用LLM", self.call_llm),
+            ("后处理", self.post_process)
+        ]
+
+        for i, (name, action) in enumerate(steps):
+            try:
+                result = await self.execute_step(name, action)
+                await self.state.update_step(workflow_id, i, result)
+            except Exception as e:
+                await self.state.fail(workflow_id, f"{name}: {str(e)}")
+                return {"status": "failed", "step": name, "error": str(e)}
+
+        return {"status": "completed"}
+```
+
+## 进阶
+
+### 人工审批节点
+
+```python
+class ApprovalWorkflow:
+    def __init__(self, state_manager: WorkflowState):
+        self.state = state_manager
+
+    async def request_approval(self, workflow_id: str, content: dict):
+        """创建审批请求，等待人工处理"""
+        approval = {
+            "workflow_id": workflow_id,
+            "content": content,
+            "status": "pending",
+            "requested_at": datetime.now().isoformat()
+        }
+
+        # 存储审批请求
+        await self.state.redis.set(
+            f"approval:{workflow_id}",
+            json.dumps(approval)
+        )
+
+        # 通知审批人（发送到消息队列）
+        await self.notify_approver(approval)
+
+        # 等待审批结果（轮询或 Webhook）
+        return await self.wait_approval(workflow_id)
+
+    async def wait_approval(self, workflow_id: str, timeout: int = 3600):
+        """等待审批结果"""
+        poll_interval = 5
+        waited = 0
+
+        while waited < timeout:
+            approval = await self.state.redis.get(f"approval:{workflow_id}")
+            data = json.loads(approval) if approval else {}
+
+            if data.get("status") == "approved":
+                return {"approved": True, "comment": data.get("comment")}
+            elif data.get("status") == "rejected":
+                return {"approved": False, "comment": data.get("comment")}
+
+            await asyncio.sleep(poll_interval)
+            waited += poll_interval
+
+        return {"approved": False, "comment": "审批超时"}
+```
+
+### 完整的 Agent 工作流
+
+```python
+class AgentWorkflow:
+    """完整的 Agent 自动化工作流"""
+
+    def __init__(self):
+        self.state_mgr = WorkflowState(redis_client)
+        self.llm = OpenAI()
+
+    async def process_ticket(self, ticket: dict) -> dict:
+        workflow_id = f"ticket_{ticket['id']}"
+
+        await self.state_mgr.create_workflow(workflow_id, ticket)
+
+        # Step 1: 分类
+        category = await self.classify(ticket)
+        await self.state_mgr.update_step(workflow_id, 1, {"category": category})
+
+        # Step 2: 自动处理（如果是常见问题）
+        if category == "faq":
+            answer = await self.auto_reply(ticket)
+            return {"action": "auto_reply", "content": answer}
+
+        # Step 3: 需要人工审批
+        approval = await self.request_approval_for_complex(ticket)
+
+        if approval["approved"]:
+            result = await self.execute_plan(ticket)
+            return {"action": "executed", "result": result}
+        else:
+            return {"action": "rejected", "reason": approval["comment"]}
+
+    async def classify(self, ticket):
+        response = self.llm.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": f"分类工单: {ticket['title']}\n类别: bug/feature/faq/other"}]
+        )
+        return response.choices[0].message.content.strip()
+```
+
+## 练习
+
+1. 实现一个带重试机制的 Agent 工作流，处理 LLM 调用超时场景
+2. 添加人工审批节点：Agent 自动处理简单请求，复杂请求等待审批
+3. 使用 Redis 持久化工作流状态，支持中断恢复

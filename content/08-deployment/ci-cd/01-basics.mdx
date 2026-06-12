@@ -1,0 +1,166 @@
+---
+title: CI/CD 基础
+order: 1
+difficulty: intermediate
+estimated_time: 20min
+tags: [CI/CD, GitHub Actions, 部署]
+---
+
+## 入门
+
+CI/CD 自动化代码检查、测试和部署流程，确保每次变更都经过验证。
+
+## 核心
+
+### GitHub Actions 工作流
+
+```yaml
+# .github/workflows/ci.yml
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: 设置 Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+        cache: 'pip'
+
+    - name: 安装依赖
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install ruff pytest
+
+    - name: 代码规范检查
+      run: ruff check .
+
+    - name: 运行测试
+      run: pytest --cov=app --cov-report=term-missing
+
+    - name: 构建 Docker 镜像
+      run: docker build -t agent-api:${{ github.sha }} .
+```
+
+### 部署工作流
+
+```yaml
+# .github/workflows/deploy.yml
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: 构建镜像
+      run: docker build -t registry.example.com/agent-api:latest .
+
+    - name: 推送到镜像仓库
+      run: |
+        docker login registry.example.com -u ${{ secrets.REGISTRY_USER }} \
+          -p ${{ secrets.REGISTRY_PASS }}
+        docker push registry.example.com/agent-api:latest
+
+    - name: 部署到服务器
+      uses: appleboy/ssh-action@v1
+      with:
+        host: ${{ secrets.DEPLOY_HOST }}
+        username: ${{ secrets.DEPLOY_USER }}
+        key: ${{ secrets.DEPLOY_KEY }}
+        script: |
+          cd /opt/agent
+          docker-compose pull
+          docker-compose up -d --force-recreate
+          docker image prune -f
+```
+
+## 进阶
+
+### 多环境部署
+
+```yaml
+name: Deploy to Environment
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: '部署环境'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+        - staging
+        - production
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: 部署到 ${{ github.event.inputs.environment }}
+      run: |
+        echo "部署到 ${{ github.event.inputs.environment }} 环境"
+        # 使用对应环境的配置
+        env_file=".env.${{ github.event.inputs.environment }}"
+        cp $env_file .env
+        docker-compose up -d
+```
+
+### 自动化测试流水线
+
+```yaml
+jobs:
+  test:
+    strategy:
+      matrix:
+        python-version: ['3.11', '3.12']
+        redis-version: [6, 7]
+
+    services:
+      redis:
+        image: redis:${{ matrix.redis-version }}
+        ports:
+          - 6379:6379
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: test
+        ports:
+          - 5432:5432
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: 集成测试
+      run: pytest tests/integration/
+      env:
+        REDIS_URL: redis://localhost:6379
+        DATABASE_URL: postgresql://postgres:test@localhost:5432/test
+```
+
+## 练习
+
+1. 为当前项目编写 CI 工作流：lint → test → build
+2. 添加一个部署工作流，支持手动选择 staging/production 环境
+3. 配置集成测试，使用 GitHub Actions 的 services 启动 Redis 和 PostgreSQL

@@ -1,0 +1,106 @@
+---
+title: React 组件与 Hooks
+order: 1
+difficulty: beginner
+estimated_time: 30min
+tags: [React, 前端, JavaScript, UI]
+---
+
+## 组件
+
+```jsx
+function AgentChat({ title }) {
+  return (
+    <div className="chat-window">
+      <h1>{title}</h1>
+      <MessageList />
+      <ChatInput />
+    </div>
+  );
+}
+```
+
+## 状态管理
+
+```jsx
+import { useState } from "react";
+
+function ChatInput({ onSend }) {
+  const [input, setInput] = useState("");
+
+  return (
+    <div className="flex gap-2">
+      <input
+        value={input}
+        onChange={(e) => setInput(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && input.trim()) {
+            onSend(input);
+            setInput("");
+          }
+        }}
+        className="flex-1 p-2 border rounded"
+      />
+      <button onClick={() => { onSend(input); setInput(""); }}>
+        发送
+      </button>
+    </div>
+  );
+}
+```
+
+## 副作用
+
+```jsx
+import { useState, useEffect } from "react";
+
+function AgentStatus({ agentId }) {
+  const [status, setStatus] = useState("connecting");
+
+  useEffect(() => {
+    const ws = new WebSocket(`ws://api.example.com/agents/${agentId}`);
+    ws.onmessage = (event) => setStatus(event.data);
+    return () => ws.close(); // 清理
+  }, [agentId]); // agentId 变化时重新连接
+
+  return <span>状态: {status}</span>;
+}
+```
+
+## 流式渲染
+
+```jsx
+function StreamResponse() {
+  const [text, setText] = useState("");
+
+  const handleStream = async () => {
+    const resp = await fetch("/api/chat", {
+      method: "POST",
+      body: JSON.stringify({ message: "你好" }),
+    });
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      setText((prev) => prev + decoder.decode(value));
+    }
+  };
+
+  return (
+    <div>
+      <button onClick={handleStream}>开始对话</button>
+      <div className="whitespace-pre-wrap">{text}</div>
+    </div>
+  );
+}
+```
+
+| 概念 | 说明 |
+|------|------|
+| 组件 | 可复用的 UI 片段 |
+| useState | 状态管理 |
+| useEffect | 副作用处理 |
+| props | 组件间传参 |
+| 事件处理 | onClick, onChange |

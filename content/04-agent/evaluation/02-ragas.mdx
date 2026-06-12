@@ -1,0 +1,168 @@
+---
+title: RAGAS 评估框架
+order: 2
+difficulty: advanced
+estimated_time: 25min
+tags: [RAGAS, 评估, RAG]
+---
+
+## 入门
+
+RAGAS 是专门用于评估 RAG 系统的框架，提供标准化的评估指标。
+
+## 核心
+
+### 安装
+
+```bash
+pip install ragas
+```
+
+### 核心指标
+
+```python
+from ragas.metrics import (
+    faithfulness,      # 忠实度：回答是否基于检索到的上下文
+    answer_relevancy,  # 相关性：回答是否针对问题
+    context_precision,  # 上下文精确度：检索结果是否相关
+    context_recall,     # 上下文召回率：是否覆盖所有必要信息
+)
+```
+
+### 评估 RAG 系统
+
+```python
+from ragas import evaluate
+from ragas.metrics import faithfulness, answer_relevancy
+from datasets import Dataset
+
+# 准备评估数据
+eval_data = {
+    "question": [
+        "什么是 AI Agent？",
+        "MCP 协议有什么用？",
+        "LangChain 是什么？"
+    ],
+    "answer": [
+        "AI Agent 是能自主决策的 AI 系统",
+        "MCP 是 Anthropic 提出的模型上下文协议",
+        "LangChain 是一个 LLM 应用开发框架"
+    ],
+    "contexts": [
+        ["AI Agent 是能够自主感知环境、做出决策并执行行动的智能系统"],
+        ["MCP (Model Context Protocol) 是 Anthropic 提出的开放协议"],
+        ["LangChain 是一个用于构建 LLM 应用的框架，提供链、Agent 等组件"]
+    ],
+    "ground_truth": [
+        "AI Agent 是能自主决策和行动的 AI 系统，具备感知、推理和执行能力",
+        "MCP 协议用于标准化 LLM 与外部工具的交互方式",
+        "LangChain 是构建 LLM 应用的框架，提供链式调用和 Agent 能力"
+    ]
+}
+
+dataset = Dataset.from_dict(eval_data)
+
+# 运行评估
+result = evaluate(
+    dataset,
+    metrics=[faithfulness, answer_relevancy]
+)
+
+print(result)
+# {'faithfulness': 0.95, 'answer_relevancy': 0.88}
+```
+
+## 进阶
+
+### 自定义指标
+
+```python
+from ragas.metrics.base import MetricWithLLM
+from ragas.llms import llm_factory
+
+class CustomCompleteness(MetricWithLLM):
+    """自定义指标：评估回答的完整度"""
+    name = "completeness"
+
+    def __init__(self):
+        super().__init__(llm_factory())
+
+    async def _score(self, row, callbacks=None):
+        question = row["question"]
+        answer = row["answer"]
+        ground_truth = row["ground_truth"]
+
+        prompt = f"""比较回答和标准答案，评估完整度（0-1）：
+问题: {question}
+标准答案: {ground_truth}
+回答: {answer}
+
+只返回一个 0-1 之间的数字。"""
+
+        response = await self.llm.generate(prompt)
+        return float(response.strip())
+
+# 使用自定义指标
+from ragas import evaluate
+
+result = evaluate(
+    dataset,
+    metrics=[faithfulness, CustomCompleteness()]
+)
+```
+
+### CI 集成
+
+```python
+# eval_ci.py — 在 CI 中运行评估，低于阈值则失败
+import sys
+from ragas import evaluate
+from datasets import Dataset
+
+MIN_THRESHOLD = {
+    "faithfulness": 0.85,
+    "answer_relevancy": 0.80,
+}
+
+def run_ci_eval():
+    dataset = Dataset.from_dict(load_test_cases())
+    result = evaluate(dataset)
+
+    failed = False
+    for metric, score in result.items():
+        threshold = MIN_THRESHOLD.get(metric, 0.7)
+        status = "PASS" if score >= threshold else "FAIL"
+        print(f"{status} | {metric}: {score:.3f} (threshold: {threshold})")
+        if score < threshold:
+            failed = True
+
+    if failed:
+        print("评估未通过，请检查修改")
+        sys.exit(1)
+    else:
+        print("全部评估通过！")
+```
+
+```yaml
+# .github/workflows/eval.yml
+name: RAG Evaluation
+
+on:
+  push:
+    paths: ['content/**', 'src/**']
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: 运行评估
+      run: python eval_ci.py
+      env:
+        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+```
+
+## 练习
+
+1. 为自己的 RAG 系统运行 RAGAS 评估，记录 faithfulness 和 answer_relevancy 分数
+2. 自定义一个 completeness 指标，集成到 CI 流程中，低于 0.8 则阻止合并

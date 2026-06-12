@@ -1,0 +1,236 @@
+---
+title: 完整摄入管线
+order: 3
+difficulty: advanced
+estimated_time: 30min
+tags: [Pipeline, 数据, RAG]
+---
+
+## 入门
+
+将爬取、解析、分块、向量化、入库串联为完整的自动化管线。
+
+## 核心
+
+### Pipeline 架构
+
+```python
+from dataclasses import dataclass
+from typing import List, Callable, Optional
+
+@dataclass
+class Document:
+    source: str
+    title: str
+    content: str
+    metadata: dict
+
+    def to_chunk(self, chunk_text: str, chunk_index: int):
+        return {
+            "text": chunk_text,
+            "metadata": {
+                **self.metadata,
+                "source": self.source,
+                "title": self.title,
+                "chunk_index": chunk_index
+            }
+        }
+
+class IngestionPipeline:
+    def __init__(self):
+        self.steps: List[tuple[str, Callable]] = []
+        self.documents: List[Document] = []
+
+    def add_step(self, name: str, fn: Callable):
+        self.steps.append((name, fn))
+
+    async def run(self, sources: List[str]):
+        for source in sources:
+            doc = await self._process_source(source)
+            self.documents.append(doc)
+        return self.documents
+
+    async def _process_source(self, source: str) -> Document:
+        data = {"source": source}
+        for name, fn in self.steps:
+            print(f"  [{name}] 处理 {source}")
+            data = await fn(data) if asyncio.iscoroutinefunction(fn) else fn(data)
+        return Document(**data)
+```
+
+### 完整 Pipeline
+
+```python
+import asyncio
+from openai import OpenAI
+
+client = OpenAI()
+
+async def build_pipeline():
+    pipeline = IngestionPipeline()
+
+    # Step 1: 爬取
+    async def fetch(data):
+        content = await crawl_page(data["source"])
+        return {**data, "title": content["title"], "content": content["content"]}
+
+    # Step 2: 清洗
+    def clean(data):
+        cleaner = TextCleaner()
+        return {**data, "content": cleaner.clean(data["content"])}
+
+    # Step 3: 分块
+    def chunk(data):
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=500, chunk_overlap=50
+        )
+        chunks = splitter.split_text(data["content"])
+        return {**data, "chunks": chunks}
+
+    # Step 4: 生成 Embedding
+    def embed(data):
+        embeddings = []
+        for chunk in data["chunks"]:
+            response = client.embeddings.create(
+                model="text-embedding-3-small",
+                input=chunk
+            )
+            embeddings.append(response.data[0].embedding)
+        return {**data, "embeddings": embeddings}
+
+    # Step 5: 写入向量数据库
+    async def index(data):
+        from qdrant_client import QdrantClient
+        from qdrant_client.http.models import PointStruct
+        import uuid
+
+        client = QdrantClient("localhost", port=6333)
+        points = []
+        for i, (chunk, vec) in enumerate(zip(data["chunks"], data["embeddings"])):
+            points.append(PointStruct(
+                id=str(uuid.uuid4()),
+                vector=vec,
+                payload={
+                    "text": chunk,
+                    "source": data["source"],
+                    "title": data["title"],
+                    "chunk_index": i
+                }
+            ))
+
+        client.upsert(
+            collection_name="knowledge_base",
+            points=points,
+            wait=True
+        )
+        return {**data, "indexed": len(points)}
+
+    pipeline.add_step("fetch", fetch)
+    pipeline.add_step("clean", clean)
+    pipeline.add_step("chunk", chunk)
+    pipeline.add_step("embed", embed)
+    pipeline.add_step("index", index)
+
+    return pipeline
+
+# 执行
+async def main():
+    pipeline = await build_pipeline()
+    results = await pipeline.run([
+        "https://docs.python.org/3/tutorial/",
+        "https://python.langchain.com/docs/tutorials/",
+    ])
+    print(f"完成: {len(results)} 篇文档，共 {sum(r.get('indexed', 0) for r in results)} 个向量")
+
+asyncio.run(main())
+```
+
+## 进阶
+
+### 增量更新与去重
+
+```python
+class IncrementalPipeline:
+    """支持增量更新的管线"""
+
+    def __init__(self, qdrant_client):
+        self.client = qdrant_client
+
+    async def sync_source(self, source: str, force: bool = False):
+        """同步单个数据源"""
+
+        # 检查是否已处理过
+        existing = self.client.scroll(
+            collection_name="knowledge_base",
+            scroll_filter=Filter(
+                must=[FieldCondition(key="source", match=MatchValue(value=source))]
+            ),
+            limit=1
+        )
+
+        if existing[0] and not force:
+            print(f"跳过 {source}（已存在）")
+            return
+
+        # 重新处理
+        doc = await self._process(source)
+
+        # 删除旧数据
+        if existing[0]:
+            self.client.delete(
+                collection_name="knowledge_base",
+                points_selector=FilterSelector(
+                    filter=Filter(
+                        must=[FieldCondition(key="source", match=MatchValue(value=source))]
+                    )
+                )
+            )
+
+        # 写入新数据
+        self._index_doc(doc)
+        print(f"更新完成: {source}")
+```
+
+### 调度器
+
+```python
+import schedule
+import time
+
+class PipelineScheduler:
+    """定时执行摄入管线"""
+
+    def __init__(self, pipeline: IngestionPipeline):
+        self.pipeline = pipeline
+
+    def start_daily(self, sources: List[str], time_str: str = "02:00"):
+        """每天凌晨执行"""
+        schedule.every().day.at(time_str).do(self.pipeline.run, sources)
+
+        while True:
+            schedule.run_pending()
+            time.sleep(60)
+
+    def start_on_change(self, watch_dir: str):
+        """监控文件变化，触发增量更新"""
+        from watchdog.observers import Observer
+        from watchdog.events import FileSystemEventHandler
+
+        class ChangeHandler(FileSystemEventHandler):
+            def __init__(self, pipeline):
+                self.pipeline = pipeline
+
+            def on_modified(self, event):
+                if event.src_path.endswith(".md"):
+                    asyncio.run(self.pipeline.run([event.src_path]))
+
+        observer = Observer()
+        observer.schedule(ChangeHandler(self.pipeline), watch_dir, recursive=True)
+        observer.start()
+```
+
+## 练习
+
+1. 实现一个 5 步摄入管线：爬取 → 清洗 → 分块 → Embedding → 写入 Qdrant
+2. 添加增量更新逻辑，避免重复处理已入库的文档
+3. 配置定时调度器，每天凌晨自动同步指定数据源

@@ -1,0 +1,47 @@
+---
+title: 包管理
+order: 4
+difficulty: beginner
+estimated_time: 15min
+tags: [Linux, 基础]
+---
+
+## 入门
+
+```bash
+# Debian/Ubuntu (apt)
+sudo apt update                    # 更新包索引
+sudo apt install python3           # 安装包
+sudo apt remove nginx              # 卸载包
+sudo apt upgrade                   # 升级所有包
+sudo apt autoremove                # 清理无用依赖
+
+# 查找包
+apt search python                  # 搜索包
+apt show python3                   # 查看包详情
+dpkg -l                           # 列出已安装包
+```
+
+## 核心
+
+```bash
+# RHEL/CentOS/Fedora (yum/dnf)
+sudo yum install python3          # 安装
+sudo yum remove nginx             # 卸载
+sudo yum update                   # 更新
+
+# pip (Python 包管理器)
+pip install openai langchain      # 安装 Python 包
+pip list                          # 列出已安装
+pip show fastapi                  # 查看包信息
+pip freeze > requirements.txt     # 导出依赖
+
+# 添加软件源
+curl -fsSL https://get.docker.com | bash
+sudo add-apt-repository ppa:deadsnakes/ppa
+```
+
+## 练习
+
+1. 使用 `apt` 安装 `htop` 和 `tree` 两个工具
+2. 用 `pip list | grep requests` 检查是否安装了 requests 库

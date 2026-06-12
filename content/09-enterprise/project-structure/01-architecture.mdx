@@ -1,0 +1,192 @@
+---
+title: 项目结构与配置
+order: 1
+difficulty: intermediate
+estimated_time: 20min
+tags: [架构, 项目结构, 配置]
+---
+
+## 入门
+
+生产级 AI Agent 项目需要清晰的目录结构和分层配置管理。
+
+## 核心
+
+### 推荐项目结构
+
+```
+agent-project/
+├── app/                          # 应用代码
+│   ├── __init__.py
+│   ├── main.py                   # 入口 FastAPI
+│   ├── api/                      # API 路由
+│   │   ├── __init__.py
+│   │   ├── chat.py               # 聊天接口
+│   │   └── admin.py              # 管理接口
+│   ├── agents/                   # Agent 定义
+│   │   ├── __init__.py
+│   │   ├── base.py               # 基类 Agent
+│   │   ├── customer_service.py   # 客服 Agent
+│   │   └── research.py           # 研究 Agent
+│   ├── tools/                    # 工具注册
+│   │   ├── __init__.py
+│   │   ├── registry.py           # 工具注册中心
+│   │   ├── search.py             # 搜索工具
+│   │   └── calculator.py         # 计算工具
+│   ├── llm/                      # LLM 客户端
+│   │   ├── __init__.py
+│   │   ├── client.py             # LLM 封装
+│   │   └── factory.py            # 工厂模式
+│   └── memory/                   # 记忆/状态管理
+│       ├── __init__.py
+│       ├── redis_memory.py
+│       └── store.py
+├── tests/
+│   ├── unit/
+│   │   ├── test_tools.py
+│   │   └── test_agents.py
+│   ├── integration/
+│   │   └── test_api.py
+│   └── conftest.py               # 共享 fixtures
+├── config/
+│   ├── config.py                 # Pydantic Settings
+│   ├── development.yaml
+│   ├── production.yaml
+│   └── .env.example
+├── docker/
+│   ├── Dockerfile
+│   └── docker-compose.yml
+├── scripts/
+│   ├── seed_data.py              # 初始化数据
+│   └── eval.py                   # 评估脚本
+├── pyproject.toml
+└── README.md
+```
+
+### 配置管理
+
+```python
+# config/config.py
+from pydantic_settings import BaseSettings
+from typing import Optional
+
+class Settings(BaseSettings):
+    # 应用
+    app_name: str = "AI Agent"
+    debug: bool = False
+    log_level: str = "INFO"
+
+    # LLM
+    openai_api_key: Optional[str] = None
+    anthropic_api_key: Optional[str] = None
+    default_model: str = "gpt-4o"
+    max_tokens: int = 4096
+    temperature: float = 0.7
+
+    # 外部服务
+    redis_url: str = "redis://localhost:6379"
+    qdrant_url: str = "http://localhost:6333"
+    database_url: str = "sqlite:///app.db"
+
+    # Agent
+    agent_timeout: int = 30
+    max_retries: int = 3
+
+    class Config:
+        env_file = ".env"
+        env_file_encoding = "utf-8"
+
+settings = Settings()
+```
+
+### 多环境配置
+
+```yaml
+# config/development.yaml
+app:
+  debug: true
+  log_level: DEBUG
+
+llm:
+  default_model: gpt-4o-mini  # 开发环境用便宜模型
+
+redis:
+  url: redis://localhost:6379
+```
+
+```yaml
+# config/production.yaml
+app:
+  debug: false
+  log_level: WARNING
+
+llm:
+  default_model: gpt-4o
+  max_retries: 5
+
+redis:
+  url: redis://redis-cluster:6379
+  pool_size: 20
+```
+
+## 进阶
+
+### 分层架构
+
+```python
+# 清晰的职责分层
+"""
+Router (API层)     → 请求/响应格式，认证，限流
+    ↓
+Service (业务层)   → Agent 编排，工作流
+    ↓
+Agent (Agent层)    → LLM 调用，工具选择
+    ↓
+Tool (工具层)      → 具体工具实现
+    ↓
+External (外部服务) → Redis, Qdrant, Database
+"""
+
+# 示例：Service 层
+class ChatService:
+    def __init__(self):
+        self.agent = CustomerServiceAgent()
+        self.memory = RedisMemory()
+
+    async def process_message(self, user_id: str, message: str) -> str:
+        history = await self.memory.get_history(user_id)
+        response = await self.agent.run(message, history)
+        await self.memory.save(user_id, message, response)
+        return response
+```
+
+### 依赖注入
+
+```python
+from functools import lru_cache
+
+@lru_cache()
+def get_settings() -> Settings:
+    return Settings()
+
+def get_llm_client():
+    return LLMFactory.create(settings=get_settings())
+
+def get_vector_store():
+    return QdrantClient(url=get_settings().qdrant_url)
+
+# FastAPI 中使用
+@app.post("/chat")
+async def chat(
+    request: ChatRequest,
+    llm: OpenAI = Depends(get_llm_client),
+    store: QdrantClient = Depends(get_vector_store),
+):
+    pass
+```
+
+## 练习
+
+1. 按照推荐结构创建你的 Agent 项目骨架
+2. 用 Pydantic Settings 管理多环境配置（开发/测试/生产）
+3. 实现 FastAPI 依赖注入：get_settings 和 get_llm_client

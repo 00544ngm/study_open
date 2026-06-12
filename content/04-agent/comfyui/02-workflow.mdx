@@ -1,0 +1,200 @@
+---
+title: 进阶工作流与 API 集成
+order: 2
+difficulty: intermediate
+estimated_time: 30min
+tags: [ComfyUI, 工作流, API, Agent]
+---
+
+## 高级工作流技巧
+
+### ControlNet
+
+ControlNet 通过额外条件（姿态、深度、边缘）精确控制生成：
+
+```
+LoadImage → 预处理器 → ControlNetLoader → ControlNetApply
+                                              ↓
+CheckpointLoader → CLIPTextEncode → KSampler → VAEDecode → SaveImage
+```
+
+常用 ControlNet：
+
+| 类型 | 预处理器 | 用途 |
+|------|---------|------|
+| Canny | 边缘检测 | 保持构图 |
+| OpenPose | 姿态检测 | 控制人体姿势 |
+| Depth | 深度估计 | 保持空间结构 |
+| Scribble | 草图 | 手绘控制 |
+
+### 高清放大
+
+```text
+第一遍: 低分辨率生成 (512x512)
+  → Upscale Latent / 缩放
+  → 第二遍 KSampler (denoise=0.3-0.5)
+  → 最终输出
+```
+
+### IP-Adapter
+
+用参考图控制风格和内容：
+
+```
+LoadImage → CLIPVision → IPAdapter → KSampler
+```
+
+## API 模式
+
+ComfyUI 支持 API 模式，让外部程序调用工作流。
+
+### 启动 API 模式
+
+```bash
+python main.py --listen 0.0.0.0 --port 8188
+```
+
+### 导出 API 格式工作流
+
+在 ComfyUI 中点击 `Save (API Format)` 导出 JSON。然后通过 API 提交：
+
+```python
+import json
+import requests
+import random
+from pathlib import Path
+
+COMFY_HOST = "http://localhost:8188"
+
+def queue_workflow(workflow_json: dict) -> str:
+    """提交工作流到 ComfyUI 队列"""
+    payload = {"prompt": workflow_json}
+    resp = requests.post(f"{COMFY_HOST}/prompt", json=payload)
+    return resp.json()["prompt_id"]
+
+def get_output(prompt_id: str) -> list[str]:
+    """轮询直到生成完成，返回图片路径列表"""
+    while True:
+        resp = requests.get(f"{COMFY_HOST}/history/{prompt_id}")
+        history = resp.json()
+        if prompt_id in history:
+            outputs = history[prompt_id]["outputs"]
+            images = []
+            for node_id, node_out in outputs.items():
+                for img in node_out.get("images", []):
+                    images.append(
+                        f"{COMFY_HOST}/view?filename={img['filename']}"
+                        f"&subfolder={img['subfolder']}&type={img['type']}"
+                    )
+            return images
+```
+
+## Agent 集成
+
+将 ComfyUI 作为 Agent 的图像生成工具：
+
+```python
+from pydantic_ai import Agent, RunContext
+import requests
+import json
+import time
+
+class ImageGenerationResult:
+    url: str
+    prompt: str
+    seed: int
+
+agent = Agent("openai:gpt-4o")
+
+@agent.tool
+def generate_image(ctx: RunContext[dict], prompt: str, negative_prompt: str = "") -> str:
+    """用 ComfyUI 生成图像，返回图片 URL"""
+    # 加载 API 格式工作流
+    workflow = json.loads(open("txt2img_api.json").read())
+
+    # 注入提示词
+    for node_id, node in workflow.items():
+        if node["class_type"] == "CLIPTextEncode":
+            if node["_meta"]["title"] == "正向提示词":
+                node["inputs"]["text"] = prompt
+            elif node["_meta"]["title"] == "负向提示词":
+                node["inputs"]["text"] = negative_prompt
+
+    # 提交
+    resp = requests.post("http://localhost:8188/prompt", json={"prompt": workflow})
+    prompt_id = resp.json()["prompt_id"]
+
+    # 轮询结果
+    for _ in range(120):
+        hist = requests.get(f"http://localhost:8188/history/{prompt_id}").json()
+        if prompt_id in hist:
+            outputs = hist[prompt_id]["outputs"]
+            for node_id, node_out in outputs.items():
+                for img in node_out.get("images", []):
+                    return (
+                        f"http://localhost:8188/view?filename={img['filename']}"
+                        f"&subfolder={img['subfolder']}&type={img['type']}"
+                    )
+        time.sleep(1)
+    return "生成超时"
+
+# Agent 自动决定何时调用图像生成
+result = agent.run_sync("画一张夕阳下的城市天际线")
+print(result.data)
+```
+
+## MCP 集成
+
+```python
+# 通过 MCP 协议将 ComfyUI 暴露给任何 MCP 客户端
+from mcp.server import Server
+from mcp.server.stdio import stdio_server
+
+server = Server("comfyui-server")
+
+@server.tool()
+async def generate_with_workflow(
+    workflow_path: str,
+    params: dict,
+) -> str:
+    """运行 ComfyUI 工作流并返回结果"""
+    workflow = json.loads(open(workflow_path).read())
+    # 替换参数
+    for key, value in params.items():
+        for node_id, node in workflow.items():
+            if key in node["inputs"]:
+                node["inputs"][key] = value
+    resp = requests.post(
+        "http://localhost:8188/prompt",
+        json={"prompt": workflow},
+    )
+    return resp.json()
+```
+
+## 批量生成
+
+```python
+import concurrent.futures
+
+prompts = [
+    "赛博朋克城市夜景",
+    "中世纪城堡日落",
+    "太空站内部",
+]
+
+def generate_one(prompt: str) -> str:
+    workflow = json.loads(open("txt2img_api.json").read())
+    # 注入 prompt...
+    resp = requests.post("http://localhost:8188/prompt", json={"prompt": workflow})
+    return resp.json()["prompt_id"]
+
+with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+    results = list(pool.map(generate_one, prompts))
+```
+
+| 场景 | 方法 |
+|------|------|
+| Agent 图像生成 | PydanticAI/LangChain 调用 ComfyUI API |
+| 批量生产 | 多线程并发提交，异步轮询结果 |
+| MCP 集成 | MCP Server 包装 ComfyUI 接口 |
+| 自动化流程 | Python SDK 控制完整工作流 |

@@ -1,0 +1,87 @@
+---
+title: 类与面向对象
+order: 3
+difficulty: beginner
+estimated_time: 25min
+tags: [Python, 基础]
+---
+
+## 入门
+
+```python
+class Agent:
+    def __init__(self, name: str):
+        self.name = name
+        self.memory = []
+
+    def think(self, prompt: str) -> str:
+        return f"{self.name} 思考: {prompt}"
+```
+
+## 核心
+
+### Agent 开发中的类设计模式
+
+```python
+from abc import ABC, abstractmethod
+from typing import List, Dict, Any
+
+# 抽象基类
+class BaseAgent(ABC):
+    def __init__(self, name: str, model: str = "gpt-4"):
+        self.name = name
+        self.model = model
+        self.messages: List[Dict[str, str]] = []
+
+    @abstractmethod
+    async def run(self, prompt: str) -> str:
+        pass
+
+    def add_message(self, role: str, content: str):
+        self.messages.append({"role": role, "content": content})
+
+# 具体实现
+class ChatAgent(BaseAgent):
+    async def run(self, prompt: str) -> str:
+        self.add_message("user", prompt)
+        # 调用 LLM API
+        response = f"模拟回复: {prompt}"
+        self.add_message("assistant", response)
+        return response
+
+class ToolAgent(BaseAgent):
+    def __init__(self, name: str, tools: Dict[str, Any]):
+        super().__init__(name)
+        self.tools = tools
+
+    async def run(self, prompt: str) -> str:
+        # 判断是否需要调用工具
+        return f"使用工具处理: {prompt}"
+```
+
+## 进阶
+
+### 组合模式（复杂 Agent 系统）
+
+```python
+class AgentOrchestrator:
+    """管理多个 Agent 的协调器"""
+    def __init__(self):
+        self.agents: Dict[str, BaseAgent] = {}
+
+    def register_agent(self, name: str, agent: BaseAgent):
+        self.agents[name] = agent
+
+    async def route(self, task: str) -> str:
+        # 路由到合适的 Agent
+        if "search" in task.lower():
+            return await self.agents["search"].run(task)
+        elif "chat" in task.lower():
+            return await self.agents["chat"].run(task)
+        return "无法路由任务"
+```
+
+## 练习
+
+1. 实现一个 `MemoryAgent` 类，包含短期记忆（列表）和长期记忆（存储到文件）
+2. 实现一个 `RouterAgent`，根据输入自动选择子 Agent 处理

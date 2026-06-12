@@ -1,0 +1,183 @@
+---
+title: LLM 评估基础
+order: 1
+difficulty: intermediate
+estimated_time: 25min
+tags: [评估, LLM, 测试]
+---
+
+## 入门
+
+LLM 输出不像传统软件有确定性的对错，需要专门的评估方法和指标。
+
+## 核心
+
+### 评估维度
+
+```python
+# 常见评估维度
+metrics = {
+    "正确性": "输出是否准确",
+    "相关性": "回答是否针对问题",
+    "连贯性": "逻辑是否通顺",
+    "安全性": "是否包含有害内容",
+    " faithfulness": "是否基于给定上下文（不幻觉）"
+}
+```
+
+### LLM-as-Judge
+
+```python
+from openai import OpenAI
+
+client = OpenAI()
+
+def llm_judge(question: str, answer: str, ground_truth: str) -> dict:
+    """用 LLM 评估另一个 LLM 的输出质量"""
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": """你是一个公正的评估者。
+从以下维度评分（1-5分）:
+1. 正确性: 与标准答案的一致性
+2. 完整性: 是否覆盖所有要点
+3. 简洁性: 是否简洁明了
+
+输出格式:
+正确性: <分数>
+完整性: <分数>
+简洁性: <分数>
+总评: <评语>"""},
+            {"role": "user", "content": f"""
+问题: {question}
+标准答案: {ground_truth}
+待评估回答: {answer}"""}
+        ]
+    )
+    return response.choices[0].message.content
+
+# 使用
+result = llm_judge(
+    "什么是 RAG？",
+    "RAG 是检索增强生成，结合搜索和生成",
+    "RAG (Retrieval-Augmented Generation) 是一种先检索相关信息，再基于检索结果生成答案的技术"
+)
+print(result)
+```
+
+### 自动化测试套件
+
+```python
+import json
+from typing import List, Callable
+
+class EvalSuite:
+    def __init__(self):
+        self.test_cases = []
+        self.results = []
+
+    def add_case(self, question: str, expected: str, **kwargs):
+        self.test_cases.append({
+            "question": question,
+            "expected": expected,
+            **kwargs
+        })
+
+    def run(self, agent_func: Callable, judge_func: Callable):
+        for case in self.test_cases:
+            # 让 Agent 回答
+            answer = agent_func(case["question"])
+
+            # 评估回答质量
+            score = judge_func(case["question"], answer, case["expected"])
+
+            self.results.append({
+                "question": case["question"],
+                "answer": answer,
+                "expected": case["expected"],
+                "score": score
+            })
+
+        # 汇总统计
+        self.summary()
+
+    def summary(self):
+        avg_scores = {"正确性": [], "完整性": [], "简洁性": []}
+        for r in self.results:
+            for k in avg_scores:
+                # 假设 score 字符串包含 "正确性: 4"
+                for line in r["score"].split("\n"):
+                    if k in line:
+                        try:
+                            score = int(line.split(":")[1].strip())
+                            avg_scores[k].append(score)
+                        except:
+                            pass
+
+        print("=== 评估报告 ===")
+        for k, v in avg_scores.items():
+            avg = sum(v) / len(v) if v else 0
+            print(f"{k}: {avg:.1f}/5")
+```
+
+## 进阶
+
+### 批量评估与回归
+
+```python
+import csv
+from datetime import datetime
+
+class RegressionTester:
+    """回归测试：确保每次修改不降低质量"""
+
+    def __init__(self, history_file="eval_history.json"):
+        self.history_file = history_file
+
+    def run_regression(self, agent_func, test_cases: List[dict]):
+        current_scores = []
+        for case in test_cases:
+            answer = agent_func(case["question"])
+            score = llm_judge(case["question"], answer, case["expected"])
+            current_scores.append(self._parse_score(score))
+
+        avg = sum(current_scores) / len(current_scores)
+        baseline = self._load_baseline()
+
+        if baseline and avg < baseline * 0.9:
+            print(f"警告: 评分从 {baseline:.2f} 降至 {avg:.2f}，质量下降！")
+
+        self._save_baseline(avg)
+        return avg
+
+    def _parse_score(self, score_text: str) -> float:
+        scores = []
+        for line in score_text.split("\n"):
+            if ":" in line and not line.startswith("总评"):
+                try:
+                    scores.append(int(line.split(":")[1].strip()))
+                except:
+                    pass
+        return sum(scores) / len(scores) if scores else 0
+
+    def _load_baseline(self) -> float:
+        try:
+            with open(self.history_file) as f:
+                data = json.load(f)
+                return data.get("baseline", 0)
+        except:
+            return None
+
+    def _save_baseline(self, score: float):
+        data = {
+            "baseline": score,
+            "updated_at": datetime.now().isoformat()
+        }
+        with open(self.history_file, "w") as f:
+            json.dump(data, f)
+```
+
+## 练习
+
+1. 为你的 Agent 写 5 个测试用例，用 LLM-as-Judge 评估正确性
+2. 实现回归测试：运行测试集，与上一次结果对比，评分下降超 10% 时告警

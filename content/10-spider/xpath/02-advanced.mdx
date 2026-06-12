@@ -1,0 +1,282 @@
+---
+title: XPath 高级定位技巧
+order: 2
+difficulty: core
+estimated_time: 30min
+tags: [XPath, lxml, HTML, 解析, 爬虫]
+---
+
+## XPath 轴（Axes）详解
+
+轴定义了节点树的遍历方向，是 XPath 相比 CSS 选择器最强大的特性：
+
+```python
+from lxml import html
+
+doc = """
+<html>
+<body>
+  <div id="main">
+    <h1>文章标题</h1>
+    <div class="meta">
+      <span class="author">作者：张三</span>
+      <span class="date">2024-01-15</span>
+    </div>
+    <div class="content">
+      <p>第一段文字</p>
+      <p>第二段文字</p>
+      <div class="related">
+        <ul>
+          <li id="li-1"><a href="/a">相关文章 A</a></li>
+          <li id="li-2"><a href="/b">相关文章 B</a></li>
+          <li id="li-3"><a href="/c">相关文章 C</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="footer">底部信息</div>
+  </div>
+</body>
+</html>
+"""
+
+tree = html.fromstring(doc)
+
+# === 常用轴 ===
+
+# ancestor：所有祖先节点
+tree.xpath("//li/ancestor::div")
+# [<div class="related">, <div class="content">, <div id="main">, <body>, <html>]
+
+# ancestor-or-self：包含自身
+tree.xpath("//li/ancestor-or-self::li")
+
+# descendant：所有后代节点
+tree.xpath("//div[@class='related']/descendant::a")
+# [<a href="/a">, <a href="/b">, <a href="/c">]
+
+# following：文档中之后的所有节点（不包含后代）
+# 找到第一个 p 之后的所有同层级元素
+tree.xpath("//p[1]/following::*")
+# [<div class="related">, <ul>, <li id="li-1">, <a href="/a">, ...]
+
+# following-sibling：后续所有兄弟节点
+tree.xpath("//h1/following-sibling::*")
+# [<div class="meta">, <div class="content">, <div class="footer">]
+
+# preceding-sibling：之前所有兄弟节点
+tree.xpath("//div[@class='footer']/preceding-sibling::*")
+# [<h1>, <div class="meta">, <div class="content">]
+
+# parent：直接父节点
+tree.xpath("//li[1]/parent::*")
+# [<ul>]
+
+# child：直接子节点（等效于 /）
+tree.xpath("//div[@id='main']/child::div")
+# [<div class="meta">, <div class="content">, <div class="footer">]
+
+# self：当前节点
+tree.xpath("//li/@id | //li/self::*")
+```
+
+## 谓词（Predicates）进阶
+
+谓词 `[...]` 中的条件可以任意复杂，支持嵌套和组合：
+
+```python
+# === 位置谓词 ===
+
+# 倒数第二个
+tree.xpath("//li[last() - 1]")
+
+# 位置范围
+tree.xpath("//li[position() >= 2 and position() <= 3]")
+
+# 奇数/偶数
+tree.xpath("//li[position() mod 2 = 1]")   # 奇数位
+tree.xpath("//li[position() mod 2 = 0]")   # 偶数位
+
+# === 多重条件谓词 ===
+
+# 同时满足多个属性
+tree.xpath('//input[@type="text" and @name="username" and @required="required"]')
+
+# 满足任一条件
+tree.xpath('//a[@href or @onclick]')
+
+# 嵌套谓词
+tree.xpath('//ul[li[@id="li-2"]]/li/a')     # 找包含 id=li-2 的 ul 下的所有链接
+
+# 按子节点内容筛选
+tree.xpath('//li[a[contains(text(), "相关文章 B")]]')
+
+# === 数值比较 ===
+tree.xpath('//*[@data-price > 100]')
+tree.xpath('//*[@data-count >= 0 and @data-count <= 50]')
+```
+
+## 函数深度应用
+
+```python
+# === 字符串函数 ===
+
+# normalize-space：去除首尾空格 + 合并中间连续空格
+tree.xpath('//p[normalize-space(text()) = "第一段文字"]')
+
+# string-length：按文本长度筛选
+tree.xpath('//*[string-length(text()) > 50]')
+
+# substring：截取子串（索引从 1 开始！）
+tree.xpath('substring(//h1/text(), 1, 2)')   # "文章"
+
+# substring-before / substring-after
+tree.xpath('substring-after(//span[@class="author"]/text(), "：")')
+# "张三"
+
+# translate：字符替换（类似 Python str.translate）
+tree.xpath('translate(//h1/text(), "标题", "****")')
+
+# concat：字符串拼接
+tree.xpath('concat(//span[@class="author"]/text(), " | ", //span[@class="date"]/text())')
+# "作者：张三 | 2024-01-15"
+
+# not：逻辑取反
+tree.xpath('//div[not(@class)]')              # 没有 class 属性的 div
+tree.xpath('//a[not(starts-with(@href, "https"))]')  # 非外链
+
+# === 节点集函数 ===
+# count：子节点计数
+tree.xpath('//ul[count(li) > 2]')              # 超过 2 个 li 的 ul
+
+# name / local-name：节点名
+tree.xpath('//*[local-name() = "div"]')        # 忽略命名空间
+
+# === 实战组合 ===
+# 提取文章最后更新时间
+tree.xpath('normalize-space(//div[@class="footer"]/text())')
+```
+
+## 联合运算符（Union）
+
+使用 `|` 合并多个路径的结果集，相当于 SQL 的 UNION：
+
+```python
+# 同时提取标题和所有链接
+tree.xpath("//h1 | //a")
+
+# 提取多种类型的元素
+tree.xpath("//img | //video | //audio")   # 所有媒体元素
+
+# 提取多个属性的元素
+tree.xpath('//*[@id="main"] | //*[@class="content"]')
+
+# 实用模式：提取页面的所有可见文本节点
+tree.xpath("//h1/text() | //h2/text() | //p/text() | //li/text()")
+
+# 排除重复（默认已去重）
+tree.xpath("//a | //a/@href")
+# [<a href="/a">, <a href="/b">, <a href="/c">, '/a', '/b', '/c']
+```
+
+## 通配符高级用法
+
+```python
+# *：匹配任意元素节点
+tree.xpath("//div[@class='meta']/*")                # meta 下所有直接子元素
+tree.xpath("//div[@class='content']//*")             # content 下所有子孙元素
+
+# @*：匹配任意属性
+tree.xpath("//*[@*]")                                # 有任意属性的元素
+tree.xpath("//li[@*]")                               # 有任意属性的 li
+tree.xpath("//*[@*[starts-with(name(), 'data-')]]")  # 有 data-* 属性的元素
+
+# node()：匹配任意节点（包括文本、注释）
+tree.xpath("//div[@class='meta']/node()")
+# 包含文本节点 "\n      " 和 span 元素节点
+
+# comment()：匹配注释
+tree.xpath("//comment()")
+
+# text()：匹配文本节点
+tree.xpath("//p/text()")
+```
+
+## XPath vs CSS 选择器完整对照
+
+| 需求 | CSS 选择器 | XPath |
+|------|-----------|-------|
+| 按标签名 | `div` | `//div` |
+| 按 ID | `#main` | `//*[@id="main"]` |
+| 按 Class | `.item` | `//*[contains(@class, "item")]` |
+| 按属性 | `[data-id]` | `//*[@data-id]` |
+| 属性值 | `[type="text"]` | `//*[@type="text"]` |
+| 属性前缀 | `[href^="/"]` | `//*[starts-with(@href, "/")]` |
+| 属性包含 | `[href*="keyword"]` | `//*[contains(@href, "keyword")]` |
+| 属性结尾 | `[href$=".pdf"]` | `//*[substring(@href, string-length(@href)-3) = ".pdf"]` |
+| 直接子元素 | `div > p` | `//div/p` |
+| 后代元素 | `div p` | `//div//p` |
+| 后续兄弟 | `li ~ li` | `//li/following-sibling::li` |
+| 按位置 | `:nth-child(2)` | `//*[position()=2]` |
+| 按文本 | ❌ 不支持 | `//p[contains(text(), "关键词")]` |
+| 按父节点 | ❌ 不支持 | `//p[parent::div[@id="main"]]` |
+| 向上查找 | ❌ 不支持 | `//span/ancestor::div` |
+| 按文本长度 | ❌ 不支持 | `//*[string-length(text()) > 50]` |
+| 联合选择 | `h1, h2` | `//h1 \| //h2` |
+| 匹配任意元素 | `*` | `//*` |
+| 匹配任意属性 | ❌ 不支持 | `//@*` |
+
+> **选择建议**：结构清晰、位置固定的页面用 CSS 选择器更简洁；需要按文本内容、向上遍历或复杂逻辑筛选时用 XPath。
+
+## 实战：复杂页面数据提取
+
+```python
+from lxml import html
+import requests
+
+def extract_product_page(url: str) -> dict:
+    resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"})
+    tree = html.fromstring(resp.content)
+
+    return {
+        # 使用 various axes 提取数据
+        "title": tree.xpath("normalize-space(//h1/text())"),
+
+        # 提取"规格"标题后面的所有表格行
+        "specs": tree.xpath(
+            '//h2[contains(text(), "规格")]/following-sibling::table//tr'
+        ),
+
+        # 提取面包屑导航
+        "breadcrumb": tree.xpath(
+            '//nav[@class="breadcrumb"]//a/text()'
+        ),
+
+        # 所有用户评论中评分大于 4 的
+        "good_reviews": tree.xpath(
+            '//div[@class="review"][.//span[@class="rating" and number(text()) >= 4]]'
+        ),
+
+        # 提取所有图片链接
+        "images": tree.xpath(
+            '//div[@class="gallery"]//img/@src'
+        ),
+
+        # 提取相关产品（通过列表定位）
+        "related": tree.xpath(
+            '//section[h2[contains(text(), "相关推荐")]]//a[@class="product-link"]'
+        ),
+    }
+```
+
+| 轴 | 方向 | 示例 |
+|----|------|------|
+| `child` | 子节点 | `//div/child::p` |
+| `parent` | 父节点 | `//a/parent::li` |
+| `ancestor` | 所有祖先 | `//a/ancestor::div` |
+| `descendant` | 所有后代 | `//div/descendant::a` |
+| `following-sibling` | 后续兄弟 | `//h2/following-sibling::p` |
+| `preceding-sibling` | 前方兄弟 | `//footer/preceding-sibling::*` |
+| `following` | 文档后方所有 | `//p[1]/following::*` |
+| `preceding` | 文档前方所有 | `//p[last()]/preceding::*` |
+| `self` | 自身 | `//li/self::*` |
+| `attribute` | 属性 | `//a/attribute::href` |

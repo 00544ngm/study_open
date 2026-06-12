@@ -1,0 +1,92 @@
+---
+title: Crawl4AI 高级与 RAG 集成
+order: 2
+difficulty: advanced
+estimated_time: 25min
+tags: [Crawl4AI, RAG, Agent, 知识库]
+---
+
+## 动态内容支持
+
+```python
+from crawl4ai import WebCrawler
+
+crawler = WebCrawler()
+
+result = crawler.run(
+    url="https://spa-website.com",
+    js_code=[  # 注入 JS
+        "window.scrollTo(0, document.body.scrollHeight);",
+        "setTimeout(() => window.scrollTo(0, 0), 2000);",
+    ],
+    wait_for=".content-loaded",  # 等待元素出现
+    screenshot=True,
+)
+```
+
+## 自定义提取规则
+
+```python
+from crawl4ai import WebCrawler, ExtractionStrategy
+
+class CustomExtractor(ExtractionStrategy):
+    def extract(self, html: str, url: str) -> str:
+        # 自定义解析逻辑
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(html, "lxml")
+
+        # 只提取 API 文档内容
+        return str(soup.select_one(".api-content"))
+
+crawler = WebCrawler()
+result = crawler.run(
+    url="https://docs.example.com",
+    extraction_strategy=CustomExtractor(),
+)
+```
+
+## RAG 管道集成
+
+```python
+from crawl4ai import WebCrawler
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import Chroma
+from langchain_openai import OpenAIEmbeddings
+
+crawler = WebCrawler()
+result = crawler.run(url="https://docs.example.com")
+
+# 直接切分 + 向量化
+splitter = RecursiveCharacterTextSplitter(
+    chunk_size=1000,
+    chunk_overlap=200,
+)
+chunks = splitter.split_text(result.markdown)
+
+# 存入向量数据库
+vectorstore = Chroma.from_texts(
+    texts=chunks,
+    embedding=OpenAIEmbeddings(),
+    metadatas=[{"source": "docs.example.com"}] * len(chunks),
+)
+```
+
+## MCP 集成
+
+```python
+# 通过 MCP 让 Agent 调用 Crawl4AI
+@mcp.tool()
+def crawl_webpage(url: str) -> str:
+    """爬取网页并返回 Markdown 格式内容"""
+    from crawl4ai import WebCrawler
+    crawler = WebCrawler()
+    result = crawler.run(url=url)
+    return result.markdown[:10000]
+```
+
+| 场景 | Crawl4AI 优势 |
+|------|--------------|
+| 文档抓取 | 自动转 Markdown |
+| RAG 知识库 | 直接接入向量化 pipeline |
+| Agent 工具 | 一键集成到 Agent |
+| 动态页面 | JS 执行支持 |

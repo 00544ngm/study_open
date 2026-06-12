@@ -1,0 +1,89 @@
+---
+title: 网络工具
+order: 7
+difficulty: intermediate
+estimated_time: 20min
+tags: [Linux, 网络]
+---
+
+## 入门
+
+```bash
+# 网络探测
+ping -c 4 google.com          # 连通性测试
+curl -I https://example.com   # 查看 HTTP 头
+wget https://example.com/file.zip  # 下载文件
+
+# DNS 查询
+nslookup example.com
+dig example.com
+
+# 路由追踪
+traceroute google.com         # macOS/Linux
+tracert google.com            # Windows
+```
+
+## 核心
+
+```bash
+# curl 进阶
+curl -X POST https://api.openai.com/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $API_KEY" \
+  -d '{"model":"gpt-4","messages":[{"role":"user","content":"hello"}]}'
+
+# 下载文件并重命名
+curl -o model.bin https://example.com/model.bin
+
+# 限速下载
+curl --limit-rate 1M -O https://example.com/large.zip
+
+# SSH 远程连接
+ssh user@192.168.1.100
+ssh -p 2222 user@host          # 指定端口
+ssh -i ~/.ssh/key.pem ubuntu@ec2-instance  # 密钥登录
+
+# SCP 传输文件
+scp local.txt user@host:/remote/path/
+scp -r project/ user@host:/remote/   # 递归上传
+scp user@host:/remote/log.tar.gz ./  # 下载
+```
+
+## 进阶
+
+```bash
+# SSH 隧道 - 本地端口转发
+# 将远程 8000 映射到本地 8000
+ssh -L 8000:localhost:8000 user@server
+
+# SSH 隧道 - 远程端口转发
+# 将本地服务暴露到远程
+ssh -R 9000:localhost:3000 user@server
+
+# SSH 配置文件 (~/.ssh/config)
+cat ~/.ssh/config
+# Host myserver
+#   HostName 192.168.1.100
+#   User ubuntu
+#   Port 22
+#   IdentityFile ~/.ssh/key.pem
+#   ForwardAgent yes
+
+# 简化后: ssh myserver
+
+# rsync 增量同步
+rsync -avz project/ user@host:/backup/
+rsync -avz --delete src/ dest/     # 删除目标多余文件
+
+# 持续同步日志
+rsync -avz --progress user@host:logs/ ./logs/
+
+# 端口检查
+nc -zv localhost 8000              # TCP 端口是否开放
+nc -zuv localhost 53               # UDP 端口检测
+```
+
+## 练习
+
+1. 用 curl 调用一个公共 API（如 https://api.github.com）并格式化输出
+2. 配置 SSH 密钥登录到远程服务器，用 `ssh-copy-id` 简化配置

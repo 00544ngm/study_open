@@ -1,0 +1,221 @@
+---
+title: 文档解析与清洗
+order: 2
+difficulty: intermediate
+estimated_time: 25min
+tags: [解析, PDF, HTML, 清洗]
+---
+
+## 入门
+
+原始文档格式各异（PDF、HTML、Markdown），需要解析成统一的纯文本。
+
+## 核心
+
+### Markdown 解析
+
+```python
+import re
+from typing import List
+
+def parse_markdown(text: str) -> dict:
+    """解析 Markdown 文档，保留标题层级结构"""
+    lines = text.split("\n")
+    sections = []
+    current_section = {"heading": "", "content": [], "level": 0}
+
+    for line in lines:
+        heading_match = re.match(r"^(#{1,6})\s+(.+)$", line)
+        if heading_match:
+            if current_section["content"]:
+                sections.append(current_section)
+            current_section = {
+                "heading": heading_match.group(2),
+                "content": [],
+                "level": len(heading_match.group(1))
+            }
+        else:
+            current_section["content"].append(line)
+
+    if current_section["content"]:
+        sections.append(current_section)
+
+    return {
+        "title": sections[0]["heading"] if sections else "无标题",
+        "sections": sections,
+        "full_text": "\n".join(
+            f"{'#' * s['level']} {s['heading']}\n" + "\n".join(s["content"])
+            for s in sections
+        )
+    }
+```
+
+### HTML 解析
+
+```python
+from bs4 import BeautifulSoup
+
+class HTMLParser:
+    """HTML 文档解析器，提取结构化内容"""
+
+    def __init__(self):
+        self.content_tags = ["article", "main", "section", "div.content"]
+
+    def parse(self, html: str) -> dict:
+        soup = BeautifulSoup(html, "html.parser")
+
+        # 清理
+        for tag in soup(["script", "style", "nav", "aside", "footer", "header"]):
+            tag.decompose()
+
+        # 提取代码块
+        code_blocks = []
+        for code in soup.find_all(["code", "pre"]):
+            code_blocks.append(code.get_text())
+            code_tag = code.name
+            code.replace_with(f"\n```{code_tag}\n{code.get_text()}\n```\n")
+
+        title = soup.title.string if soup.title else ""
+        body = soup.find("body")
+
+        return {
+            "title": title,
+            "content": body.get_text(separator="\n", strip=True) if body else "",
+            "code_blocks": code_blocks,
+            "links": [a.get("href") for a in soup.find_all("a", href=True)]
+        }
+
+    def extract_tables(self, html: str) -> List[dict]:
+        """提取 HTML 表格为结构化数据"""
+        soup = BeautifulSoup(html, "html.parser")
+        tables = []
+
+        for table in soup.find_all("table"):
+            rows = []
+            for tr in table.find_all("tr"):
+                cells = [td.get_text(strip=True) for td in tr.find_all(["td", "th"])]
+                if cells:
+                    rows.append(cells)
+            if rows:
+                tables.append({"headers": rows[0], "rows": rows[1:]})
+
+        return tables
+```
+
+### PDF 解析
+
+```python
+# 安装: pip install pymupdf
+
+import fitz  # PyMuPDF
+
+class PDFParser:
+    def __init__(self):
+        self.chunk_size = 1000
+
+    def parse(self, file_path: str) -> dict:
+        doc = fitz.open(file_path)
+        pages = []
+
+        for page_num, page in enumerate(doc):
+            text = page.get_text()
+            pages.append({
+                "page": page_num + 1,
+                "text": text,
+                "char_count": len(text)
+            })
+
+        return {
+            "filename": file_path,
+            "total_pages": len(pages),
+            "pages": pages,
+            "full_text": "\n\n".join(p["text"] for p in pages)
+        }
+```
+
+## 进阶
+
+### 文档清洗
+
+```python
+class TextCleaner:
+    """文本清洗管线"""
+
+    def clean(self, text: str) -> str:
+        steps = [
+            self.remove_extra_whitespace,
+            self.remove_special_chars,
+            self.normalize_unicode,
+            self.remove_empty_lines,
+        ]
+        for step in steps:
+            text = step(text)
+        return text
+
+    def remove_extra_whitespace(self, text: str) -> str:
+        return re.sub(r" +", " ", text)
+
+    def remove_special_chars(self, text: str) -> str:
+        # 保留中文、英文、数字、标点
+        text = re.sub(r"[^一-鿿\w\s.,!?;:()\-\[\]]", "", text)
+        return text
+
+    def normalize_unicode(self, text: str) -> str:
+        import unicodedata
+        return unicodedata.normalize("NFKC", text)
+
+    def remove_empty_lines(self, text: str) -> str:
+        lines = [l for l in text.split("\n") if l.strip()]
+        return "\n".join(lines)
+
+    def deduplicate(self, texts: List[str]) -> List[str]:
+        """基于文本相似度去重"""
+        seen = set()
+        unique = []
+        for text in texts:
+            # 简单的去重：用前 50 个字符作为指纹
+            fingerprint = text[:50].strip()
+            if fingerprint not in seen:
+                seen.add(fingerprint)
+                unique.append(text)
+        return unique
+```
+
+### 统一解析接口
+
+```python
+from pathlib import Path
+
+class DocumentParser:
+    """根据文件类型自动选择解析器"""
+
+    def __init__(self):
+        self.parsers = {
+            ".md": self.parse_markdown,
+            ".mdx": self.parse_markdown,
+            ".html": self.parse_html,
+            ".htm": self.parse_html,
+            ".pdf": self.parse_pdf,
+            ".txt": self.parse_text,
+        }
+
+    def parse(self, file_path: str) -> dict:
+        ext = Path(file_path).suffix.lower()
+        parser = self.parsers.get(ext)
+
+        if not parser:
+            raise ValueError(f"不支持的格式: {ext}")
+
+        raw = parser(file_path)
+        # 统一清洗
+        cleaner = TextCleaner()
+        raw["clean_text"] = cleaner.clean(raw.get("full_text", ""))
+
+        return raw
+```
+
+## 练习
+
+1. 用 PyMuPDF 解析一个 PDF 文档，提取每页文本
+2. 实现 TextCleaner 清洗管线，处理 HTML 和 PDF 提取结果
+3. 用 DocumentParser 统一处理 Markdown、HTML、PDF 三种格式

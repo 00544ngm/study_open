@@ -1,0 +1,89 @@
+---
+title: Dashboard 面板
+order: 2
+difficulty: intermediate
+estimated_time: 20min
+tags: [Grafana, 可视化]
+---
+
+## 入门
+
+### 面板类型
+
+```text
+Time series - 时序图 (最常用)
+Stat        - 单个数值 (当前值)
+Table       - 表格
+Bar gauge   - 进度条
+```
+
+## 核心
+
+### Agent 监控仪表盘
+
+```json
+// 通过 JSON 模型创建面板
+// 设置示例: 请求速率面板
+{
+  "type": "timeseries",
+  "title": "请求速率",
+  "targets": [{
+    "expr": "sum(rate(agent_requests_total[5m]))",
+    "legendFormat": "请求/秒"
+  }]
+}
+```
+
+### 常用面板配置
+
+```promql
+# 错误率 (Stat 面板)
+sum(rate(agent_errors_total[5m])) / sum(rate(agent_requests_total[5m])) * 100
+
+# P99 延迟 (Time series 面板)
+histogram_quantile(0.99,
+  sum(rate(agent_latency_seconds_bucket[5m])) by (le)
+)
+
+# Token 消耗 (Time series 面板)
+rate(agent_tokens_total[5m])
+```
+
+### 面板设置
+
+```text
+Unit:       请求用 "req/s", 延迟用 "s", Token 用 "short"
+Threshold:  错误率 > 5% 红色, > 2% 黄色
+Legend:     显示平均值、最大值、当前值
+```
+
+## 进阶
+
+### 变量和模板
+
+```yaml
+# 在 Dashboard Settings 中定义变量
+# 变量名: service
+# 类型: Query
+# 查询: label_values(agent_requests_total, service)
+```
+
+```promql
+# 在面板中使用变量
+sum(rate(agent_requests_total{service=~"$service"}[5m]))
+```
+
+### 导入分享仪表盘
+
+```bash
+# Grafana 官方仪表盘市场
+# https://grafana.com/grafana/dashboards
+
+# 通过 ID 导入
+# 如 Node Exporter 的 1860 号仪表盘
+```
+
+## 练习
+
+1. 创建一个包含请求速率和错误率的面板
+2. 设置变量实现按 service 切换筛选

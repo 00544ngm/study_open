@@ -1,0 +1,97 @@
+---
+title: 指标类型与采集
+order: 2
+difficulty: intermediate
+estimated_time: 20min
+tags: [Prometheus, 监控]
+---
+
+## 入门
+
+Prometheus 有四种核心指标类型：
+
+```text
+Counter   - 只增不减的计数 (请求数、错误数)
+Gauge     - 可增可减的值 (内存、连接数)
+Histogram - 分布统计 (延迟、响应大小)
+Summary   - 分位数统计 (延迟的 p50/p99)
+```
+
+## 核心
+
+```python
+from prometheus_client import Counter, Gauge, Histogram, Summary
+import random
+
+# Counter - 只增
+ERRORS = Counter("agent_errors_total", "错误数", ["type"])
+
+def call_llm():
+    try:
+        ...
+    except Exception as e:
+        ERRORS.labels(type=type(e).__name__).inc()
+
+# Gauge - 当前值
+CONNECTIONS = Gauge("db_connections", "数据库连接数")
+CONNECTIONS.set(42)
+CONNECTIONS.inc()   # +1
+CONNECTIONS.dec()   # -1
+
+# Histogram - 延迟分布
+LATENCY = Histogram(
+    "agent_llm_duration_seconds",
+    "LLM 调用延迟",
+    buckets=[0.5, 1.0, 2.0, 5.0, 10.0]
+)
+
+@LATENCY.time()
+def call_openai():
+    ...
+
+# Summary - 分位数
+TOKENS = Summary("agent_tokens_per_call", "每次调用的 Token 数")
+TOKENS.observe(1500)
+```
+
+## 进阶
+
+```python
+# FastAPI 中间件自动采集
+from fastapi import FastAPI
+from prometheus_client import Counter, Histogram
+import time
+
+app = FastAPI()
+
+HTTP_REQUESTS = Counter(
+    "http_requests_total", "HTTP 请求",
+    ["method", "endpoint", "status"]
+)
+HTTP_LATENCY = Histogram(
+    "http_request_duration_seconds", "HTTP 延迟",
+    ["method", "endpoint"]
+)
+
+@app.middleware("http")
+async def metrics_middleware(request, call_next):
+    start = time.time()
+    response = await call_next(request)
+    duration = time.time() - start
+    
+    HTTP_REQUESTS.labels(
+        method=request.method,
+        endpoint=request.url.path,
+        status=response.status_code
+    ).inc()
+    HTTP_LATENCY.labels(
+        method=request.method,
+        endpoint=request.url.path
+    ).observe(duration)
+    return response
+```
+
+## 练习
+
+1. 为 Agent 添加 Counter 指标记录 LLM 调用次数和错误数
+2. 添加 Histogram 指标追踪每次 Agent 执行的耗时

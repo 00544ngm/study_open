@@ -1,0 +1,79 @@
+---
+title: Crawl4AI 智能爬虫
+order: 1
+difficulty: intermediate
+estimated_time: 25min
+tags: [Crawl4AI, AI, 爬虫, 智能化]
+---
+
+## 安装
+
+```bash
+pip install crawl4ai
+```
+
+## 基础用法
+
+```python
+from crawl4ai import WebCrawler
+
+crawler = WebCrawler()
+crawler.warmup()
+
+result = crawler.run(url="https://example.com")
+print(result.markdown)   # Markdown 格式内容
+print(result.screenshot)  # Base64 截图
+```
+
+Crawl4AI 自动将网页内容转为干净的 Markdown，移除广告、导航等干扰元素。
+
+## 针对 AI 的提取
+
+```python
+from crawl4ai import WebCrawler
+
+crawler = WebCrawler()
+
+# AI 驱动的智能提取
+result = crawler.run(
+    url="https://docs.example.com/api",
+    extraction_strategy="smart",  # 智能识别主要内容
+    word_count_threshold=20,
+)
+
+# 提取后的干净 Markdown（可直接作为 LLM 上下文）
+print(result.markdown[:500])
+
+# 获取结构化数据
+print(result.metadata)  # 标题、描述、关键词等
+```
+
+## 批量爬取
+
+```python
+from crawl4ai import WebCrawler, CrawlerRunConfig
+
+config = CrawlerRunConfig(
+    max_pages=50,
+    extraction_strategy="deep",
+    word_count_threshold=15,
+    excluded_tags=["nav", "footer", "header"],
+)
+
+crawler = WebCrawler(config=config)
+results = crawler.run_batch(
+    urls=["https://docs.example.com/api", "https://docs.example.com/guide"],
+    max_concurrent=3,
+)
+
+for result in results:
+    # 直接用于 RAG
+    store_to_vector_db(result.markdown)
+```
+
+| 特性 | 说明 |
+|------|------|
+| Markdown 输出 | 自动转 Markdown，适合 LLM 输入 |
+| 智能提取 | 自动识别正文、去除干扰 |
+| 截图 | 页面截图用于视觉分析 |
+| 批量 | 并发爬取，自动限流 |

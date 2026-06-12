@@ -1,0 +1,134 @@
+---
+title: 多 Agent 协作模式
+order: 2
+difficulty: advanced
+estimated_time: 30min
+tags: [Agent, 多 Agent, 协作, 架构]
+---
+
+## Supervisor 模式
+
+一个管理者 Agent 协调多个子 Agent：
+
+```python
+class Supervisor:
+    def __init__(self, llm, agents: dict):
+        self.llm = llm
+        self.agents = agents  # {"研究员": agent1, "分析师": agent2}
+
+    def delegate(self, task: str) -> str:
+        # 决定派给谁
+        decision = self.llm.invoke(
+            f"任务：{task}\n可用专家：{list(self.agents.keys())}\n"
+            f"请选择一个专家处理："
+        )
+        selected = decision.content.strip()
+        agent = self.agents.get(selected)
+        if agent:
+            return agent.run(task)
+        return "无法分配"
+```
+
+## 投票模式
+
+多个 Agent 独立回答，投票选出最佳：
+
+```python
+class VotingEnsemble:
+    def __init__(self, agents: list):
+        self.agents = agents
+
+    def run(self, task: str) -> str:
+        responses = [agent.run(task) for agent in self.agents]
+
+        # LLM 投票
+        vote_prompt = (
+            f"任务：{task}\n\n"
+            + "\n\n".join(f"回答{i+1}：{r}" for i, r in enumerate(responses))
+            + "\n\n请选出最佳回答并说明理由："
+        )
+        return self.llm.invoke(vote_prompt)
+```
+
+## 辩论模式
+
+Agent 们互相辩论，迭代改进观点：
+
+```python
+class Debate:
+    def __init__(self, agents: list, rounds=3):
+        self.agents = agents
+        self.rounds = rounds
+
+    def run(self, topic: str) -> str:
+        opinions = [agent.run(f"请对「{topic}」提出你的观点") for agent in self.agents]
+
+        for r in range(self.rounds):
+            new_opinions = []
+            for i, agent in enumerate(self.agents):
+                context = "\n".join(
+                    f"其他观点：{opinions[j][:200]}"
+                    for j in range(len(self.agents)) if j != i
+                )
+                critique = agent.run(
+                    f"主题：{topic}\n你的观点：{opinions[i][:200]}\n"
+                    f"{context}\n\n请参考其他观点改进你的分析："
+                )
+                new_opinions.append(critique)
+            opinions = new_opinions
+        return opinions
+```
+
+## 流水线模式
+
+Agent 链式处理，前一个输出是后一个输入：
+
+```python
+agent_pipeline = [
+    ("需求分析师", "分析需求，提取关键点"),
+    ("研究员", "研究关键技术方案"),
+    ("代码开发者", "编写实现代码"),
+    ("测试员", "审查代码质量"),
+]
+
+class Pipeline:
+    def __init__(self, llm, steps: list):
+        self.llm = llm
+        self.steps = steps
+
+    def run(self, input_text: str) -> str:
+        current = input_text
+        for role, instruction in self.steps:
+            current = self.llm.invoke(
+                f"角色：{role}\n任务：{instruction}\n输入：{current}"
+            ).content
+        return current
+```
+
+## 路由模式
+
+```python
+class Router:
+    def route(self, query: str) -> str:
+        # 分类
+        category = self.llm.invoke(
+            f"分类问题：{query}\n类别：代码/文档/设计/其他"
+        ).content.strip()
+
+        # 路由到专业 Agent
+        agents = {
+            "代码": code_agent,
+            "文档": doc_agent,
+            "设计": design_agent,
+        }
+        agent = agents.get(category, general_agent)
+        return agent.run(query)
+```
+
+| 模式 | 优势 | 适用场景 |
+|------|------|---------|
+| Supervisor | 集中管控 | 复杂项目 |
+| Voting | 高可靠性 | 关键决策 |
+| Debate | 深度分析 | 策略研究 |
+| Pipeline | 流程清晰 | 软件开发 |
+| Router | 专业化 | 多领域客服 |

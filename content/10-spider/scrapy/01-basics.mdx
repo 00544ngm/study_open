@@ -1,0 +1,107 @@
+---
+title: Scrapy 框架入门
+order: 1
+difficulty: intermediate
+estimated_time: 30min
+tags: [Scrapy, 爬虫, 框架, Python]
+---
+
+## 安装
+
+```bash
+pip install scrapy
+```
+
+## 创建项目
+
+```bash
+scrapy startproject myspider
+cd myspider
+```
+
+项目结构：
+
+```
+myspider/
+├── spiders/
+│   └── __init__.py
+├── items.py        # 数据模型
+├── middlewares.py   # 中间件
+├── pipelines.py    # 数据管道
+└── settings.py     # 配置
+```
+
+## 编写 Spider
+
+```python
+# spiders/quotes.py
+import scrapy
+
+class QuotesSpider(scrapy.Spider):
+    name = "quotes"
+    start_urls = ["https://quotes.toscrape.com"]
+
+    def parse(self, response):
+        for quote in response.css("div.quote"):
+            yield {
+                "text": quote.css("span.text::text").get(),
+                "author": quote.css("small.author::text").get(),
+            }
+
+        # 翻页
+        next_page = response.css("li.next a::attr(href)").get()
+        if next_page:
+            yield response.follow(next_page, self.parse)
+```
+
+## 运行
+
+```bash
+scrapy crawl quotes
+scrapy crawl quotes -o quotes.json     # 输出 JSON
+scrapy crawl quotes -o quotes.csv      # 输出 CSV
+```
+
+## 数据模型
+
+```python
+# items.py
+from scrapy import Item, Field
+
+class ArticleItem(Item):
+    title = Field()
+    url = Field()
+    content = Field()
+    publish_date = Field()
+    author = Field()
+```
+
+## Pipeline 数据处理
+
+```python
+# pipelines.py
+class CleanPipeline:
+    def process_item(self, item, spider):
+        item["title"] = item["title"].strip()
+        return item
+
+class JsonPipeline:
+    def open_spider(self, spider):
+        self.file = open("output.json", "w")
+
+    def close_spider(self, spider):
+        self.file.close()
+
+    def process_item(self, item, spider):
+        line = json.dumps(dict(item), ensure_ascii=False) + "\n"
+        self.file.write(line)
+        return item
+```
+
+| 组件 | 作用 |
+|------|------|
+| Spider | 爬虫逻辑、URL 解析 |
+| Item | 数据结构定义 |
+| Pipeline | 数据清洗/存储 |
+| Middleware | 下载中间件 |
+| Settings | 配置管理 |

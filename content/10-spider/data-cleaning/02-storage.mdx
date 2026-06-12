@@ -1,0 +1,275 @@
+---
+title: 数据存储与 ETL 管线
+order: 2
+difficulty: intermediate
+estimated_time: 35min
+tags: [ETL, 数据库, 存储, 数据管线]
+---
+
+## 存储方案选择
+
+| 数据量 | 存储方案 | 适合场景 |
+|--------|---------|---------|
+| < 1GB | CSV / JSON | 一次性采集、快速分析 |
+| 1GB - 100GB | SQLite / PostgreSQL | 结构化数据 |
+| 100GB+ | MongoDB / ClickHouse | 大规模日志 |
+| 文件/图片 | 对象存储 S3 | 二进制资源 |
+
+## CSV 写入
+
+```python
+import csv
+
+# 方式 1：pandas
+df.to_csv("output.csv", index=False, encoding="utf-8-sig")
+
+# 方式 2：csv 模块（大文件分批写入）
+with open("output.csv", "a", newline="", encoding="utf-8") as f:
+    writer = csv.DictWriter(f, fieldnames=["title", "url", "content"])
+    if f.tell() == 0:
+        writer.writeheader()
+    writer.writerow({"title": "文章1", "url": "https://...", "content": "..."})
+
+# 方式 3：按日期分片
+from datetime import datetime
+date_str = datetime.now().strftime("%Y%m%d")
+df.to_csv(f"data_{date_str}.csv", index=False)
+```
+
+## SQLite 存储
+
+```python
+import sqlite3
+import pandas as pd
+
+class SQLiteStorage:
+    """SQLite 存储引擎"""
+
+    def __init__(self, db_path: str = "data.db"):
+        self.conn = sqlite3.connect(db_path)
+        self.cursor = self.conn.cursor()
+
+    def create_table(self, table: str, schema: str):
+        """创建表"""
+        self.cursor.execute(f"""
+            CREATE TABLE IF NOT EXISTS {table} (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                {schema},
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        self.conn.commit()
+
+    def insert(self, table: str, data: dict):
+        """插入单条"""
+        columns = ", ".join(data.keys())
+        placeholders = ", ".join(["?"] * len(data))
+        self.cursor.execute(
+            f"INSERT INTO {table} ({columns}) VALUES ({placeholders})",
+            list(data.values()),
+        )
+        self.conn.commit()
+
+    def insert_many(self, table: str, data: list[dict]):
+        """批量插入"""
+        if not data:
+            return
+        columns = ", ".join(data[0].keys())
+        placeholders = ", ".join(["?"] * len(data[0]))
+        values = [list(d.values()) for d in data]
+        self.cursor.executemany(
+            f"INSERT OR IGNORE INTO {table} ({columns}) VALUES ({placeholders})",
+            values,
+        )
+        self.conn.commit()
+
+    def upsert(self, table: str, data: dict, unique_col: str = "url"):
+        """不存在则插入，存在则更新"""
+        columns = ", ".join(data.keys())
+        placeholders = ", ".join(["?"] * len(data))
+        updates = ", ".join(f"{k}=EXCLUDED.{k}" for k in data)
+        self.cursor.execute(
+            f"""
+            INSERT INTO {table} ({columns}) VALUES ({placeholders})
+            ON CONFLICT({unique_col}) DO UPDATE SET {updates}
+            """,
+            list(data.values()),
+        )
+        self.conn.commit()
+
+    def close(self):
+        self.conn.close()
+```
+
+## PostgreSQL 存储
+
+```python
+import psycopg2
+from psycopg2.extras import execute_values
+
+class PostgresStorage:
+    """PostgreSQL 存储"""
+
+    def __init__(self, dsn: str):
+        self.conn = psycopg2.connect(dsn)
+
+    def insert_many(self, table: str, data: list[dict]):
+        """批量插入（高性能）"""
+        if not data:
+            return
+        columns = list(data[0].keys())
+        values = [[d.get(c) for c in columns] for d in data]
+
+        query = f"""
+            INSERT INTO {table} ({','.join(columns)})
+            VALUES %s
+            ON CONFLICT (url) DO NOTHING
+        """
+        execute_values(self.conn.cursor(), query, values)
+        self.conn.commit()
+
+    def query(self, sql: str) -> list[dict]:
+        """查询"""
+        self.conn.cursor().execute(sql)
+        columns = [desc[0] for desc in self.conn.cursor().description]
+        return [dict(zip(columns, row)) for row in self.conn.cursor().fetchall()]
+```
+
+## MongoDB 存储
+
+```python
+from pymongo import MongoClient
+
+class MongoStorage:
+    """MongoDB 存储（适合非结构化数据）"""
+
+    def __init__(self, uri: str = "mongodb://localhost:27017"):
+        self.client = MongoClient(uri)
+        self.db = self.client["spider"]
+
+    def insert_many(self, collection: str, data: list[dict]):
+        """批量插入"""
+        if not data:
+            return
+        self.db[collection].insert_many(data, ordered=False)
+
+    def upsert(self, collection: str, query: dict, data: dict):
+        """更新或插入"""
+        self.db[collection].update_one(
+            query,
+            {"$set": data},
+            upsert=True,
+        )
+```
+
+## 完整 ETL 管线
+
+```python
+import pandas as pd
+from datetime import datetime
+
+class ETLPipeline:
+    """抽取-转换-加载管线"""
+
+    def __init__(self, storage):
+        self.storage = storage
+        self.stats = {"extracted": 0, "cleaned": 0, "loaded": 0, "errors": 0}
+
+    def extract(self, source) -> pd.DataFrame:
+        """抽取阶段：从爬虫输出读取"""
+        if isinstance(source, str):
+            if source.endswith(".csv"):
+                df = pd.read_csv(source)
+            elif source.endswith(".json"):
+                df = pd.read_json(source)
+            else:
+                raise ValueError(f"不支持的文件格式: {source}")
+        elif isinstance(source, list):
+            df = pd.DataFrame(source)
+        else:
+            df = source
+
+        self.stats["extracted"] = len(df)
+        return df
+
+    def transform(self, df: pd.DataFrame) -> pd.DataFrame:
+        """转换阶段：清洗 + 标准化"""
+        # 去重
+        if "url" in df.columns:
+            before = len(df)
+            df.drop_duplicates(subset=["url"], keep="first", inplace=True)
+
+        # 去除空值
+        df.dropna(subset=["title"], inplace=True)
+
+        # 标准化
+        for col in ["title", "content"]:
+            if col in df.columns:
+                df[col] = df[col].astype(str).str.strip()
+
+        # 添加时间戳
+        df["crawled_at"] = datetime.now().isoformat()
+
+        self.stats["cleaned"] = len(df)
+        return df
+
+    def load(self, df: pd.DataFrame, table: str):
+        """加载阶段：写入存储"""
+        records = df.to_dict("records")
+        self.storage.insert_many(table, records)
+        self.stats["loaded"] = len(records)
+
+    def run(self, source, table: str):
+        """执行完整 ETL 流程"""
+        try:
+            print(f"[ETL] 开始: source={source}, table={table}")
+            df = self.extract(source)
+            df = self.transform(df)
+            self.load(df, table)
+            print(f"[ETL] 完成: {self.stats}")
+        except Exception as e:
+            self.stats["errors"] += 1
+            print(f"[ETL] 失败: {e}")
+        finally:
+            return self.stats
+```
+
+## 增量爬取
+
+```python
+def incremental_crawl(new_data: list[dict], storage):
+    """增量爬取：只存新的，更新已有的"""
+    for item in new_data:
+        storage.upsert("articles", item, unique_col="url")
+
+# 检查是否已存在
+existing_urls = set(
+    row["url"] for row in storage.query("SELECT url FROM articles")
+)
+new_items = [item for item in data if item["url"] not in existing_urls]
+```
+
+## 数据校验
+
+```python
+from pydantic import BaseModel, HttpUrl, Field
+
+class ArticleSchema(BaseModel):
+    """数据模型校验"""
+    title: str = Field(..., min_length=1, max_length=500)
+    url: HttpUrl
+    content: str = Field(..., min_length=10)
+    views: int = Field(default=0, ge=0)
+    date: str = Field(default="")
+
+def validate_item(item: dict) -> bool:
+    try:
+        ArticleSchema(**item)
+        return True
+    except Exception as e:
+        print(f"校验失败: {e}")
+        return False
+
+# 插入前校验
+valid_items = [item for item in data if validate_item(item)]
+```

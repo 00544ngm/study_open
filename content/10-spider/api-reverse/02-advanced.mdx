@@ -1,0 +1,499 @@
+---
+title: API 签名破解实战
+order: 2
+difficulty: advanced
+estimated_time: 40min
+tags: [API, 逆向, 签名, 抓包, Charles, Fiddler, gRPC, WebSocket]
+---
+
+## Charles / Fiddler 抓包设置
+
+当浏览器 DevTools 不足以解决问题时（如 HTTPS 解密、请求拦截修改），需要专业抓包工具：
+
+### Charles 配置要点
+
+```text
+1. Proxy → SSL Proxying Settings → Add: *:*（解密所有 HTTPS）
+2. Help → SSL Proxying → Install Charles Root Certificate on Mobile（手机证书）
+3. Proxy → Proxy Settings: HTTP Proxy 8888
+4. 手机 WiFi 设置代理到电脑 IP:8888
+```
+
+### 关键操作
+
+```python
+# === Charles 的 Breakpoints：拦截修改请求/响应 ===
+# Proxy → Breakpoint Settings → Add
+# 可以拦截特定 URL，修改请求参数后再发送
+# 场景：修改 sign 参数测试签名逻辑
+
+# === Charles 的 Rewrite：自动替换 ===
+# Tools → Rewrite → Add
+# 场景：自动将 response 中的某些字段替换
+# 例如将所有 "success": false 替换为 "success": true
+
+# === Charles 的 Map Local：用本地文件代替远程响应 ===
+# Tools → Map Local
+# 场景：调试时用本地 JSON 模拟 API 响应
+
+# === Fiddler 配置 ===
+# Tools → Options → HTTPS → Decrypt HTTPS traffic
+# 同样需要安装根证书
+# 使用 AutoResponder 实现类似 Map Local 功能
+```
+
+## 参数分析与签名逆向
+
+```python
+import hashlib
+import hmac
+import time
+import json
+from typing import Any
+
+# === 场景：某电商 API 签名分析 ===
+# 从抓包中发现的请求参数：
+"""
+/api/product/list?
+  page=1
+  &page_size=20
+  &timestamp=1705300000
+  &nonce=abc123
+  &sign=7a8f3c2e1d4b5a6c7d8e9f0a1b2c3d4e
+  &token=eyJxxx
+"""
+
+# === 第一步：分析参数排序 ===
+# 签名通常会要求参数按 key 字典序排列
+def analyze_sign_params(raw_params: dict) -> str:
+    """模拟签名前的参数拼接"""
+    # 去除 sign 本身
+    params = {k: v for k, v in raw_params.items() if k != "sign"}
+    # 按 key 字典序排序
+    sorted_keys = sorted(params.keys())
+    # 拼接成 key=value&...
+    raw = "&".join(f"{k}={params[k]}" for k in sorted_keys)
+    return raw
+
+# === 第二步：尝试常见签名算法 ===
+def try_sign_algorithms(base_string: str, secret: str = "") -> dict[str, str]:
+    """暴力尝试常见签名算法"""
+    results = {}
+
+    # MD5
+    results["md5"] = hashlib.md5((base_string + secret).encode()).hexdigest()
+
+    # MD5(secret + string)
+    results["md5_prefix"] = hashlib.md5((secret + base_string).encode()).hexdigest()
+
+    # SHA1
+    results["sha1"] = hashlib.sha1((base_string + secret).encode()).hexdigest()
+
+    # HMAC-SHA256
+    results["hmac_sha256"] = hmac.new(
+        secret.encode(), base_string.encode(), hashlib.sha256
+    ).hexdigest()
+
+    # HMAC-MD5
+    results["hmac_md5"] = hmac.new(
+        secret.encode(), base_string.encode(), hashlib.md5
+    ).hexdigest()
+
+    return results
+
+
+# === 第三步：从多个请求中推断签名规律 ===
+class SignCracker:
+    """多请求签名分析器"""
+
+    def __init__(self):
+        self.requests: list[dict] = []
+        self.common_params: dict = {}
+
+    def add_request(self, req_params: dict, expected_sign: str):
+        """添加一组请求参数和对应的签名"""
+        self.requests.append({"params": req_params, "sign": expected_sign})
+
+        # 累积所有请求共有的参数
+        for k, v in req_params.items():
+            if k == "sign":
+                continue
+            if k not in self.common_params:
+                self.common_params[k] = v
+            elif self.common_params[k] != v:
+                # 值变化了，说明这个参数参与了签名
+                print(f"[动态参数] {k}: {self.common_params[k]} -> {v}")
+
+    def analyze_timestamp_format(self) -> str | None:
+        """分析时间戳格式（秒级/毫秒级）"""
+        for req in self.requests:
+            ts = req["params"].get("timestamp", "")
+            if ts:
+                ts_int = int(ts)
+                if ts_int > 10**12:  # 13 位：毫秒
+                    return "milliseconds"
+                elif ts_int > 10**9:  # 10 位：秒
+                    return "seconds"
+        return None
+
+    def extract_nonce_pattern(self) -> str | None:
+        """分析 nonce 生成规律"""
+        nonces = [req["params"].get("nonce", "") for req in self.requests]
+        if all(n and len(n) == 16 for n in nonces):
+            return "random_16_chars"
+        # 检查是否是 UUID
+        import uuid
+        if all(len(n) == 36 and n.count("-") == 4 for n in nonces if n):
+            return "uuid4"
+        return None
+
+
+# === 实战：动态签名生成 ===
+class APISigner:
+    """逆向完成后的签名器"""
+
+    def __init__(self, secret: str, algorithm: str = "md5"):
+        self.secret = secret
+        self.algorithm = algorithm
+
+    def sign(self, params: dict) -> str:
+        # 1. 过滤掉 sign 本身
+        items = [(k, v) for k, v in params.items() if k != "sign"]
+
+        # 2. 按 key 字典序排序
+        items.sort(key=lambda x: x[0])
+
+        # 3. 拼接
+        base = "&".join(f"{k}={v}" for k, v in items)
+
+        # 4. 加盐
+        base += f"&secret={self.secret}"
+
+        # 5. 哈希
+        return hashlib.md5(base.encode()).hexdigest()
+
+    def prepare_params(self, **extra_params) -> dict:
+        """自动补全时间戳、nonce 等参数并生成签名"""
+        params = {
+            "timestamp": str(int(time.time())),
+            "nonce": hashlib.md5(str(time.time()).encode()).hexdigest()[:16],
+            **extra_params,
+        }
+        params["sign"] = self.sign(params)
+        return params
+
+# === 使用 ===
+signer = APISigner(secret="my_secret_key")
+params = signer.prepare_params(page=1, page_size=20)
+print(params)
+```
+
+## Token 过期自动处理
+
+```python
+import aiohttp
+import asyncio
+import time
+from dataclasses import dataclass
+
+@dataclass
+class TokenInfo:
+    access_token: str
+    refresh_token: str | None = None
+    expires_at: float = 0
+    token_type: str = "Bearer"
+
+
+class AutoRefreshSession:
+    """Token 自动刷新会话"""
+
+    def __init__(
+        self,
+        auth_url: str,
+        credentials: dict,
+        session: aiohttp.ClientSession | None = None,
+    ):
+        self.auth_url = auth_url
+        self.credentials = credentials
+        self._session = session or aiohttp.ClientSession()
+        self._token: TokenInfo | None = None
+        self._lock = asyncio.Lock()
+
+    async def _do_login(self) -> TokenInfo:
+        """执行登录获取新 token"""
+        async with self._session.post(
+            self.auth_url,
+            json=self.credentials,
+        ) as resp:
+            data = await resp.json()
+            expires_in = data.get("expires_in", 3600)
+            return TokenInfo(
+                access_token=data["access_token"],
+                refresh_token=data.get("refresh_token"),
+                expires_at=time.time() + expires_in - 60,  # 提前 60s 过期
+                token_type=data.get("token_type", "Bearer"),
+            )
+
+    async def _do_refresh(self) -> TokenInfo:
+        """使用 refresh_token 刷新"""
+        if not self._token or not self._token.refresh_token:
+            return await self._do_login()
+
+        async with self._session.post(
+            self.auth_url + "/refresh",
+            json={"refresh_token": self._token.refresh_token},
+        ) as resp:
+            data = await resp.json()
+            expires_in = data.get("expires_in", 3600)
+            return TokenInfo(
+                access_token=data["access_token"],
+                refresh_token=data.get("refresh_token"),
+                expires_at=time.time() + expires_in - 60,
+                token_type=data.get("token_type", "Bearer"),
+            )
+
+    async def get_token(self) -> str:
+        """线程安全地获取有效 token"""
+        async with self._lock:
+            if self._token and time.time() < self._token.expires_at:
+                return self._token.access_token
+
+            if self._token and self._token.refresh_token:
+                self._token = await self._do_refresh()
+            else:
+                self._token = await self._do_login()
+
+            return self._token.access_token
+
+    async def request(self, method: str, url: str, **kwargs) -> aiohttp.ClientResponse:
+        """自动携带 token 并处理 401"""
+        token = await self.get_token()
+        headers = kwargs.pop("headers", {})
+        headers["Authorization"] = f"Bearer {token}"
+
+        resp = await self._session.request(method, url, headers=headers, **kwargs)
+
+        if resp.status == 401:
+            # Token 过期，刷新后重试
+            self._token = None  # 强制刷新
+            token = await self.get_token()
+            headers["Authorization"] = f"Bearer {token}"
+            resp = await self._session.request(method, url, headers=headers, **kwargs)
+
+        return resp
+```
+
+## WebSocket API 分析
+
+```python
+import asyncio
+import aiohttp
+import json
+
+async def analyze_websocket_api():
+    """分析 WebSocket 实时数据流"""
+
+    # === 1. 使用浏览器 DevTools 观察 WS 帧 ===
+    # Network → WS → Frames 面板可以看到发送和接收的所有消息
+
+    # === 2. 用 Python 连接 WebSocket 观察 ===
+    async with aiohttp.ClientSession() as session:
+        async with session.ws_connect("wss://api.example.com/ws") as ws:
+
+            # 发送认证消息（从 DevTools 复制的格式）
+            auth_msg = json.dumps({
+                "type": "auth",
+                "token": "eyJxxx...",
+                "version": "2.0",
+                "client": "web",
+            })
+            await ws.send_str(auth_msg)
+
+            # 订阅频道
+            subscribe_msg = json.dumps({
+                "type": "subscribe",
+                "channel": "ticker",
+                "symbols": ["BTCUSDT", "ETHUSDT"],
+            })
+            await ws.send_str(subscribe_msg)
+
+            # 接收消息（观察消息结构和心跳）
+            async for msg in ws:
+                if msg.type == aiohttp.WSMsgType.TEXT:
+                    data = json.loads(msg.data)
+                    msg_type = data.get("type", "")
+
+                    if msg_type == "ping":
+                        # 自动回复 pong（维持连接）
+                        await ws.send_str(json.dumps({"type": "pong"}))
+                    elif msg_type == "data":
+                        # 处理业务数据
+                        print(f"[数据] {data}")
+                    elif msg_type == "error":
+                        print(f"[错误] {data}")
+                    elif msg_type == "subscribed":
+                        print(f"[订阅成功] {data}")
+
+                elif msg.type == aiohttp.WSMsgType.CLOSED:
+                    break
+                elif msg.type == aiohttp.WSMsgType.ERROR:
+                    break
+
+
+# === 3. WebSocket 消息模式分析 ===
+async def ws_api_tester():
+    """测试 WebSocket API 的各种操作"""
+    async with aiohttp.ClientSession() as session:
+        async with session.ws_connect("wss://api.example.com/ws") as ws:
+            # 分析：发送不同消息观察响应
+            test_messages = [
+                {"type": "ping"},
+                {"type": "get_info"},
+                {"type": "get_balance"},
+                {"type": "get_orders", "status": "open"},
+                {"type": "subscribe", "channel": "orders"},
+            ]
+
+            for msg in test_messages:
+                await ws.send_str(json.dumps(msg))
+                resp = await ws.receive(timeout=5)
+                if resp.type == aiohttp.WSMsgType.TEXT:
+                    print(f"请求: {msg}")
+                    print(f"响应: {json.loads(resp.data)[:200]}")
+```
+
+## gRPC API 逆向
+
+越来越多的移动端和 Web 应用使用 gRPC 或 gRPC-Web 协议，传统的 HTTP 抓包方式需要调整：
+
+```python
+# === 1. 识别 gRPC-Web 请求 ===
+# 特征：
+# - Content-Type: application/grpc-web 或 application/grpc-web-text
+# - 响应是二进制 protobuf（不可读）
+# - POST 请求到 .example.com/package.Service/Method
+
+# === 2. 浏览器中调试 gRPC-Web ===
+# 如果响应是二进制，在 F12 Network 中可以看到：
+# - Request Payload 为二进制乱码
+# - Response 也是二进制乱码
+# 需要安装 protobuf decoder 插件（如 protobuf-inspector）
+
+# === 3. 用 Python 反序列化 protobuf ===
+import binascii
+
+def decode_grpc_web_payload(hex_data: str) -> dict:
+    """
+    解析 gRPC-Web 帧结构
+    gRPC-Web 帧格式: 1 byte flag + 4 bytes length + payload
+    """
+    raw = binascii.unhexlify(hex_data)
+    frames = []
+
+    offset = 0
+    while offset < len(raw):
+        # 第一个字节：flag (0x00=data, 0x80=trailer)
+        flag = raw[offset]
+        # 接下来 4 字节：payload 长度（大端序）
+        length = int.from_bytes(raw[offset+1:offset+5], "big")
+        # payload
+        payload = raw[offset+5:offset+5+length]
+        frames.append({
+            "flag": "data" if flag == 0 else "trailer",
+            "length": length,
+            "data": payload.hex(),
+        })
+        offset += 5 + length
+
+    return {"frames": frames}
+
+# === 4. 使用 protoc 恢复 .proto 文件 ===
+# 如果抓到的 payload 需要解析结构：
+"""
+1. 安装 protoc: https://github.com/protocolbuffers/protobuf/releases
+2. 搜索常见的 proto 文件特征（字段编号 + wire type）
+3. 尝试已知的公共 proto（Google APIs、gRPC health 等）
+4. 使用 protoreflect 或 protobuf-inspector 猜测结构
+"""
+
+# === 5. 使用 grpcurl 调试 gRPC API ===
+"""
+# 安装 grpcurl
+go install github.com/fullstorydev/grpcurl/cmd/grpcurl@latest
+
+# 查看服务列表
+grpcurl -insecure api.example.com:443 list
+
+# 查看服务方法
+grpcurl -insecure api.example.com:443 list package.Service
+
+# 调用具体方法
+grpcurl -insecure -d '{"page": 1}' api.example.com:443 package.Service/ListItems
+
+# 使用反射
+grpcurl -insecure api.example.com:443 describe package.Service
+"""
+
+# === 6. gRPC-Web 代理方案 ===
+# 使用 gRPC-Web 到 gRPC 的转换代理分析流量
+"""
+# 使用 envoy 作为本地代理
+# 或者在浏览器层使用 protobuf-inspector 等扩展
+pip install grpc-web-inspector
+"""
+```
+
+| 技术 | 工具 | 方法 |
+|------|------|------|
+| HTTP API | Charles / Fiddler | SSL Proxying + Breakpoints |
+| 签名算法 | Python hashlib/hmac | 参数排序 + 常见 hash 枚举 |
+| Token | 自定义 Session | 自动刷新 + 401 重试 |
+| WebSocket | DevTools Frames | 消息模式分析 + 心跳维持 |
+| gRPC | grpcurl / protoc | protobuf 反序列化 + 反射 |
+| JS 加密 | Source 面板 | 搜索 "sign" "encrypt" 等关键词 |
+
+## 浏览器端 JS 逆向辅助
+
+```python
+# === Charles 配合调试 JS ===
+"""
+1. 在 JS 源码中搜索 sign、encrypt、md5、sha1 等关键词
+2. 在 Sources 面板中设置断点
+3. 在 console 中模拟函数调用
+
+浏览器 Console 调试技巧：
+> JSON.stringify(params)
+> Object.keys(params).sort()
+> CryptoJS.MD5(str).toString()
+"""
+
+# === 使用 PyExecJS 模拟 JS 签名 ===
+# 当签名逻辑复杂且纯 JS 时
+import execjs
+
+# 将抓到的 JS 签名函数保存到文件
+js_code = """
+function generateSign(params, secret) {
+    var keys = Object.keys(params).sort();
+    var raw = keys.map(function(k) {
+        return k + '=' + params[k];
+    }).join('&');
+    raw += '&key=' + secret;
+    return CryptoJS.MD5(raw).toString();
+}
+"""
+
+# 执行 JS
+ctx = execjs.compile(js_code)
+sign = ctx.call("generateSign", {"page": 1, "timestamp": "1705300000"}, "secret_key")
+print(sign)
+```
+
+| 步骤 | 方法 | 目的 |
+|------|------|------|
+| 1 | Charles SSL Proxying | 解密 HTTPS 流量 |
+| 2 | 参数对比 | 找出哪些参数参与签名 |
+| 3 | 算法枚举 | MD5/SHA1/HMAC 逐一验证 |
+| 4 | Token 流程 | 分析 auth/refresh 端点 |
+| 5 | 模拟验证 | 代码复现签名得到相同结果 |
+| 6 | 自动化集成 | 接入爬虫/脚本

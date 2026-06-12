@@ -1,0 +1,325 @@
+---
+title: Requests 高级用法
+order: 2
+difficulty: core
+estimated_time: 30min
+tags: [Requests, HTTP, Session, SSL, 连接池, 代理, Cookie]
+---
+
+## Session 上下文管理与定制
+
+`requests.Session` 在连接关闭后不会自动清理资源，推荐作为上下文管理器使用：
+
+```python
+import requests
+from requests.adapters import HTTPAdapter
+
+with requests.Session() as session:
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        "Accept-Language": "zh-CN,zh;q=0.9",
+    })
+    # Session 级 Cookie：后续所有请求自动携带
+    session.cookies.set("session_id", "abc123", domain=".example.com")
+
+    resp1 = session.get("https://httpbin.org/headers")
+    resp2 = session.get("https://httpbin.org/cookies")
+    # Session 关闭后连接自动归还连接池
+```
+
+**请求级参数与 Session 级参数的合并规则：**
+
+```python
+with requests.Session() as s:
+    s.headers.update({"X-Global": "true"})
+
+    # 请求级 headers 会合并到 Session headers 上
+    resp = s.get("https://httpbin.org/headers", headers={"X-Local": "true"})
+    # 最终发送: X-Global + X-Local
+
+    # 但请求级 cookies 会覆盖 Session cookies（同 key 时）
+    resp = s.get("https://httpbin.org/cookies", cookies={"session_id": "override"})
+```
+
+## 连接池调优
+
+Requests 底层使用 `urllib3` 的连接池，通过 `HTTPAdapter` 调整：
+
+```python
+import requests
+from requests.adapters import HTTPAdapter
+
+session = requests.Session()
+
+# 调优连接池参数
+adapter = HTTPAdapter(
+    pool_connections=100,    # 缓存连接数（默认 10）
+    pool_maxsize=100,        # 池中最大连接数（默认 10）
+    pool_block=False,        # 池满时是否阻塞等待（默认 False，直接抛异常）
+)
+
+# 分别为 http 和 https 挂载适配器
+session.mount("http://", adapter)
+session.mount("https://", adapter)
+
+# 高并发场景下显著减少 TCP 握手开销
+```
+
+**连接池耗尽诊断：**
+
+```python
+import urllib3
+
+# 查看连接池状态（debug 级别日志）
+urllib3.add_stderr_logger()
+
+# 或者直接检查连接池
+from requests.packages.urllib3.poolmanager import PoolManager
+# 自定义 PoolManager 监听池状态
+```
+
+## SSL 验证详解
+
+```python
+import requests
+import urllib3
+
+# 1. 跳过验证（仅测试环境）
+resp = requests.get("https://self-signed.badssl.com", verify=False)
+
+# 2. 指定 CA 证书包
+resp = requests.get("https://example.com", verify="/path/to/cacert.pem")
+
+# 3. 客户端证书认证（双向 TLS）
+resp = requests.get(
+    "https://api.example.com/secure",
+    cert=("/path/to/client.cert.pem", "/path/to/client.key.pem"),
+)
+
+# 4. 禁用 SSL 警告
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# 5. 自定义 SSL 上下文（最高控制粒度）
+import ssl
+
+ssl_context = ssl.create_default_context()
+ssl_context.check_hostname = False
+ssl_context.verify_mode = ssl.CERT_NONE
+
+session = requests.Session()
+session.verify = False  # 仍然会警告
+# 更优雅的方式：自定义适配器
+```
+
+## 重试策略进阶
+
+```python
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+# 精细化的重试策略
+retry_strategy = Retry(
+    total=3,                    # 总重试次数
+    connect=2,                  # 连接失败重试次数
+    read=2,                     # 读取失败重试次数
+    other=1,                    # 其他错误重试次数
+    backoff_factor=1,           # 退避因子：{backoff_factor} * (2 ** ({retry_number} - 1))
+    status_forcelist=[429, 500, 502, 503, 504],  # 哪些状态码触发重试
+    allowed_methods=["GET", "POST", "PUT"],       # 允许重试的 HTTP 方法
+    raise_on_status=True,       # 重试耗尽后仍失败是否抛异常
+    raise_on_redirect=False,    # 重定向是否抛异常
+)
+
+adapter = HTTPAdapter(max_retries=retry_strategy)
+session = requests.Session()
+session.mount("https://", adapter)
+session.mount("http://", adapter)
+
+# 使用
+try:
+    resp = session.get("https://httpbin.org/status/503", timeout=10)
+except requests.exceptions.RetryError:
+    print("重试耗尽，请求仍然失败")
+
+# 处理 429 Too Many Requests（带 Retry-After 头）
+class RateLimitRetry(Retry):
+    def increment(self, *args, **kwargs):
+        resp = kwargs.get("response")
+        if resp and resp.status_code == 429:
+            retry_after = int(resp.headers.get("Retry-After", 1))
+            print(f"触发限流，等待 {retry_after}s")
+            import time
+            time.sleep(retry_after)
+        return super().increment(*args, **kwargs)
+```
+
+## Cookie 精细管理
+
+```python
+import requests
+from http.cookiejar import MozillaCookieJar
+
+# 1. 自定义 Cookie 注入
+session = requests.Session()
+session.cookies.set("token", "eyJhbGciOiJIUzI1NiIs...", domain=".example.com")
+session.cookies.set("user_pref", "dark_mode", domain=".example.com", path="/settings")
+
+# 2. 保存和加载 Cookie（Netscape 格式）
+session.cookies.save()  # 需指定文件名
+cookie_jar = MozillaCookieJar("cookies.txt")
+cookie_jar.load(ignore_discard=True, ignore_expires=True)
+session.cookies = cookie_jar
+
+# 3. 从响应中获取 Cookie
+resp = requests.get("https://httpbin.org/cookies/set?name=value")
+for cookie in resp.cookies:
+    print(f"{cookie.name}={cookie.value}, domain={cookie.domain}, path={cookie.path}")
+
+# 4. 手动构造 Cookie 发送
+cookies = {"session": "abc123", "theme": "dark"}
+resp = requests.get("https://httpbin.org/cookies", cookies=cookies)
+```
+
+## 超时精细控制
+
+```python
+import requests
+
+# connect timeout：建立连接的时间上限
+# read timeout：接收数据包之间的最大间隔
+# total timeout（通过 hooks 实现）
+
+# 标准用法
+resp = requests.get("https://httpbin.org/delay/3", timeout=(3.05, 10))
+
+# 永不超时（不推荐）
+resp = requests.get("https://example.com", timeout=None)
+
+# 通过 Session 设置全局超时
+class TimeoutSession(requests.Session):
+    def __init__(self, default_timeout=(5, 15)):
+        super().__init__()
+        self.default_timeout = default_timeout
+
+    def request(self, method, url, **kwargs):
+        kwargs.setdefault("timeout", self.default_timeout)
+        return super().request(method, url, **kwargs)
+
+session = TimeoutSession(default_timeout=(3.05, 10))
+resp = session.get("https://httpbin.org/delay/1")         # 使用默认超时
+resp = session.get("https://httpbin.org/delay/5", timeout=30)  # 覆盖
+```
+
+## 流式下载增强
+
+```python
+import requests
+from tqdm import tqdm
+
+def download_with_progress(url: str, filepath: str):
+    """带进度条的大文件下载"""
+    with requests.get(url, stream=True) as resp:
+        resp.raise_for_status()
+        total = int(resp.headers.get("content-length", 0))
+
+        with open(filepath, "wb") as f:
+            with tqdm(total=total, unit="B", unit_scale=True, desc=filepath) as pbar:
+                for chunk in resp.iter_content(chunk_size=8192):
+                    f.write(chunk)
+                    pbar.update(len(chunk))
+
+def resume_download(url: str, filepath: str):
+    """断点续传"""
+    headers = {}
+    try:
+        existing_size = os.path.getsize(filepath)
+        headers["Range"] = f"bytes={existing_size}-"
+    except OSError:
+        existing_size = 0
+
+    resp = requests.get(url, headers=headers, stream=True)
+    if resp.status_code == 206:  # Partial Content
+        mode = "ab"
+    else:
+        mode = "wb"
+
+    with open(filepath, mode) as f:
+        for chunk in resp.iter_content(chunk_size=8192):
+            f.write(chunk)
+```
+
+## 代理配置进阶
+
+```python
+import requests
+
+# 1. SOCKS5 代理（需安装 requests[socks]）
+proxies = {
+    "http": "socks5://127.0.0.1:1080",
+    "https": "socks5://127.0.0.1:1080",
+}
+resp = requests.get("https://httpbin.org/ip", proxies=proxies)
+
+# 2. 代理自动发现（环境变量）
+import os
+os.environ["HTTP_PROXY"] = "http://127.0.0.1:7890"
+os.environ["HTTPS_PROXY"] = "http://127.0.0.1:7890"
+os.environ["NO_PROXY"] = "localhost,127.0.0.1,.local"
+
+# 3. 代理轮换
+import random
+
+PROXY_POOL = [
+    "http://proxy1.example.com:8080",
+    "http://proxy2.example.com:8080",
+    "http://proxy3.example.com:8080",
+]
+
+def get_random_proxy():
+    proxy = random.choice(PROXY_POOL)
+    return {"http": proxy, "https": proxy}
+
+session = requests.Session()
+for i in range(10):
+    session.proxies.update(get_random_proxy())
+    resp = session.get("https://httpbin.org/ip")
+    print(resp.json())
+
+# 4. 带认证的代理
+proxies = {
+    "http": "http://user:password@127.0.0.1:7890",
+}
+```
+
+## 请求钩子（Hooks）
+
+```python
+import requests
+
+def log_request(response, *args, **kwargs):
+    """请求完成后的回调"""
+    print(f"[{response.status_code}] {response.request.method} {response.request.url}")
+    return response
+
+def check_rate_limit(response, *args, **kwargs):
+    if response.status_code == 429:
+        retry_after = response.headers.get("Retry-After", "1")
+        print(f"触发限流，等待 {retry_after}s")
+    return response
+
+session = requests.Session()
+session.hooks["response"] = [log_request, check_rate_limit]
+
+resp = session.get("https://httpbin.org/status/200")
+resp = session.get("https://httpbin.org/status/429")
+```
+
+| 特性 | 基础用法 | 高级用法 |
+|------|---------|---------|
+| Session | 简单复用 | 上下文管理 + 线程安全 |
+| 连接池 | 默认 10 | pool_maxsize=100 + 调优 |
+| SSL | verify=True/False | 自定义 CA + 客户端证书 + SSL Context |
+| 重试 | 基础 Retry | 按状态码 + 自定义退避 + RateLimit 感知 |
+| 超时 | timeout=秒 | connect/read 分离 + Session 全局默认 |
+| 代理 | 固定代理 | 轮换 + SOCKS5 + 自动发现 |
+| 流式 | iter_content | 进度条 + 断点续传 |

@@ -1,0 +1,185 @@
+---
+title: 结构化输出与 JSON Mode
+order: 4
+difficulty: intermediate
+estimated_time: 25min
+tags: [OpenAI, 结构化输出, JSON]
+---
+
+## 入门
+
+生产级 Agent 需要模型输出结构化的数据，而不是自由文本。OpenAI 提供 **Structured Outputs** 和 **JSON Mode** 两种方式。
+
+## 核心
+
+### JSON Mode
+
+```python
+from openai import OpenAI
+
+client = OpenAI()
+
+# JSON Mode: 强制输出 JSON，但不校验 schema
+response = client.chat.completions.create(
+    model="gpt-4o",
+    messages=[
+        {"role": "system", "content": "提取信息并以 JSON 格式输出"},
+        {"role": "user", "content": "张三，28岁，Python开发"}
+    ],
+    response_format={"type": "json_object"}
+)
+
+import json
+data = json.loads(response.choices[0].message.content)
+print(data)  # {"name": "张三", "age": 28, "job": "Python开发"}
+```
+
+### Structured Outputs (推荐)
+
+```python
+from pydantic import BaseModel
+from typing import List, Optional
+
+# 1. 定义输出 Schema
+class UserInfo(BaseModel):
+    name: str
+    age: int
+    skills: List[str]
+    is_active: Optional[bool] = True
+
+# 2. 使用 parse 方法（自动校验类型）
+response = client.beta.chat.completions.parse(
+    model="gpt-4o",
+    messages=[
+        {"role": "system", "content": "提取用户信息"},
+        {"role": "user", "content": "李四，25岁，擅长Go、Kubernetes、Docker"}
+    ],
+    response_format=UserInfo,
+)
+
+user = response.choices[0].message.parsed
+print(user.name)       # 李四
+print(user.age)        # 25
+print(user.skills)     # ['Go', 'Kubernetes', 'Docker']
+print(type(user))      # <class 'UserInfo'>
+```
+
+### 嵌套结构
+
+```python
+from typing import List, Optional
+from pydantic import BaseModel
+from enum import Enum
+
+class IntentType(str, Enum):
+    question = "question"
+    complaint = "complaint"
+    greeting = "greeting"
+    other = "other"
+
+class Entity(BaseModel):
+    name: str
+    value: str
+    confidence: float
+
+class CustomerMessage(BaseModel):
+    intent: IntentType
+    entities: List[Entity]
+    sentiment: str  # positive / neutral / negative
+    requires_escalation: bool
+    suggested_reply: Optional[str] = None
+
+response = client.beta.chat.completions.parse(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "你好，我的订单一直没到，很着急"}],
+    response_format=CustomerMessage,
+)
+
+parsed = response.choices[0].message.parsed
+print(parsed.intent)               # complaint
+print(parsed.sentiment)            # negative
+print(parsed.requires_escalation)  # True
+```
+
+## 进阶
+
+### Agent 工具调用中的结构化输出
+
+```python
+# Agent 执行工具后，用结构化输出解析结果
+class ToolResult(BaseModel):
+    success: bool
+    data: Optional[str] = None
+    error: Optional[str] = None
+    suggested_next_action: str
+
+class AgentStep(BaseModel):
+    thought: str
+    tool_name: Optional[str] = None
+    tool_args: Optional[dict] = None
+    result: Optional[ToolResult] = None
+    is_final: bool = False
+
+class AgentOutput(BaseModel):
+    steps: List[AgentStep]
+    final_answer: str
+    confidence: float  # 0-1
+
+# 让 Agent 输出结构化推理过程
+response = client.beta.chat.completions.parse(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "北京和上海哪个城市人口更多？"}],
+    response_format=AgentOutput,
+)
+
+agent_output = response.choices[0].message.parsed
+for step in agent_output.steps:
+    print(f"思考: {step.thought}")
+    if step.tool_name:
+        print(f"  工具: {step.tool_name}({step.tool_args})")
+print(f"最终: {agent_output.final_answer}")
+```
+
+### 错误处理
+
+```python
+# 当模型输出不符合 schema 时
+try:
+    response = client.beta.chat.completions.parse(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "你好"}],
+        response_format=UserInfo,
+    )
+    user = response.choices[0].message.parsed
+except Exception as e:
+    # 如果解析失败，可以回退到 JSON Mode
+    fallback = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "你好"}],
+        response_format={"type": "json_object"}
+    )
+    data = json.loads(fallback.choices[0].message.content)
+    user = UserInfo(**data)
+```
+
+### 实践建议
+
+```python
+# 1. 对 Prompt 简短
+#    → 把约束放在 response_format 中，Prompt 只描述任务
+
+# 2. 字段名要有意义
+#    → model 会自动根据字段名和描述推断映射
+
+# 3. 用 Optional 标记非必填
+#    → 模型不确定时可以跳过
+
+# 4. 嵌套不要过深
+#    → 超过 3 层嵌套可能降低准确率
+```
+
+## 练习
+
+1. 为客服系统定义结构化输出：意图分类 + 实体提取 + 情感分析
+2. 用 Structured Outputs 让 Agent 输出完整的推理步骤链
+3. 对比 JSON Mode 和 Structured Outputs 在类型安全上的区别

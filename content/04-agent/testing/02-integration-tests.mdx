@@ -1,0 +1,219 @@
+---
+title: 集成测试
+order: 2
+difficulty: advanced
+estimated_time: 25min
+tags: [测试, 集成测试, CI]
+---
+
+## 入门
+
+集成测试验证组件间的交互：LLM + 工具 + 外部服务（Redis、数据库）协同工作。
+
+## 核心
+
+### 测试容器
+
+```python
+# 安装: pip install pytest-docker
+
+import pytest
+import redis.asyncio as redis
+
+@pytest.fixture
+async def redis_container(request):
+    """启动 Redis 测试容器"""
+    import docker
+    client = docker.from_env()
+    container = client.containers.run(
+        "redis:7-alpine",
+        detach=True,
+        ports={"6379/tcp": 16379},  # 用不同端口避免冲突
+        remove=True
+    )
+    # 等待就绪
+    import time
+    time.sleep(2)
+
+    yield "redis://localhost:16379"
+
+    container.stop()
+
+@pytest.mark.asyncio
+async def test_redis_cache(redis_container):
+    """验证 Redis 缓存集成"""
+    r = redis.from_url(redis_container)
+    await r.set("test_key", "test_value")
+    value = await r.get("test_key")
+    assert value == "test_value"
+```
+
+### FastAPI 集成测试
+
+```python
+from fastapi.testclient import TestClient
+from your_app.main import app
+
+client = TestClient(app)
+
+class TestChatAPI:
+    def test_health_check(self):
+        response = client.get("/health")
+        assert response.status_code == 200
+        assert response.json() == {"status": "ok"}
+
+    def test_chat_endpoint(self, monkeypatch):
+        """Mock LLM 调用，测试 API 层"""
+
+        async def mock_llm_call(*args, **kwargs):
+            return {"choices": [{"message": {"content": "mock reply"}}]}
+
+        monkeypatch.setattr("your_app.llm.call", mock_llm_call)
+
+        response = client.post(
+            "/chat",
+            json={"message": "你好", "session_id": "test-1"}
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert "reply" in data
+```
+
+### 端到端测试
+
+```python
+class TestRAGPipeline:
+    """完整的 RAG 集成测试"""
+
+    @pytest.mark.asyncio
+    async def test_rag_flow(self, test_vector_db):
+        # 1. 插入测试数据
+        docs = [
+            {"id": "1", "text": "AI Agent 是自主系统", "category": "ai"},
+            {"id": "2", "text": "Python 是编程语言", "category": "tech"},
+        ]
+        for doc in docs:
+            await test_vector_db.insert(doc)
+
+        # 2. 执行 RAG 检索
+        results = await test_vector_db.search("自主系统", top_k=2)
+        assert len(results) >= 1
+
+        # 3. 验证结果
+        top_result = results[0]
+        assert "Agent" in top_result.text
+
+        # 4. 清理
+        await test_vector_db.clear()
+```
+
+## 进阶
+
+### CI 集成
+
+```yaml
+# .github/workflows/test.yml
+name: Test Suite
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+      qdrant:
+        image: qdrant/qdrant:latest
+        ports:
+          - 6333:6333
+
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: 安装依赖
+      run: |
+        pip install pytest pytest-asyncio httpx
+        pip install -r requirements.txt
+
+    - name: 运行测试
+      run: pytest tests/ -v --timeout=30
+      env:
+        REDIS_URL: redis://localhost:6379
+        QDRANT_URL: http://localhost:6333
+        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+    - name: 运行评估
+      run: python scripts/eval.py
+```
+
+### 测试分层策略
+
+```python
+"""
+┌─────────────────────┐
+│    E2E 测试 (慢)      │ ← 完整流程，调用真实 API
+├─────────────────────┤
+│  集成测试 (中等)       │ ← 测试组件交互，Mock LLM
+├─────────────────────┤
+│  单元测试 (快)         │ ← Mock 所有外部依赖
+└─────────────────────┘
+
+建议比例: 70% 单元测试 / 20% 集成测试 / 10% E2E
+
+LLM 应用特有的测试关注点:
+1. ✅ Prompt 是否正确渲染
+2. ✅ Tool 调用参数是否正确
+3. ✅ 错误处理和重试逻辑
+4. ✅ 输出解析是否正确
+5. ❌ 不测试 LLM 输出质量（交给 Evaluation）
+"""
+```
+
+### Mock 与生产环境切换
+
+```python
+import os
+
+class LLMFactory:
+    """根据环境返回真实或 Mock LLM"""
+
+    @staticmethod
+    def create():
+        env = os.getenv("APP_ENV", "development")
+
+        if env == "test":
+            return MockLLM()
+
+        from openai import OpenAI
+        return OpenAI()
+
+class MockLLM:
+    """可配置的 Mock LLM"""
+
+    def __init__(self):
+        self.responses = {
+            "你好": "你好！有什么可以帮助你的？",
+            "分类": "question",
+        }
+        self.default = "mock response"
+
+    async def chat(self, messages: list) -> str:
+        user_msg = messages[-1]["content"]
+        return self.responses.get(user_msg, self.default)
+```
+
+## 练习
+
+1. 用 TestClient 测试 FastAPI chat endpoint，Mock LLM 调用
+2. 在 GitHub Actions 中用 services 启动 Redis + Qdrant，运行集成测试
+3. 实现 LLMFactory，根据环境变量自动切换真实 LLM 和 Mock

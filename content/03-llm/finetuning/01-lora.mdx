@@ -1,0 +1,141 @@
+---
+title: LoRA 微调实战
+order: 1
+difficulty: advanced
+estimated_time: 40min
+tags: [LoRA, 微调, PEFT, QLoRA, 模型]
+---
+
+## LoRA 原理
+
+LoRA（Low-Rank Adaptation）在冻结原模型基础上，插入少量可训练参数：
+
+```
+原始权重 W (冻结) → 输出
+                   ↗
+LoRA 矩阵 A×B (可训练)
+```
+
+参数量减少 10000x，单 GPU 即可微调 7B 模型。
+
+## 环境准备
+
+```bash
+pip install transformers peft accelerate bitsandbytes trl
+```
+
+## 数据集格式
+
+```python
+# 对话格式数据集
+dataset = [
+    {
+        "instruction": "什么是 Python 装饰器？",
+        "output": "装饰器是一种高阶函数，可以在不修改原函数的情况下扩展功能..."
+    },
+    {
+        "instruction": "解释异步编程",
+        "output": "异步编程允许程序在等待 IO 时执行其他任务..."
+    },
+]
+```
+
+## QLoRA 微调
+
+```python
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from peft import LoraConfig, get_peft_model
+from datasets import Dataset
+import torch
+
+# 4-bit 量化加载
+bnb_config = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_use_double_quant=True,
+    bnb_4bit_quant_type="nf4",
+    bnb_4bit_compute_dtype=torch.bfloat16,
+)
+
+model = AutoModelForCausalLM.from_pretrained(
+    "Qwen/Qwen2.5-7B-Instruct",
+    quantization_config=bnb_config,
+    device_map="auto",
+)
+tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-7B-Instruct")
+
+# LoRA 配置
+lora_config = LoraConfig(
+    r=8,                # 秩
+    lora_alpha=16,      # 缩放
+    target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+    lora_dropout=0.05,
+    bias="none",
+    task_type="CAUSAL_LM",
+)
+
+model = get_peft_model(model, lora_config)
+print(f"可训练参数: {model.print_trainable_parameters()}")
+```
+
+## 训练
+
+```python
+from trl import SFTTrainer
+
+trainer = SFTTrainer(
+    model=model,
+    tokenizer=tokenizer,
+    train_dataset=dataset,
+    args=TrainingArguments(
+        output_dir="./qwen-lora",
+        per_device_train_batch_size=4,
+        gradient_accumulation_steps=4,
+        learning_rate=2e-4,
+        num_train_epochs=3,
+        logging_steps=10,
+        save_strategy="epoch",
+        fp16=True,
+    ),
+)
+
+trainer.train()
+
+# 保存 LoRA 权重（几十 MB）
+model.save_pretrained("./qwen-lora-final")
+```
+
+## 合并与推理
+
+```python
+from peft import PeftModel
+
+# 加载基座 + LoRA
+base_model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-7B-Instruct")
+model = PeftModel.from_pretrained(base_model, "./qwen-lora-final")
+
+# 合并权重（可选）
+merged = model.merge_and_unload()
+merged.save_pretrained("./qwen-merged")
+
+# 推理
+tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-7B-Instruct")
+inputs = tokenizer("什么是 Agent？", return_tensors="pt")
+outputs = model.generate(**inputs, max_new_tokens=256)
+print(tokenizer.decode(outputs[0]))
+```
+
+## Ollama 部署
+
+```bash
+# 转为 GGUF
+ollama create my-finetuned-model -f Modelfile
+ollama run my-finetuned-model
+```
+
+| 概念 | 说明 |
+|------|------|
+| LoRA | 低秩适配，高效微调 |
+| QLoRA | 量化版 LoRA，单卡可跑 |
+| PEFT | HuggingFace 参数高效微调库 |
+| TRL | Transformer 强化学习训练 |
+| adapter | 微调权重文件（~10MB） |

@@ -1,0 +1,42 @@
+---
+title: Docker 环境搭建
+order: 3
+difficulty: intermediate
+estimated_time: 15min
+tags: [环境配置, Docker]
+---
+
+## 入门
+
+```bash
+# 检查 Docker
+docker --version
+docker compose version
+
+# 安装
+# macOS: 下载 Docker Desktop
+# Windows: 下载 Docker Desktop (需要 WSL2)
+# Linux: curl -fsSL https://get.docker.com | bash
+```
+
+## 核心
+
+```bash
+# 验证安装
+docker run hello-world
+
+# 常用镜像
+docker pull python:3.12-slim
+docker pull postgres:16-alpine
+docker pull redis:7-alpine
+docker pull qdrant/qdrant
+
+# 非 root 用户使用 Docker
+sudo usermod -aG docker $USER
+# 重新登录后生效
+```
+
+## 练习
+
+1. 安装 Docker Desktop 并成功运行 hello-world
+2. 拉取 postgres:16-alpine 镜像并启动容器

@@ -1,0 +1,131 @@
+---
+title: XPath 解析
+order: 1
+difficulty: beginner
+estimated_time: 20min
+tags: [XPath, HTML, 解析, 爬虫]
+---
+
+## 基础语法
+
+| 表达式 | 说明 |
+|--------|------|
+| `/` | 从根节点选取 |
+| `//` | 任意位置的节点 |
+| `.` | 当前节点 |
+| `..` | 父节点 |
+| `@` | 选取属性 |
+| `*` | 通配符 |
+
+## Python 中使用
+
+```bash
+pip install lxml
+```
+
+```python
+from lxml import html
+
+doc = """
+<html>
+<body>
+  <div class="content">
+    <h1>标题</h1>
+    <p class="intro">介绍文字</p>
+    <ul>
+      <li>第一项</li>
+      <li>第二项</li>
+    </ul>
+  </div>
+</body>
+</html>
+"""
+
+tree = html.fromstring(doc)
+
+# 基本选取
+tree.xpath("//h1")              # 所有 h1
+tree.xpath("//p")               # 所有 p
+tree.xpath("//div[@class]")     # 有 class 属性的 div
+```
+
+## 常用路径
+
+```python
+# 按标签
+tree.xpath("//h1/text()")          # h1 的文本
+tree.xpath("//a/@href")            # 所有链接
+tree.xpath("//img/@src")           # 所有图片
+
+# 按属性
+tree.xpath('//div[@id="main"]')
+tree.xpath('//*[@class="title"]')
+tree.xpath('//input[@type="text"]')
+
+# 按位置
+tree.xpath("//li[1]")              # 第一个 li
+tree.xpath("//li[last()]")         # 最后一个
+tree.xpath("//li[position()<3]")   # 第 1-2 个
+
+# 按文本
+tree.xpath('//p[contains(text(), "介绍")]')
+tree.xpath('//a[starts-with(@href, "https")]')
+
+# 逻辑组合
+tree.xpath('//div[@class="item" and @data-active="true"]')
+tree.xpath('//a[@href or @onclick]')
+```
+
+## 实战：爬取文章列表
+
+```python
+import requests
+from lxml import html
+
+def parse_articles(url: str) -> list[dict]:
+    resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"})
+    tree = html.fromstring(resp.content)
+
+    articles = []
+    for item in tree.xpath('//article[contains(@class, "post")]'):
+        articles.append({
+            "title": item.xpath('.//h2/a/text()')[0].strip(),
+            "url": item.xpath('.//h2/a/@href')[0],
+            "summary": item.xpath('.//p[@class="summary"]/text()')[0],
+            "date": item.xpath('.//time/@datetime')[0],
+        })
+    return articles
+```
+
+## XPath vs CSS
+
+```python
+# CSS 选择器
+soup.select("div.content > p.intro")
+
+# XPath 等效
+tree.xpath('//div[@class="content"]/p[@class="intro"]')
+
+# XPath 能做的 CSS 做不到的：
+tree.xpath('//p[contains(text(), "关键词")]')     # 文本包含
+tree.xpath('//a[starts-with(@href, "/relative")]')  # 属性前缀
+tree.xpath('//p[following-sibling::div]')            # 后续兄弟
+tree.xpath('//span[ancestor::div[@id="main"]]')      # 祖先关系
+```
+
+## Chrome 中提取 XPath
+
+在 Chrome DevTools 中：右键元素 → Copy → Copy XPath / Copy full XPath
+
+```text
+//*[@id="content"]/div[2]/div/article[1]/h2/a
+```
+
+| 函数 | 说明 |
+|------|------|
+| `text()` | 文本内容 |
+| `contains(a, b)` | a 包含 b |
+| `starts-with(a, b)` | a 以 b 开头 |
+| `normalize-space()` | 去除空白 |
+| `last()` | 最后一个 |
+| `position()` | 位置序号 |

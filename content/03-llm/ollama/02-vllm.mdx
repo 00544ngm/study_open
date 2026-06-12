@@ -1,0 +1,151 @@
+---
+title: vLLM 生产级推理
+order: 2
+difficulty: advanced
+estimated_time: 30min
+tags: [vLLM, 推理引擎, 部署, 性能]
+---
+
+## vLLM 简介
+
+vLLM 是高吞吐量 LLM 推理引擎，核心特性：
+
+- **PagedAttention** — 高效显存管理
+- **连续批处理** — 动态合并请求
+- **Tensor 并行** — 多 GPU 分布式推理
+- **OpenAI 兼容 API**
+
+## 安装
+
+```bash
+pip install vllm
+
+# 需要 CUDA 11.8+ 或 12.1+
+```
+
+## 启动服务
+
+```bash
+# 单模型服务
+python -m vllm.entrypoints.openai.api_server \
+    --model Qwen/Qwen2.5-7B-Instruct \
+    --port 8000 \
+    --tensor-parallel-size 1 \
+    --max-model-len 8192
+
+# 支持 HuggingFace 上的任意模型
+```
+
+## OpenAI 兼容调用
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:8000/v1",
+    api_key="token-abc",
+)
+
+# 聊天
+resp = client.chat.completions.create(
+    model="Qwen/Qwen2.5-7B-Instruct",
+    messages=[{"role": "user", "content": "你好"}],
+    temperature=0.7,
+    max_tokens=512,
+)
+print(resp.choices[0].message.content)
+```
+
+## LangChain 集成
+
+```python
+from langchain_openai import ChatOpenAI
+
+llm = ChatOpenAI(
+    base_url="http://localhost:8000/v1",
+    api_key="token-abc",
+    model="Qwen/Qwen2.5-7B-Instruct",
+)
+
+for chunk in llm.stream("讲一个故事"):
+    print(chunk.content, end="")
+```
+
+## 性能调优
+
+```bash
+# Tensor 并行（多 GPU）
+python -m vllm.entrypoints.openai.api_server \
+    --model Qwen/Qwen2.5-7B-Instruct \
+    --tensor-parallel-size 2  # 2 块 GPU
+
+# 量化（降低显存）
+    --quantization awq \
+    --dtype half
+
+# 调整最大并发
+    --max-num-seqs 256 \
+    --gpu-memory-utilization 0.9
+```
+
+## 离线推理
+
+```python
+from vllm import LLM, SamplingParams
+
+# 加载模型
+llm = LLM(model="Qwen/Qwen2.5-7B-Instruct")
+
+# 批量推理
+prompts = [
+    "解释一下量子计算",
+    "写一首关于 AI 的诗",
+    "Python 和 Java 的区别",
+]
+
+params = SamplingParams(
+    temperature=0.7,
+    max_tokens=512,
+)
+
+outputs = llm.generate(prompts, params)
+for output in outputs:
+    print(output.outputs[0].text[:100])
+```
+
+## Ollama vs vLLM
+
+| 特性 | Ollama | vLLM |
+|------|--------|------|
+| 定位 | 个人开发、快速实验 | 生产部署、高并发 |
+| 安装 | 一行命令 | pip install |
+| 性能 | 中等 | 高（PagedAttention） |
+| 多 GPU | 有限 | 原生支持 |
+| 量化 | GGUF | AWQ/GPTQ |
+| API | OpenAI 兼容 | OpenAI 兼容 |
+| 适合场景 | 开发调试、个人使用 | 线上服务、批量推理 |
+
+## 选择建议
+
+```python
+# 开发阶段 - Ollama 快速迭代
+llm = ChatOllama(model="qwen2.5")
+
+# 生产部署 - vLLM 高性能
+llm = ChatOpenAI(
+    base_url="http://localhost:8000/v1",
+    api_key="token-abc",
+    model="Qwen/Qwen2.5-7B-Instruct",
+)
+
+# 切换只需改 base_url 和 model
+# 代码无需其他改动
+```
+
+| 场景 | 推荐方案 |
+|------|---------|
+| 本地学习、测试 | Ollama |
+| 团队开发环境 | Ollama + Docker |
+| 线上 API 服务 | vLLM + 多 GPU |
+| 批量数据处理 | vLLM 离线推理 |
+| 边缘设备部署 | Ollama + 量化模型 |

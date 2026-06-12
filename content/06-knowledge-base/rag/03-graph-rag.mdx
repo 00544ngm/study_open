@@ -1,0 +1,237 @@
+---
+title: Graph RAG
+order: 3
+difficulty: advanced
+estimated_time: 30min
+tags: [Graph RAG, 知识图谱, 检索]
+---
+
+## 入门
+
+Graph RAG 是微软提出的进阶 RAG 方案：先构建知识图谱，再基于图谱检索，能更好地处理多跳关系和全局性问题。
+
+## 核心
+
+### 实体提取
+
+```python
+from openai import OpenAI
+from pydantic import BaseModel
+from typing import List
+
+client = OpenAI()
+
+class Entity(BaseModel):
+    name: str
+    type: str  # person, organization, concept, technology
+    description: str
+
+class Relation(BaseModel):
+    source: str
+    target: str
+    relation: str
+
+class KnowledgeGraph(BaseModel):
+    entities: List[Entity]
+    relations: List[Relation]
+
+def extract_graph(text: str) -> KnowledgeGraph:
+    """从文本中提取实体和关系"""
+    response = client.beta.chat.completions.parse(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": "从文本中提取实体和它们之间的关系"},
+            {"role": "user", "content": text}
+        ],
+        response_format=KnowledgeGraph,
+    )
+    return response.choices[0].message.parsed
+
+# 使用
+text = """
+LangChain 是一个 LLM 应用开发框架，它使用 LCEL 来组合 Chain。
+LangGraph 是在 LangChain 基础上构建的，用于创建有状态的 Agent 工作流。
+OpenAI 提供了 GPT-4 模型，可以通过 LangChain 调用。
+"""
+
+graph = extract_graph(text)
+for e in graph.entities:
+    print(f"实体: {e.name} ({e.type})")
+for r in graph.relations:
+    print(f"关系: {r.source} --[{r.relation}]--> {r.target}")
+```
+
+### 图谱构建管线
+
+```python
+class GraphBuilder:
+    """构建知识图谱索引"""
+
+    def __init__(self, llm_client):
+        self.llm = llm_client
+
+    def build_from_documents(self, documents: List[str]) -> KnowledgeGraph:
+        all_entities = []
+        all_relations = []
+
+        for doc in documents:
+            graph = extract_graph(doc)
+            all_entities.extend(graph.entities)
+            all_relations.extend(graph.relations)
+
+        # 实体合并（去重）
+        merged = self._merge_entities(all_entities)
+        return KnowledgeGraph(entities=merged, relations=all_relations)
+
+    def _merge_entities(self, entities: List[Entity]) -> List[Entity]:
+        seen = {}
+        for e in entities:
+            key = e.name.lower()
+            if key not in seen:
+                seen[key] = e
+            elif len(e.description) > len(seen[key].description):
+                seen[key] = e  # 保留更详细的描述
+        return list(seen.values())
+```
+
+## 进阶
+
+### 图谱检索
+
+```python
+class GraphRetriever:
+    """基于知识图谱的检索"""
+
+    def __init__(self, graph: KnowledgeGraph):
+        self.graph = graph
+        # 构建邻接表
+        self.adjacency = {}
+        for r in graph.relations:
+            self.adjacency.setdefault(r.source, []).append(r)
+            self.adjacency.setdefault(r.target, []).append(r)
+
+    def retrieve(self, query: str, max_hops: int = 2) -> List[str]:
+        # 1. 用 LLM 提取查询中的关键实体
+        response = client.beta.chat.completions.parse(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": f"提取关键实体: {query}"}],
+            response_format=Entity,
+        )
+        query_entity = response.choices[0].message.parsed
+
+        # 2. 图谱遍历（BFS）
+        related = self._bfs(query_entity.name, max_hops)
+
+        # 3. 返回关联的上下文
+        contexts = []
+        for entity in related:
+            contexts.append(f"{entity.name}: {entity.description}")
+        return contexts
+
+    def _bfs(self, start: str, max_hops: int) -> List[Entity]:
+        visited = {start}
+        queue = [(start, 0)]
+        result = []
+
+        while queue:
+            current, depth = queue.pop(0)
+            entity = self._find_entity(current)
+            if entity:
+                result.append(entity)
+
+            if depth < max_hops:
+                for relation in self.adjacency.get(current, []):
+                    neighbor = relation.target if relation.source == current else relation.source
+                    if neighbor not in visited:
+                        visited.add(neighbor)
+                        queue.append((neighbor, depth + 1))
+
+        return result
+
+    def _find_entity(self, name: str) -> Entity:
+        for e in self.graph.entities:
+            if e.name == name:
+                return e
+        return None
+```
+
+### Graph RAG 完整流程
+
+```python
+class GraphRAG:
+    """Graph RAG 完整实现"""
+
+    def __init__(self, llm_client):
+        self.llm = llm_client
+        self.builder = GraphBuilder(llm_client)
+        self.retriever = None
+
+    def index(self, documents: List[str]):
+        graph = self.builder.build_from_documents(documents)
+        self.retriever = GraphRetriever(graph)
+        print(f"索引完成: {len(graph.entities)} 实体, {len(graph.relations)} 关系")
+
+    def query(self, question: str) -> str:
+        # 1. 图谱检索
+        contexts = self.retriever.retrieve(question)
+
+        # 2. 传统向量检索（补充）
+        # vector_docs = vector_store.search(question, top_k=3)
+
+        # 3. 融合生成
+        graph_context = "\n".join(contexts)
+        # vector_context = "\n".join(d.content for d in vector_docs)
+
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "基于图谱上下文回答问题"},
+                {"role": "user", "content": f"上下文:\n{graph_context}\n\n问题: {question}"}
+            ]
+        )
+        return response.choices[0].message.content
+
+# 使用
+rag = GraphRAG(client)
+rag.index([
+    "LangChain 是一个 LLM 框架，使用 LCEL 组合 Chain",
+    "LangGraph 基于 LangChain，用于有状态的 Agent 工作流",
+    "MCP 是 Anthropic 提出的协议，用于标准化 LLM 和工具交互",
+])
+
+answer = rag.query("LangChain 和 LangGraph 是什么关系？")
+print(answer)
+# 应能回答: LangGraph 是基于 LangChain 构建的，用于有状态的 Agent 工作流
+```
+
+### 全局搜索
+
+```python
+def global_search(graph: KnowledgeGraph, question: str) -> str:
+    """不依赖具体实体，回答全局问题"""
+    # 1. 总结所有社区/聚类
+    communities = cluster_entities(graph.entities)
+
+    summaries = []
+    for community in communities:
+        summary = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": f"总结以下实体:\n" + "\n".join(
+                f"{e.name}: {e.description}" for e in community
+            )}]
+        )
+        summaries.append(summary.choices[0].message.content)
+
+    # 2. 基于社区摘要回答
+    final = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": f"基于以下信息回答:\n{' '.join(summaries)}\n问题: {question}"}]
+    )
+    return final.choices[0].message.content
+```
+
+## 练习
+
+1. 从 3 篇技术文章中提取实体和关系，构建知识图谱
+2. 实现 GraphRetriever 的 BFS 遍历，查询某实体的关联信息
+3. 对比普通 RAG 和 Graph RAG 在多跳推理问题上的表现差异

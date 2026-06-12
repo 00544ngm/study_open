@@ -1,0 +1,162 @@
+---
+title: 网页爬取与采集
+order: 1
+difficulty: intermediate
+estimated_time: 25min
+tags: [爬虫, 数据采集, Web]
+---
+
+## 入门
+
+构建知识库的第一步是采集原始数据。本节覆盖静态爬取和动态渲染页面采集。
+
+## 核心
+
+### 基础爬取 (httpx)
+
+```python
+import httpx
+from bs4 import BeautifulSoup
+from urllib.parse import urljoin
+
+async def crawl_page(url: str) -> dict:
+    """爬取单个页面，提取标题和正文"""
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.get(url, headers={
+            "User-Agent": "Mozilla/5.0 (compatible; KnowledgeBot/1.0)"
+        })
+        response.raise_for_status()
+
+    soup = BeautifulSoup(response.text, "html.parser")
+
+    # 移除无用标签
+    for tag in soup(["script", "style", "nav", "footer", "iframe"]):
+        tag.decompose()
+
+    return {
+        "url": url,
+        "title": soup.title.string if soup.title else "",
+        "content": soup.get_text(separator="\n", strip=True),
+        "html": str(soup)
+    }
+```
+
+### 动态页面 (Playwright)
+
+```python
+# 安装: pip install playwright
+# playwright install chromium
+
+from playwright.async_api import async_playwright
+
+async def crawl_dynamic_page(url: str) -> str:
+    """爬取 JS 渲染的页面"""
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        page = await browser.new_page()
+        await page.goto(url, wait_until="networkidle")
+
+        # 等待动态内容加载
+        await page.wait_for_timeout(2000)
+
+        content = await page.content()
+        title = await page.title()
+
+        # 提取正文
+        text = await page.evaluate("""() => {
+            const main = document.querySelector('main') || document.body;
+            return main.innerText;
+        }""")
+
+        await browser.close()
+        return {"url": url, "title": title, "content": text}
+```
+
+### 批量爬取
+
+```python
+import asyncio
+from typing import List
+
+class Crawler:
+    def __init__(self, max_concurrent: int = 5):
+        self.semaphore = asyncio.Semaphore(max_concurrent)
+        self.results = []
+
+    async def crawl_one(self, url: str):
+        async with self.semaphore:
+            try:
+                result = await crawl_page(url)
+                self.results.append(result)
+                print(f"✓ {url}")
+            except Exception as e:
+                print(f"✗ {url}: {e}")
+
+    async def crawl_many(self, urls: List[str]):
+        tasks = [self.crawl_one(url) for url in urls]
+        await asyncio.gather(*tasks)
+        return self.results
+
+# 使用
+crawler = Crawler(max_concurrent=3)
+urls = [
+    "https://docs.python.org/3/tutorial/",
+    "https://python.langchain.com/docs/tutorials/",
+    "https://docs.anthropic.com/en/docs",
+]
+results = asyncio.run(crawler.crawl_many(urls))
+```
+
+## 进阶
+
+### 爬虫反爬处理
+
+```python
+import random
+from fake_useragent import UserAgent
+
+class AntiBanCrawler:
+    def __init__(self):
+        self.ua = UserAgent()
+        self.proxies = [
+            "http://proxy1:8080",
+            "http://proxy2:8080",
+        ]
+
+    def get_headers(self):
+        return {
+            "User-Agent": self.ua.random,
+            "Accept": "text/html,application/xhtml+xml",
+            "Accept-Language": "zh-CN,zh;q=0.9",
+            "Referer": "https://www.google.com/",
+        }
+
+    async def crawl_safe(self, url: str):
+        # 随机延迟
+        await asyncio.sleep(random.uniform(1, 3))
+        proxy = random.choice(self.proxies) if self.proxies else None
+
+        async with httpx.AsyncClient(proxies=proxy) as client:
+            response = await client.get(url, headers=self.get_headers())
+            return response.text
+
+    def respect_robots_txt(self, url: str) -> bool:
+        # 检查 robots.txt
+        from urllib.robotparser import RobotFileParser
+        from urllib.parse import urlparse
+
+        parsed = urlparse(url)
+        rp = RobotFileParser()
+        rp.set_url(f"{parsed.scheme}://{parsed.netloc}/robots.txt")
+        try:
+            rp.read()
+            return rp.can_fetch("KnowledgeBot", url)
+        except:
+            return True
+```
+
+## 练习
+
+1. 用 httpx + BeautifulSoup 爬取一个技术文档站，提取所有文章标题和链接
+2. 用 Playwright 爬取一个 JS 渲染的页面（如 Vue/React 文档站）
+3. 实现 AntiBanCrawler，添加随机延迟和 User-Agent 轮换

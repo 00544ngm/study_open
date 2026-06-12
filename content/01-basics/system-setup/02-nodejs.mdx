@@ -1,0 +1,42 @@
+---
+title: Node.js 环境搭建
+order: 2
+difficulty: beginner
+estimated_time: 10min
+tags: [环境配置, 基础]
+---
+
+## 入门
+
+```bash
+# 检查版本
+node --version
+npm --version
+
+# 安装 (推荐使用 nvm)
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39/install.sh | bash
+nvm install 22
+nvm use 22
+
+# Windows: 从 nodejs.org 下载安装包
+# 或使用 nvm-windows
+```
+
+## 核心
+
+```bash
+# 初始化项目
+npm init -y
+
+# 安装依赖
+npm install next react react-dom
+npm install -D typescript @types/node
+
+# 运行
+npm run dev
+```
+
+## 练习
+
+1. 创建一个新的 Node.js 项目并安装 Express
+2. 配置 package.json 添加 dev/start/build 脚本

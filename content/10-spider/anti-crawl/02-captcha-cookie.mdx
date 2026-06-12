@@ -1,0 +1,350 @@
+---
+title: 验证码识别与 Cookie 池
+order: 2
+difficulty: advanced
+estimated_time: 45min
+tags: [反爬, 验证码, Cookie, OCR, 打码]
+---
+
+## 验证码类型
+
+| 类型 | 难度 | 破解方案 |
+|------|------|---------|
+| 数字字母 | 低 | OCR / 深度学习 |
+| 滑块 | 中 | 轨迹模拟 + 缺口识别 |
+| 点选 | 高 | 目标检测 + 语义理解 |
+| 旋转 | 中 | 角度回归模型 |
+| reCAPTCHA v2 | 高 | 浏览器指纹 + 行为模拟 |
+| reCAPTCHA v3 | 极高 | 几乎不可绕过，需真人打码 |
+
+## 数字验证码 OCR
+
+```python
+import cv2
+import numpy as np
+import pytesseract
+from PIL import Image
+
+# 安装: pip install pytesseract opencv-python
+# 需要安装 tesseract-ocr 引擎
+
+def preprocess_captcha(image_path: str) -> np.ndarray:
+    """验证码预处理"""
+    img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+
+    # 1. 二值化
+    _, binary = cv2.threshold(img, 128, 255, cv2.THRESH_BINARY)
+
+    # 2. 去噪
+    denoised = cv2.medianBlur(binary, 3)
+
+    # 3. 膨胀/腐蚀（连接断开的字符）
+    kernel = np.ones((2, 2), np.uint8)
+    processed = cv2.morphologyEx(denoised, cv2.MORPH_CLOSE, kernel)
+
+    return processed
+
+def recognize_captcha(image_path: str) -> str:
+    """识别验证码"""
+    processed = preprocess_captcha(image_path)
+    config = "--psm 7 -c tessedit_char_whitelist=0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    text = pytesseract.image_to_string(processed, config=config)
+    return text.strip()
+```
+
+## 滑块验证码
+
+```python
+import random
+from selenium import webdriver
+from selenium.webdriver.common.action_chains import ActionChains
+
+class SliderCaptchaSolver:
+    """滑块验证码破解"""
+
+    def __init__(self, driver):
+        self.driver = driver
+        self.action = ActionChains(driver)
+
+    def get_gap_position(self) -> int:
+        """识别滑块缺口位置"""
+        # 方法 1：比较背景图与滑块图
+        bg_image = self.driver.find_element(By.CLASS_NAME, "bg-img")
+        # 下载图片，用 OpenCV 比较像素差异
+
+        # 方法 2：通过 canvas 获取
+        gap = self.driver.execute_script("""
+            const canvas = document.querySelector('canvas');
+            const ctx = canvas.getContext('2d');
+            const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+            // 分析像素找出缺口边缘...
+        """)
+        return gap
+
+    def generate_track(self, distance: int) -> list[dict]:
+        """生成人类滑动轨迹"""
+        track = []
+        current = 0
+        mid = distance * 3 / 4
+        t = 0.2
+
+        while current < distance:
+            if current < mid:
+                # 前半段加速
+                speed = random.uniform(3, 7)
+            else:
+                # 后半段减速
+                speed = random.uniform(1, 3)
+
+            current += speed
+            t += random.uniform(0.05, 0.15)
+            track.append({
+                "x": min(current, distance),
+                "y": random.uniform(-2, 2),  # 微小的上下抖动
+                "t": t,
+            })
+
+        return track
+
+    def slide(self, gap_position: int):
+        """执行滑动"""
+        slider = self.driver.find_element(By.CLASS_NAME, "slider-btn")
+        track = self.generate_track(gap_position)
+
+        # 按住滑块
+        self.action.click_and_hold(slider).perform()
+
+        for point in track:
+            self.action.move_by_offset(
+                point["x"],
+                point["y"]
+            ).perform()
+
+        # 释放
+        import time
+        time.sleep(random.uniform(0.1, 0.3))
+        self.action.release().perform()
+```
+
+## 打码平台接入
+
+当算法无法破解时，使用真人打码服务：
+
+```python
+import requests
+import time
+
+class CaptchaService:
+    """打码平台接入"""
+
+    def __init__(self, api_key: str, platform: str = "2captcha"):
+        self.api_key = api_key
+        self.base_url = {
+            "2captcha": "https://2captcha.com",
+            "captchaEnd": "https://api.captcha.end",
+        }[platform]
+
+    def solve_recaptcha(self, site_key: str, page_url: str) -> str:
+        """解决 reCAPTCHA"""
+        # 提交任务
+        resp = requests.post(f"{self.base_url}/in.php", data={
+            "key": self.api_key,
+            "method": "userrecaptcha",
+            "googlekey": site_key,
+            "pageurl": page_url,
+            "json": 1,
+        })
+        task_id = resp.json()["request"]
+
+        # 轮询结果
+        for _ in range(60):
+            time.sleep(5)
+            resp = requests.get(f"{self.base_url}/res.php", params={
+                "key": self.api_key,
+                "action": "get",
+                "id": task_id,
+                "json": 1,
+            })
+            if resp.json()["status"] == 1:
+                return resp.json()["request"]
+
+        raise TimeoutError("验证码超时")
+
+    def solve_normal(self, image_base64: str) -> str:
+        """普通验证码"""
+        resp = requests.post(f"{self.base_url}/in.php", data={
+            "key": self.api_key,
+            "method": "base64",
+            "body": image_base64,
+            "json": 1,
+        })
+        task_id = resp.json()["request"]
+
+        for _ in range(30):
+            time.sleep(2)
+            resp = requests.get(f"{self.base_url}/res.php", params={
+                "key": self.api_key,
+                "action": "get",
+                "id": task_id,
+                "json": 1,
+            })
+            if resp.json()["status"] == 1:
+                return resp.json()["request"]
+
+        raise TimeoutError("验证码超时")
+```
+
+## Cookie 池
+
+```python
+import json
+import time
+import threading
+from typing import Optional
+from selenium import webdriver
+
+class CookiePool:
+    """Cookie 池：自动化登录、存储、轮换"""
+
+    def __init__(self, login_url: str, max_size: int = 10):
+        self.login_url = login_url
+        self.max_size = max_size
+        self.pool: list[dict] = []
+        self.lock = threading.Lock()
+        self._refill_thread = threading.Thread(target=self._auto_refill, daemon=True)
+        self._refill_thread.start()
+
+    def _create_cookie(self, account: dict = None) -> dict:
+        """登录获取 cookie"""
+        options = webdriver.ChromeOptions()
+        options.add_argument("--headless=new")
+        driver = webdriver.Chrome(options=options)
+        try:
+            driver.get(self.login_url)
+            if account:
+                driver.find_element("id", "username").send_keys(account["user"])
+                driver.find_element("id", "password").send_keys(account["pass"])
+                driver.find_element("id", "submit").click()
+                time.sleep(3)
+
+            cookies = driver.get_cookies()
+            return {
+                "cookies": {c["name"]: c["value"] for c in cookies},
+                "created_at": time.time(),
+                "expires_at": time.time() + 3600,
+                "status": "valid",
+            }
+        finally:
+            driver.quit()
+
+    def get_cookie(self) -> Optional[dict]:
+        """获取一个有效 cookie"""
+        with self.lock:
+            # 清理过期的
+            now = time.time()
+            self.pool = [c for c in self.pool
+                        if c["expires_at"] > now and c["status"] == "valid"]
+
+            if not self.pool:
+                return None
+            return self.pool[0]["cookies"]
+
+    def report_invalid(self, cookies: dict):
+        """标记 cookie 失效"""
+        with self.lock:
+            for c in self.pool:
+                if c["cookies"] == cookies:
+                    c["status"] = "invalid"
+                    break
+
+    def _auto_refill(self):
+        """自动补充 cookie"""
+        while True:
+            with self.lock:
+                valid = [c for c in self.pool if c["status"] == "valid"]
+                need = self.max_size - len(valid)
+
+            for _ in range(need):
+                try:
+                    cookie = self._create_cookie()
+                    with self.lock:
+                        self.pool.append(cookie)
+                except Exception as e:
+                    print(f"获取 cookie 失败: {e}")
+                time.sleep(5)
+
+            time.sleep(60)
+
+# 使用
+cookie_pool = CookiePool("https://example.com/login")
+resp = requests.get(
+    "https://example.com/data",
+    cookies=cookie_pool.get_cookie(),
+)
+if resp.status_code == 401:
+    cookie_pool.report_invalid(resp.cookies)
+```
+
+## 反爬全流程整合
+
+```python
+class AntiCrawlPipeline:
+    """完整反爬对抗管线"""
+
+    def __init__(self):
+        self.session = requests.Session()
+        self.proxy_pool = ProxyPool()
+        self.cookie_pool = CookiePool("https://target.com/login")
+        self.rate = RateController()
+        self.headers = HeadersManager()
+
+    def fetch(self, url: str, use_browser: bool = False) -> str:
+        """智能抓取，自动处理反爬"""
+        if use_browser:
+            return self._browser_fetch(url)
+
+        # 1. 准备请求
+        proxy = self.proxy_pool.get_proxy()
+        headers = self.headers.random()
+        cookies = self.cookie_pool.get_cookie()
+
+        # 2. 限速
+        self.rate.wait()
+
+        # 3. 发送请求
+        try:
+            resp = self.session.get(
+                url,
+                headers=headers,
+                cookies=cookies,
+                proxies=proxy,
+                timeout=15,
+            )
+        except Exception as e:
+            return self._browser_fetch(url)  # 降级到浏览器
+
+        # 4. 处理状态
+        if resp.status_code == 403:
+            # 被拦截 → 换代理 + 换身份
+            self.proxy_pool.report_failed(proxy)
+            return self.fetch(url)  # 重试
+
+        if resp.status_code == 401:
+            # Cookie 过期
+            self.cookie_pool.report_invalid(cookies)
+            return self.fetch(url)
+
+        return resp.text
+
+    def _browser_fetch(self, url: str) -> str:
+        """浏览器降级方案"""
+        driver = webdriver.Chrome(options=FingerprintBypass.get_stealth_options())
+        FingerprintBypass.apply_stealth_js(driver)
+        try:
+            driver.get(url)
+            return driver.page_source
+        finally:
+            driver.quit()
+```
+
+> 反爬对抗的本质是**成本博弈**。你的目标不是永远不被封，而是让对方的封禁成本高于你的突破成本。好的代理池 + 合理的频率控制 + 浏览器降级方案 = 90% 以上的成功率。

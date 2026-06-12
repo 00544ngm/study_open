@@ -1,0 +1,132 @@
+---
+title: Pytest 基础
+order: 1
+difficulty: beginner
+estimated_time: 25min
+tags: [Pytest, 测试, Python]
+---
+
+## 安装
+
+```bash
+pip install pytest
+```
+
+## 第一个测试
+
+Pytest 自动发现以 `test_` 开头的文件，执行以 `test_` 开头的函数：
+
+```python
+# test_demo.py
+def test_addition():
+    assert 1 + 1 == 2
+
+def test_string():
+    assert "hello".upper() == "HELLO"
+```
+
+运行：
+
+```bash
+pytest                    # 自动发现
+pytest -v                 # 详细输出
+pytest test_demo.py       # 指定文件
+pytest -k "string"        # 按名称筛选
+```
+
+## 断言
+
+Pytest 使用 Python 原生 `assert`，失败时自动输出详细信息：
+
+```python
+def test_assertions():
+    assert 42 == 42
+    assert "hello" in "hello world"
+    assert [1, 2, 3] == [1, 2, 3]
+    assert {"a": 1}.items() >= {"a": 1}.items()
+```
+
+## Fixtures
+
+Fixtures 是测试的依赖注入机制：
+
+```python
+import pytest
+
+@pytest.fixture
+def api_client():
+    """创建 API 客户端供测试使用"""
+    from fastapi.testclient import TestClient
+    from app import app
+    return TestClient(app)
+
+def test_get_users(api_client):
+    resp = api_client.get("/users")
+    assert resp.status_code == 200
+
+# 作用域：function, class, module, session
+@pytest.fixture(scope="session")
+def db():
+    """整个测试会话只创建一次"""
+    database = create_test_database()
+    yield database
+    database.drop()  # 测试结束后清理
+```
+
+## 参数化测试
+
+```python
+import pytest
+
+@pytest.mark.parametrize("input_str,expected", [
+    ("hello", 5),
+    ("world", 5),
+    ("", 0),
+    ("python", 6),
+])
+def test_string_length(input_str, expected):
+    assert len(input_str) == expected
+
+# 多参数组合
+@pytest.mark.parametrize("a,b,expected", [
+    (1, 2, 3),
+    (0, 0, 0),
+    (-1, 1, 0),
+])
+def test_add(a, b, expected):
+    assert a + b == expected
+```
+
+## 异常测试
+
+```python
+import pytest
+
+def test_raises():
+    with pytest.raises(ValueError, match="invalid"):
+        int("not_a_number")
+
+    with pytest.raises(ZeroDivisionError):
+        1 / 0
+```
+
+## 临时目录
+
+```python
+def test_file_operations(tmp_path):
+    """tmp_path 是内置 fixture，提供临时目录"""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    file_path = data_dir / "test.txt"
+    file_path.write_text("hello")
+    assert file_path.read_text() == "hello"
+```
+
+| 命令 | 用途 |
+|------|------|
+| `pytest` | 运行所有测试 |
+| `pytest -v` | 详细输出 |
+| `pytest -x` | 第一个失败后停止 |
+| `pytest --maxfail=3` | 第三个失败后停止 |
+| `pytest -s` | 显示 print 输出 |
+| `pytest --cov=src` | 测试覆盖率（需 pytest-cov） |

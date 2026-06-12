@@ -1,0 +1,56 @@
+---
+title: 文件上传
+order: 4
+difficulty: intermediate
+estimated_time: 15min
+tags: [FastAPI, 后端]
+---
+
+## 入门
+
+```python
+from fastapi import FastAPI, UploadFile, File
+
+app = FastAPI()
+
+@app.post("/upload")
+async def upload_file(file: UploadFile = File(...)):
+    content = await file.read()
+    return {"filename": file.filename, "size": len(content)}
+```
+
+## 核心
+
+```python
+from fastapi import UploadFile, File, HTTPException
+import aiofiles
+import os
+
+UPLOAD_DIR = "uploads/knowledge"
+
+@app.post("/api/knowledge/upload")
+async def upload_knowledge(
+    file: UploadFile = File(...),
+    topic_id: int = Form(...),
+):
+    # 验证文件类型
+    if not file.filename.endswith((".md", ".pdf", ".txt")):
+        raise HTTPException(400, "仅支持 .md、.pdf、.txt 文件")
+
+    # 保存文件
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    file_path = os.path.join(UPLOAD_DIR, file.filename)
+    async with aiofiles.open(file_path, "wb") as f:
+        content = await file.read()
+        await f.write(content)
+
+    # 触发 RAG 索引
+    await index_document(file_path, topic_id)
+
+    return {"filename": file.filename, "status": "indexing"}
+```
+
+## 练习
+
+1. 添加上传文件大小限制（最大 10MB）
+2. 支持批量上传多个文件

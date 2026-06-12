@@ -1,0 +1,125 @@
+---
+title: 工具调用与函数注册
+order: 2
+difficulty: intermediate
+estimated_time: 30min
+tags: [PydanticAI, Agent, Tools, Python]
+---
+
+## 注册工具
+
+PydanticAI 通过 `@agent.tool` 装饰器将函数注册为工具：
+
+```python
+from pydantic_ai import Agent, RunContext
+
+agent = Agent("openai:gpt-4o")
+
+@agent.tool
+def get_weather(location: str) -> str:
+    """获取指定城市的天气"""
+    # 实际开发中调用天气 API
+    return f"{location} 今天晴，22°C"
+
+result = agent.run_sync("北京今天天气怎么样？")
+print(result.data)
+```
+
+函数签名和文档字符串自动作为工具描述传给 LLM，Pydantic 负责参数验证。
+
+## 带上下文的工具
+
+使用 `RunContext` 注入依赖：
+
+```python
+from dataclasses import dataclass
+
+@dataclass
+class UserContext:
+    name: str
+    timezone: str
+
+agent = Agent(
+    "openai:gpt-4o",
+    deps_type=UserContext,
+)
+
+@agent.tool
+def get_local_time(ctx: RunContext[UserContext]) -> str:
+    """获取用户当前时区的时间"""
+    return f"现在是 {ctx.deps.name} 所在时区 ({ctx.deps.timezone}) 的上午 10 点"
+
+result = agent.run_sync(
+    "现在是几点？",
+    deps=UserContext(name="Alice", timezone="Asia/Shanghai"),
+)
+print(result.data)
+```
+
+## 有副作用的工具
+
+工具可以返回 `ToolCallResult` 或直接返回字符串，框架自动处理调用结果：
+
+```python
+@agent.tool(retries=2)
+def send_email(ctx: RunContext[UserContext], to: str, subject: str, body: str) -> str:
+    """发送邮件"""
+    print(f"发送邮件到 {to}: {subject}")
+    return f"邮件已发送至 {to}"
+```
+
+`retries` 参数指定调用失败时的重试次数。
+
+## 多工具协作
+
+```python
+from pydantic_ai import Agent, RunContext
+
+agent = Agent("openai:gpt-4o")
+
+@agent.tool
+def search_db(query: str) -> list[dict]:
+    """搜索数据库中的用户信息"""
+    return [{"id": 1, "name": "Alice", "role": "admin"}]
+
+@agent.tool
+def calculate_score(ctx: RunContext[dict], user_id: int) -> float:
+    """计算用户综合评分"""
+    return 95.5
+
+result = agent.run_sync("查询 Alice 的评分")
+print(result.data)
+```
+
+LLM 自动决定调用哪个工具、传什么参数，并组合多个工具的结果。
+
+## 工具与结构化输出结合
+
+```python
+from pydantic import BaseModel
+from pydantic_ai import Agent, RunContext
+
+class Analysis(BaseModel):
+    summary: str
+    confidence: float
+    suggestions: list[str]
+
+agent = Agent("openai:gpt-4o", result_type=Analysis)
+
+@agent.tool
+def fetch_data(query: str) -> dict:
+    """获取分析数据"""
+    return {"revenue": 100000, "users": 5000}
+
+result = agent.run_sync("分析我们的业务数据并提出建议")
+print(f"总结: {result.data.summary}")
+print(f"置信度: {result.data.confidence}")
+print(f"建议: {result.data.suggestions}")
+```
+
+| 概念 | 说明 |
+|------|------|
+| @agent.tool | 注册工具函数 |
+| RunContext[T] | 依赖注入上下文 |
+| deps_type | Agent 依赖类型 |
+| retries | 工具调用失败重试次数 |

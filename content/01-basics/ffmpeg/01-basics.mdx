@@ -1,0 +1,105 @@
+---
+title: FFmpeg 基础
+order: 1
+difficulty: beginner
+estimated_time: 20min
+tags: [FFmpeg, 音视频, 基础]
+---
+
+## 安装
+
+```bash
+# macOS
+brew install ffmpeg
+
+# Ubuntu/Debian
+sudo apt install ffmpeg
+
+# Windows (winget)
+winget install FFmpeg
+
+# 验证安装
+ffmpeg -version
+```
+
+## 核心概念
+
+FFmpeg 的基本命令格式：
+
+```bash
+ffmpeg [全局参数] -i 输入文件 [滤镜参数] 输出文件
+```
+
+三大核心组件：
+
+| 组件 | 用途 |
+|------|------|
+| ffmpeg | 音视频转码、处理 |
+| ffplay | 播放器 |
+| ffprobe | 获取媒体文件信息 |
+
+## 查看文件信息
+
+```bash
+ffprobe -hide_banner video.mp4
+ffprobe -v quiet -print_format json -show_format -show_streams video.mp4
+```
+
+## 格式转换
+
+```bash
+# 视频格式转换
+ffmpeg -i input.avi output.mp4
+
+# 音频格式转换
+ffmpeg -i input.wav output.mp3
+
+# 提取音频
+ffmpeg -i video.mp4 -vn audio.mp3
+
+# 提取视频（无音频）
+ffmpeg -i video.mp4 -an video-only.mp4
+```
+
+## 缩放与裁剪
+
+```bash
+# 缩放到 720p
+ffmpeg -i input.mp4 -vf "scale=1280:720" output.mp4
+
+# 按比例缩放（宽度 720，高度自动）
+ffmpeg -i input.mp4 -vf "scale=720:-1" output.mp4
+
+# 裁剪中间区域
+ffmpeg -i input.mp4 -vf "crop=640:480:0:0" output.mp4
+```
+
+## 截取片段
+
+```bash
+# 从第 30 秒开始，截取 10 秒
+ffmpeg -i input.mp4 -ss 30 -t 10 output.mp4
+
+# 截取到指定时间点
+ffmpeg -i input.mp4 -ss 00:01:00 -to 00:02:00 output.mp4
+```
+
+## 合并视频
+
+```bash
+# 创建文件列表 filelist.txt:
+# file 'part1.mp4'
+# file 'part2.mp4'
+
+ffmpeg -f concat -safe 0 -i filelist.txt -c copy output.mp4
+```
+
+## GIF 制作
+
+```bash
+# 视频转 GIF
+ffmpeg -i input.mp4 -vf "fps=10,scale=480:-1" output.gif
+
+# 指定时间段
+ffmpeg -i input.mp4 -ss 5 -t 3 -vf "fps=10,scale=480:-1" output.gif
+```

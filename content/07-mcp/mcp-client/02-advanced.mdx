@@ -1,0 +1,108 @@
+---
+title: MCP Client 高级用法
+order: 2
+difficulty: advanced
+estimated_time: 25min
+tags: [MCP, Client]
+---
+
+## 入门
+
+```python
+# 连接多个 MCP Server
+from mcp import ClientSession
+from mcp.client.stdio import stdio_client
+
+async def connect_all():
+    servers = {
+        "filesystem": StdioServerParameters(command="uvx", args=["mcp-server-fs"]),
+        "database": StdioServerParameters(command="python", args=["db-server.py"]),
+    }
+
+    sessions = {}
+    for name, params in servers.items():
+        read, write = await stdio_client(params).__aenter__()
+        session = await ClientSession(read, write).__aenter__()
+        await session.initialize()
+        sessions[name] = session
+
+    return sessions
+```
+
+## 核心
+
+### 工具聚合
+
+```python
+# 合并多个 Server 的工具列表
+async def get_all_tools(sessions: dict):
+    all_tools = []
+    for server_name, session in sessions.items():
+        tools = await session.list_tools()
+        for tool in tools:
+            tool.server = server_name  # 标记来源
+            all_tools.append(tool)
+    return all_tools
+
+# 根据工具名称路由到对应 Server
+async def call_tool_by_name(sessions: dict, tool_name: str, args: dict):
+    # 查找包含该工具的 Server
+    for server_name, session in sessions.items():
+        tools = await session.list_tools()
+        if any(t.name == tool_name for t in tools):
+            return await session.call_tool(tool_name, arguments=args)
+    raise ValueError(f"未找到工具: {tool_name}")
+```
+
+### 连接管理
+
+```python
+# 健康检查与重连
+async def health_check(session, name: str):
+    try:
+        await session.list_tools()  # 轻量检查
+        return True
+    except Exception:
+        print(f"Server {name} 断开，尝试重连...")
+        return False
+
+# 动态注册 Server
+class MCPManager:
+    def __init__(self):
+        self.sessions: dict[str, ClientSession] = {}
+
+    async def register(self, name: str, params: StdioServerParameters):
+        read, write = await stdio_client(params).__aenter__()
+        session = await ClientSession(read, write).__aenter__()
+        await session.initialize()
+        self.sessions[name] = session
+
+    async def unregister(self, name: str):
+        if name in self.sessions:
+            await self.sessions[name].__aexit__(None, None, None)
+            del self.sessions[name]
+
+    async def list_servers(self) -> list[str]:
+        return list(self.sessions.keys())
+```
+
+### 生产级使用
+
+```python
+# 错误重试
+import asyncio
+
+async def call_with_retry(session, tool_name, args, retries=3):
+    for i in range(retries):
+        try:
+            return await session.call_tool(tool_name, arguments=args)
+        except Exception as e:
+            if i == retries - 1:
+                raise
+            await asyncio.sleep(2 ** i)  # 指数退避
+```
+
+## 练习
+
+1. 实现一个 MCP Manager 管理多个 Server 连接
+2. 编写一个 Gateway 服务，将多个 MCP Server 聚合为一个统一的 API

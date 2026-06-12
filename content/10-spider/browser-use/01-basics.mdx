@@ -1,0 +1,66 @@
+---
+title: Browser Use 基础
+order: 1
+difficulty: intermediate
+estimated_time: 25min
+tags: [Browser Use, AI, 浏览器, 自动化]
+---
+
+## 安装
+
+```bash
+pip install browser-use
+playwright install chromium
+```
+
+## 基础用法
+
+```python
+from browser_use import Agent
+import asyncio
+
+async def main():
+    agent = Agent(
+        task="打开百度，搜索 Python 爬虫教程，返回前三个结果",
+    )
+    result = await agent.run()
+    print(result)
+
+asyncio.run(main())
+```
+
+Agent 会自动打开浏览器、输入搜索词、点击按钮、读取结果。
+
+## 多步骤任务
+
+```python
+agent = Agent(
+    task="""
+    1. 打开 https://news.ycombinator.com
+    2. 获取当前排名前 5 的文章标题和链接
+    3. 点击第一篇文章
+    4. 获取文章正文的前 200 字
+    """
+)
+
+result = await agent.run()
+print(result)
+```
+
+## 输入参数
+
+```python
+agent = Agent(
+    task="在 GitHub 上搜索 'browser-use' 仓库，返回 star 数",
+    llm="gpt-4o",           # 指定 LLM
+    headless=False,          # 显示浏览器窗口
+    max_steps=20,            # 最大执行步数
+)
+```
+
+| 特性 | 说明 |
+|------|------|
+| AI 驱动 | LLM 决定每一步操作 |
+| 视觉理解 | 截图 + DOM 分析 |
+| 自愈 | 失败自动重试 |
+| 多步骤 | 复杂任务编排 |

@@ -1,0 +1,106 @@
+---
+title: LangGraph 入门
+order: 1
+difficulty: intermediate
+estimated_time: 30min
+tags: [LangGraph, Agent]
+---
+
+## 入门
+
+```python
+from langgraph.graph import StateGraph, END
+from typing import TypedDict, Literal
+
+class AgentState(TypedDict):
+    messages: list
+    next_step: str
+
+# 定义节点
+def start_node(state: AgentState) -> AgentState:
+    return {"next_step": "process"}
+
+def process_node(state: AgentState) -> AgentState:
+    return {"messages": ["处理完成"]}
+
+# 构建图
+graph = StateGraph(AgentState)
+graph.add_node("start", start_node)
+graph.add_node("process", process_node)
+graph.set_entry_point("start")
+graph.add_edge("start", "process")
+graph.add_edge("process", END)
+app = graph.compile()
+```
+
+## 核心
+
+### Agent 工作流
+
+```python
+from langgraph.graph import StateGraph, END
+from typing import TypedDict, Literal
+from langchain_openai import ChatOpenAI
+from langchain.schema import HumanMessage
+
+llm = ChatOpenAI(model="gpt-4o")
+
+class AgentState(TypedDict):
+    messages: list
+    tool_calls: list
+
+# 定义节点
+def call_model(state: AgentState) -> AgentState:
+    response = llm.invoke(state["messages"])
+    return {"messages": [response]}
+
+def should_continue(state: AgentState) -> Literal["tools", "end"]:
+    last = state["messages"][-1]
+    if hasattr(last, "tool_calls") and last.tool_calls:
+        return "tools"
+    return "end"
+
+def call_tool(state: AgentState) -> AgentState:
+    last = state["messages"][-1]
+    results = []
+    for tc in last.tool_calls:
+        result = execute_tool(tc["name"], tc["args"])
+        results.append(result)
+    return {"tool_calls": results}
+
+# 构建 Agent 图
+graph = StateGraph(AgentState)
+graph.add_node("agent", call_model)
+graph.add_node("tools", call_tool)
+graph.set_entry_point("agent")
+graph.add_conditional_edges("agent", should_continue, {
+    "tools": "tools",
+    "end": END
+})
+graph.add_edge("tools", "agent")
+
+agent = graph.compile()
+```
+
+## 进阶
+
+### 多 Agent 协作
+
+```python
+# 主管 Agent
+def supervisor(state) -> Literal["researcher", "coder", "end"]:
+    # 判断路由到哪个子 Agent
+    return "researcher"
+
+# 构建多 Agent 系统
+graph = StateGraph(AgentState)
+graph.add_node("supervisor", supervisor)
+graph.add_node("researcher", research_agent)
+graph.add_node("coder", coding_agent)
+graph.add_conditional_edges("supervisor", ...)
+```
+
+## 练习
+
+1. 构建一个包含"搜索→分析→总结"三步的 Agent 工作流
+2. 实现一个条件路由：如果问题涉及代码，路由到代码 Agent；否则路由到通用 Agent

@@ -1,0 +1,93 @@
+---
+title: MCP Server 高级模式
+order: 2
+difficulty: advanced
+estimated_time: 25min
+tags: [MCP, Server]
+---
+
+## 入门
+
+```python
+# 有状态的 Server
+from mcp.server import Server
+from typing import Dict
+
+app = Server("todo-app")
+todos: Dict[str, bool] = {}
+
+@app.call_tool()
+async def call_tool(name: str, arguments: dict):
+    global todos
+    if name == "add_todo":
+        todos[arguments["task"]] = False
+        return {"content": [{"type": "text", "text": "已添加"}]}
+    elif name == "list_todos":
+        text = "\n".join(f"{'[x]' if v else '[ ]'} {k}" for k, v in todos.items())
+        return {"content": [{"type": "text", "text": text}]}
+```
+
+## 核心
+
+### SSE 传输模式
+
+```python
+# 通过 HTTP SSE 通信
+import uvicorn
+from mcp.server.sse import SseServerTransport
+from starlette.applications import Starlette
+from starlette.routing import Route
+
+app = Server("remote-server")
+
+sse = SseServerTransport("/messages/")
+
+async def handle_sse(request):
+    async with sse.connect_sse(request.scope, request.receive, request._send) as streams:
+        await app.run(streams[0], streams[1], app.create_initialization_options())
+
+routes = [
+    Route("/sse", endpoint=handle_sse),
+    Route("/messages/", endpoint=sse.handle_post_message, methods=["POST"]),
+]
+
+starlette_app = Starlette(routes=routes)
+uvicorn.run(starlette_app, host="0.0.0.0", port=8000)
+```
+
+### 错误处理与提示
+
+```python
+@app.call_tool()
+async def call_tool(name: str, arguments: dict):
+    try:
+        if name == "search":
+            query = arguments.get("query")
+            if not query:
+                raise ValueError("query 参数不能为空")
+            # 执行搜索...
+            return {"content": [{"type": "text", "text": "结果"}]}
+    except Exception as e:
+        return {
+            "isError": True,
+            "content": [{"type": "text", "text": f"错误: {str(e)}"}]
+        }
+
+# Prompts - 预置提示词模板
+@app.list_prompts()
+async def list_prompts():
+    return [
+        {
+            "name": "analyze_log",
+            "description": "分析日志",
+            "arguments": [
+                {"name": "log_content", "description": "日志内容", "required": True}
+            ]
+        }
+    ]
+```
+
+## 练习
+
+1. 开发一个带状态的 Session 管理 Server
+2. 用 SSE 模式部署 Server，支持远程连接

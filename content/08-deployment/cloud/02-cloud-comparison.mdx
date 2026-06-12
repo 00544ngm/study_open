@@ -1,0 +1,421 @@
+---
+title: 云平台服务选型与部署
+order: 2
+difficulty: core
+estimated_time: 30min
+tags: [AWS, GCP, Azure, 云平台, GPU, Serverless, 成本优化]
+---
+
+## 云平台选型概览
+
+AI 应用部署需要综合考虑计算、存储、网络、GPU 等资源。三大云厂商各有优势。
+
+| 维度 | AWS | GCP | Azure |
+|------|-----|-----|-------|
+| AI/ML 生态 | SageMaker, Bedrock | Vertex AI, AI Platform | Azure ML, OpenAI Service |
+| GPU 丰富度 | 最高（A100/H100 全系） | 较好（A100/H100/TPU） | 较好（A100/H100/ND 系列） |
+| 托管 K8s | EKS（功能最全） | GKE（体验最好） | AKS（集成最好） |
+| Serverless | Lambda + Fargate | Cloud Run（首选） | Container Apps |
+| 全球覆盖 | 33 个区域 | 40+ 个区域 | 60+ 个区域 |
+| AI 初创优惠 | $100k 信用额度 | $350k 信用额度 | $150k 信用额度 |
+
+## 计算服务对比
+
+### EC2/GCE 虚拟机 vs Serverless
+
+| 维度 | 虚拟机 (EC2/GCE) | Serverless (Lambda/Cloud Run) |
+|------|------------------|-------------------------------|
+| 启动时间 | 分钟级 | 毫秒级（冷启动 1-2s） |
+| 扩缩容 | 手动/自动伸缩组 | 自动从 0 到 N |
+| 最大内存 | 24TB（EC2） | 10GB（Lambda）/ 32GB（Cloud Run）|
+| 最长执行 | 无限制 | 15min（Lambda）/ 60min（Cloud Run）|
+| GPU | 支持 | 不支持 |
+| 费用模型 | 按小时/预留 | 按调用次数+执行时长 |
+| 运维 | 需管理 OS | 全托管 |
+
+### 选型决策树
+
+```
+AI 应用需要什么？
+
+需要 GPU？
+├─ 是 → 需要长时间训练？
+│   ├─ 是 → EC2/GCE GPU 实例
+│   └─ 否 → GKE/EKS + GPU Node Pool（推理）
+└─ 否 → 需要高并发 API？
+    ├─ 是 → ECS Fargate / Cloud Run / EKS
+    ├─ 否 → 需要快速原型？
+    │   ├─ 是 → Cloud Run / AWS Lambda
+    │   └─ 否 → 传统 Web → EC2 / GCE
+    └─ 需要 WebSocket/长连接？
+        └─ 是 → EKS/GKE（适合长连接）
+```
+
+## GPU 实例类型
+
+AI 推理和训练对 GPU 有严格要求，不同模型适用不同实例。
+
+### NVIDIA GPU 实例对比
+
+| 实例系列 | GPU 型号 | GPU 显存 | 适用场景 | AWS | GCP | Azure |
+|----------|----------|----------|----------|-----|-----|-------|
+| A100 40G | A100 | 40GB | 大模型推理/训练 | p4d | a2-highgpu-1g | NCas_T4_v3 |
+| A100 80G | A100 SXM | 80GB | LLM 训练/微调 | p4de | a2-megagpu-16g | NDm_A100_v4 |
+| H100 | H100 SXM | 80GB | 最新 LLM 训练 | p5 | a3-highgpu-8g | ND_H100_v5 |
+| L40S | L40S | 48GB | AI 推理/渲染 | g6 | g2-standard | NC_L40S |
+| L4 | L4 | 24GB | 轻量推理 | g5 | g2-standard | NC_L4 |
+| T4 | T4 | 16GB | 推理/轻量训练 | g4dn | n1-standard | NC_T4_v3 |
+| V100 | V100 | 16/32GB | 通用训练/推理 | p3 | n1-standard | NC_v3 |
+
+### GPU 实例推荐
+
+```yaml
+# 不同模型推荐配置
+# LLM 推理（Llama 3 70B，FP16）
+# AWS: p4de.2xlarge (1x A100 80G) ~ $8.1/h
+# GCP: a2-highgpu-1g (1x A100 40G) ~ $7.7/h
+# Azure: ND40rs_v2 (1x V100 32G) ~ $6.5/h
+#
+# 中型模型推理（Llama 3 8B）
+# AWS: g5.xlarge (1x T4 16G) ~ $1.0/h
+# GCP: g2-standard-4 (1x L4 24G) ~ $0.8/h
+# Azure: NC4as_T4_v3 (1x T4 16G) ~ $0.9/h
+#
+# 模型微调（LoRA）
+# AWS: p4de.2xlarge (1x A100 80G) ~ $8.1/h
+# GCP: a2-highgpu-4g (4x A100 40G) ~ $30.8/h
+# Azure: NDm_A100_v4 (1x A100 80G) ~ $7.9/h
+```
+
+### GPU 部署最佳实践
+
+```bash
+# AWS: 使用 EKS + GPU Node Group
+eksctl create nodegroup \
+  --cluster agent-cluster \
+  --name gpu-nodes \
+  --node-type p4de.2xlarge \
+  --nodes 1 \
+  --nodes-min 0 \
+  --nodes-max 5 \
+  --node-labels "accelerator=nvidia-a100" \
+  --asg-access
+
+# GCP: 使用 GKE + GPU Node Pool
+gcloud container node-pools create gpu-pool \
+  --cluster agent-cluster \
+  --region asia-east1 \
+  --machine-type a2-highgpu-1g \
+  --accelerator type=nvidia-tesla-a100,count=1 \
+  --num-nodes 0 \
+  --min-nodes 0 \
+  --max-nodes 5 \
+  --enable-autoscaling
+
+# Azure: AKS + GPU Node Pool
+az aks nodepool add \
+  --resource-group agent-rg \
+  --cluster-name agent-cluster \
+  --name gpu-pool \
+  --node-vm-size Standard_NC24ads_A100_v4 \
+  --node-count 1 \
+  --enable-cluster-autoscaler \
+  --min-count 0 \
+  --max-count 5
+```
+
+### GPU 成本优化策略
+
+```yaml
+# 1. 使用 Spot/抢占式实例（可节省 60-90%）
+# AWS: Spot Instance
+# GCP: Preemptible VM
+# Azure: Spot VM
+
+# 2. 预留实例（稳定负载节省 30-50%）
+# AWS: Reserved Instance (1年/3年)
+# GCP: Committed Use Discount (1年/3年)
+# Azure: Reserved VM Instance (1年/3年)
+
+# 3. 使用推理优化
+# - vLLM / TensorRT-LLM 提升吞吐量
+# - 连续批处理合并请求
+# - 使用 FP8/INT4 量化减少显存
+# - KV cache 共享降低单请求成本
+
+# 4. 自动缩容到零
+# 非高峰时段关闭 GPU 节点
+# 使用 KEDA + Prometheus 基于请求量扩缩容
+```
+
+## 存储服务对比
+
+| 需求 | AWS | GCP | Azure | 推荐场景 |
+|------|-----|-----|-------|----------|
+| 对象存储 | S3 | GCS | Blob Storage | 模型文件、数据集、备份 |
+| 文件存储 | EFS | Filestore | Azure Files | 共享配置、多 Pod 读写 |
+| 块存储 | EBS | Persistent Disk | Managed Disk | 数据库、有状态应用 |
+| 向量数据库 | OpenSearch Serverless | Vertex AI Vector Search | Cosmos DB | 语义搜索 |
+| KV 缓存 | ElastiCache | Memorystore | Redis Cache | 会话/推理缓存 |
+| 数据仓库 | Redshift | BigQuery | Synapse | 分析/AI 数据湖 |
+
+### 模型存储方案
+
+```bash
+# 方案一：S3/GCS 挂载（推荐）
+# 将模型文件存储在对象存储，运行时挂载
+
+# AWS: s3fs 或 Mountpoint for S3
+sudo mount-s3 --region ap-northeast-1 \
+  --max-threads 20 \
+  --part-size 8388608 \
+  agent-models /mnt/models
+
+# GCP: gcsfuse
+gcsfuse --implicit-dirs \
+  --max-conns-per-host 20 \
+  --stat-cache-ttl 5m \
+  agent-models /mnt/models
+
+# 方案二：EFS/Filestore 共享存储
+# 适合多个推理 Pod 共享模型
+
+# 方案三：容器镜像打包
+# 小模型直接打入 Docker 镜像，减少拉取依赖
+```
+
+## 托管 Kubernetes 对比
+
+| 维度 | EKS | GKE | AKS |
+|------|-----|-----|-----|
+| 控制面费用 | $0.10/h | 免费 | 免费 |
+| 节点自动扩缩 | Cluster Autoscaler | Node Auto-Provisioning | Cluster Autoscaler |
+| GPU 支持 | 丰富 | 好 | 好 |
+| 网络 | VPC CNI | Native GCP VPC | Azure CNI |
+| 服务网格 | App Mesh | Anthos Service Mesh | Open Service Mesh |
+| 升级体验 | 手动 | 自动/手动 | 手动 |
+| 运维复杂度 | 高（需管理节点组） | 低（自动修复） | 中 |
+
+### 推荐选择
+
+- **AI/ML 工作负载首选 GKE**：自动节点修复、免费控制面、TPU 支持、与 Vertex AI 深度集成
+- **已有 AWS 生态选 EKS**：与 S3、RDS、SageMaker 等深度整合
+- **企业 Microsoft 环境选 AKS**：Active Directory 集成、.NET 生态
+
+## Serverless 对比
+
+### Cloud Run（GCP）— AI 应用推荐
+
+```yaml
+# Cloud Run 优点：
+# - 从零自动伸缩，无流量时缩到 0
+# - 按请求付费（百万请求约 $2.50）
+# - 内置 HTTPS、域名、CDN
+# - 支持 WebSocket（有限）
+# - 请求超时最长 60min
+# - 最大并发 250
+
+# 部署 AI Agent API
+gcloud run deploy agent-api \
+  --image gcr.io/$PROJECT/agent-api \
+  --platform managed \
+  --region asia-east1 \
+  --memory 4Gi \
+  --cpu 2 \
+  --min-instances 0 \
+  --max-instances 10 \
+  --concurrency 80 \
+  --timeout 300 \
+  --set-env-vars "LOG_LEVEL=info" \
+  --set-secrets "OPENAI_API_KEY=openai-key:latest" \
+  --ingress all
+```
+
+### AWS Lambda + API Gateway
+
+```yaml
+# Lambda 优点：
+# - 极致弹性，毫秒级扩缩
+# - 支持 Python/Node.js/Java/Go
+# - Lambda Web Adapter 支持 Web 框架
+# - 与 API Gateway/SQS/EventBridge 深度集成
+
+# 限制：
+# - 执行时长上限 15min
+# - 内存上限 10GB
+# - 冷启动 1-2s（可通过 Provisioned Concurrency 缓解）
+# - 无原生 GPU 支持
+```
+
+### Serverless 选型
+
+```yaml
+# API 服务（短请求 < 10min）
+# Cloud Run / Lambda + API Gateway → 首选
+  # - 适合 LLM 调用 / Agent 编排
+  # - 自动伸缩，费用最低
+
+# 长任务（> 10min）
+# Cloud Run / ECS Fargate → 适合
+  # - Cloud Run 支持最长 60min
+  # - ECS 运行时间无限制
+
+# WebSocket / SSE 流式响应
+# Cloud Run / ECS Fargate → 适合
+  # - Lambda 不支持 WebSocket
+  # - Cloud Run 通过流式响应支持 SSE
+
+# GPU 推理
+# GKE / EKS / SageMaker → 必须
+  # - Serverless 不支持 GPU
+```
+
+## AI 工作负载成本对比
+
+以部署一个中型 Agent 平台（200 QPS，Llama 3 8B 推理，PostgreSQL + Redis + Qdrant）为例。
+
+### 月度成本估算
+
+| 组件 | AWS | GCP | Azure |
+|------|-----|-----|-------|
+| API 服务（2 vCPU, 4GB, 3 副本） | ~$180 | ~$150 | ~$170 |
+| GPU 推理（1x T4/L4, 2 副本） | ~$1,400 | ~$1,150 | ~$1,300 |
+| PostgreSQL（2 vCPU, 8GB） | ~$100 | ~$85 | ~$95 |
+| Redis（1 vCPU, 4GB） | ~$50 | ~$40 | ~$45 |
+| 向量数据库（Qdrant 自管） | ~$40 | ~$35 | ~$40 |
+| 对象存储（500GB + 传输） | ~$25 | ~$20 | ~$22 |
+| 负载均衡 + 网络 | ~$60 | ~$45 | ~$55 |
+| **合计（按需）** | **~$1,855** | **~$1,525** | **~$1,727** |
+| **合计（预留+Spot）** | **~$950** | **~$800** | **~$900** |
+
+### 成本优化清单
+
+```yaml
+# 计算优化
+- 使用 Spot/抢占式实例处理非关键任务（节省 60-90%）
+- GPU 节点启用弹性伸缩，空闲时缩到 0
+- 预留实例/承诺使用折扣覆盖稳态负载（节省 30-50%）
+- 使用 Graviton/G2 ARM 实例（节省 20-30%）
+
+# 存储优化
+- S3/GCS 按访问频率设置生命周期策略（Standard → Infrequent Access → Glacier）
+- 使用对象存储代替块存储存储模型文件
+- 启用数据压缩减少传输费用
+
+# 网络优化
+- 同一区域内部通信免流量费
+- 使用 CDN（CloudFront/Cloud CDN）缓存静态内容
+- 启用网络压缩减少出站流量
+
+# AI 推理优化
+- 使用 vLLM/TGI 提升 GPU 利用率
+- 请求合并批处理减少 GPU 空转
+- 模型量化（FP8/INT4）降低显存需求
+- 使用推理缓存（Redis/ElastiCache）减少重复计算
+```
+
+## 多云策略
+
+单一云锁定存在风险，推荐以下策略：
+
+```yaml
+# 策略一：Kubernetes 之上抽象
+# 使用 K8s 作为统一层，应用无云依赖
+# 工具：Crossplane / Terraform / Pulumi
+
+# 策略二：主要云 + 备选云
+# 主云运行 GPU 推理 + API 服务
+# 备选云运行非关键任务（CI/CD、静态站点）
+# 使用 Cloudflare/Cloudfront 做流量分发
+
+# 策略三：按服务最优选型
+# GCP Cloud Run（Serverless 最佳）
+# AWS S3（存储最成熟）
+# Azure OpenAI Service（GPT 原生集成）
+# 通过 VPC Peering / Private Link 互联
+```
+
+### Terraform 跨云管理
+
+```hcl
+# terraform/main.tf
+provider "aws" {
+  region = "ap-northeast-1"
+}
+
+provider "google" {
+  project = "agent-platform"
+  region  = "asia-east1"
+}
+
+# AWS: 对象存储 + GPU 推理
+resource "aws_s3_bucket" "models" {
+  bucket = "agent-models"
+}
+
+resource "aws_eks_node_group" "gpu" {
+  cluster_name    = aws_eks_cluster.main.name
+  node_role_arn   = aws_iam_role.nodes.arn
+  instance_types  = ["p4de.2xlarge"]
+  scaling_config {
+    desired_size = 1
+    min_size     = 0
+    max_size     = 10
+  }
+}
+
+# GCP: Serverless API
+resource "google_cloud_run_service" "api" {
+  name     = "agent-api"
+  location = "asia-east1"
+  template {
+    spec {
+      containers {
+        image = "gcr.io/${var.project}/agent-api"
+        resources {
+          limits = {
+            memory = "4Gi"
+            cpu    = "2"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+## 生产环境部署清单
+
+```yaml
+部署前检查:
+  □ 选择合适的区域（靠近用户、有 GPU 库存）
+  □ 配置 VPC/网络隔离
+  □ 启用 IAM 最小权限
+  □ 设置预算告警（Billing Alerts）
+  □ 配置日志聚合（CloudWatch / Cloud Logging）
+  □ 启用自动备份（RDS / 持久磁盘）
+
+部署时:
+  □ 使用基础设施即代码（Terraform / Pulumi）
+  □ CI/CD 流水线自动化部署
+  □ 配置健康检查和自动恢复
+  □ 启用弹性伸缩（HPA / KEDA）
+  □ 设置资源限制和请求
+  □ 使用 Secrets Manager 管理凭证
+  □ 启用 Private Link / VPC 内网通信
+
+部署后:
+  □ 配置监控和告警（CPU > 80%, 5xx 错误 > 1%）
+  □ 设置成本异常检测
+  □ 定期安全审计
+  □ 灾难恢复演练
+  □ 性能基准测试
+```
+
+## 练习
+
+1. 根据你的 AI 项目需求（GPU 推理、API 服务、数据库），对比 AWS/GCP/Azure 三个方案并选出最适合的平台
+2. 使用 Cloud Run 或 ECS Fargate 部署一个无状态 API 服务，配置自动从零伸缩
+3. 调研 GPU Spot 实例在你的云平台上的定价，计算相比按需实例的节省比例
+4. 使用 Terraform 编写跨云基础设施代码（主云 GPU 推理 + 备选云 Serverless API）
+5. 根据你的负载预估（日均请求量、推理模型大小）填写上述成本估算表，制定成本优化计划

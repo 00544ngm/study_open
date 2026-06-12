@@ -1,0 +1,919 @@
+---
+title: 自动化平台架构设计
+order: 2
+difficulty: advanced
+estimated_time: 40min
+tags: [自动化, 架构, DAG, 任务调度, 多租户]
+---
+
+## 核心概念
+
+企业级自动化平台的核心是为 AI Agent 工作流提供**可编排、可观测、可扩展**的运行环境。本节设计一个支持 DAG 工作流调度、Webhook 触发、多租户隔离的自动化引擎。
+
+## 工作流引擎设计
+
+### DAG 调度器
+
+工作流本质是一个有向无环图（DAG），每个节点是一个任务步骤，边代表依赖关系。
+
+```python
+from enum import Enum
+from typing import Dict, List, Optional, Callable, Any
+from dataclasses import dataclass, field
+import asyncio
+from uuid import uuid4
+
+
+class TaskStatus(Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    SUCCESS = "success"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
+@dataclass
+class TaskNode:
+    """工作流中的一个任务节点"""
+    id: str
+    name: str
+    handler: Callable
+    dependencies: List[str] = field(default_factory=list)
+    retry_count: int = 0
+    max_retries: int = 3
+    timeout: int = 300  # 秒
+    status: TaskStatus = TaskStatus.PENDING
+    result: Any = None
+    error: Optional[str] = None
+
+
+class DAGWorkflow:
+    """DAG 工作流引擎"""
+
+    def __init__(self, name: str):
+        self.name = name
+        self.nodes: Dict[str, TaskNode] = {}
+        self.execution_id = str(uuid4())
+
+    def add_node(self, node: TaskNode) -> "DAGWorkflow":
+        self.nodes[node.id] = node
+        return self
+
+    def _get_ready_nodes(self, completed: set) -> List[TaskNode]:
+        """获取所有依赖已完成的节点"""
+        ready = []
+        for node_id, node in self.nodes.items():
+            if node_id in completed:
+                continue
+            if node.status == TaskStatus.RUNNING:
+                continue
+            deps_met = all(
+                dep in completed and self.nodes[dep].status == TaskStatus.SUCCESS
+                for dep in node.dependencies
+            )
+            if deps_met:
+                ready.append(node)
+        return ready
+
+    async def execute(self) -> Dict[str, Any]:
+        """执行整个 DAG"""
+        completed = set()
+        total = len(self.nodes)
+
+        while len(completed) < total:
+            ready = self._get_ready_nodes(completed)
+            if not ready and len(completed) < total:
+                # 检测死锁
+                pending = [n for n in self.nodes if n not in completed]
+                raise RuntimeError(
+                    f"工作流死锁: 以下节点无法调度 {pending}"
+                )
+
+            # 并行执行所有就绪节点
+            tasks = [self._execute_node(node) for node in ready]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            for node, result in zip(ready, results):
+                if isinstance(result, Exception):
+                    node.status = TaskStatus.FAILED
+                    node.error = str(result)
+                else:
+                    node.status = TaskStatus.SUCCESS
+                    node.result = result
+                completed.add(node.id)
+
+        return self._summary()
+
+    async def _execute_node(self, node: TaskNode):
+        """执行单个节点，带重试和超时"""
+        for attempt in range(node.max_retries + 1):
+            try:
+                node.status = TaskStatus.RUNNING
+                result = await asyncio.wait_for(
+                    node.handler(node.result),
+                    timeout=node.timeout,
+                )
+                return result
+            except asyncio.TimeoutError:
+                node.retry_count += 1
+                if attempt >= node.max_retries:
+                    raise TimeoutError(
+                        f"节点 {node.name} 执行超时 "
+                        f"(已重试 {node.max_retries} 次)"
+                    )
+            except Exception as e:
+                node.retry_count += 1
+                if attempt >= node.max_retries:
+                    raise
+                await asyncio.sleep(1 * (2 ** attempt))  # 指数退避
+
+    def _summary(self) -> Dict:
+        return {
+            "execution_id": self.execution_id,
+            "workflow": self.name,
+            "nodes": {
+                nid: {
+                    "status": n.status.value,
+                    "retries": n.retry_count,
+                    "error": n.error,
+                }
+                for nid, n in self.nodes.items()
+            },
+            "success": all(
+                n.status == TaskStatus.SUCCESS for n in self.nodes.values()
+            ),
+        }
+
+
+# 使用示例
+async def main():
+    # 定义任务处理器
+    async def fetch_data(ctx=None):
+        await asyncio.sleep(0.5)
+        return {"raw": "用户查询数据"}
+
+    async def analyze_data(ctx):
+        await asyncio.sleep(0.3)
+        data = ctx.get("raw", "")
+        return {"analysis": f"分析结果: {data[:20]}..."}
+
+    async def generate_report(ctx):
+        analysis = ctx.get("analysis", "")
+        return {"report": f"## 报告\n\n{analysis}"}
+
+    async def send_notification(ctx):
+        report = ctx.get("report", "")
+        print(f"[通知] 报告已生成: {len(report)} 字符")
+        return {"notified": True}
+
+    # 构建 DAG
+    workflow = DAGWorkflow("数据分析流水线")
+    workflow \
+        .add_node(TaskNode("fetch", "获取数据", fetch_data)) \
+        .add_node(TaskNode("analyze", "分析数据", analyze_data,
+                           dependencies=["fetch"])) \
+        .add_node(TaskNode("report", "生成报告", generate_report,
+                           dependencies=["analyze"])) \
+        .add_node(TaskNode("notify", "发送通知", send_notification,
+                           dependencies=["report"]))
+
+    result = await workflow.execute()
+    print(f"执行结果: {result}")
+```
+
+### 任务队列架构
+
+使用 Celery + Redis 实现分布式任务队列，支持优先级、延迟执行和结果回溯。
+
+```python
+# tasks.py
+from celery import Celery, Task
+from celery.result import AsyncResult
+from kombu import Queue, Exchange
+import json
+from datetime import datetime
+from typing import Optional
+
+# Celery 配置
+app = Celery("agent_platform")
+app.conf.update(
+    broker_url="redis://localhost:6379/0",
+    result_backend="redis://localhost:6379/1",
+    task_serializer="json",
+    result_serializer="json",
+    accept_content=["json"],
+    # 队列配置
+    task_queues=(
+        Queue("high", Exchange("high"), routing_key="high"),
+        Queue("default", Exchange("default"), routing_key="default"),
+        Queue("low", Exchange("low"), routing_key="low"),
+    ),
+    task_routes={
+        "tasks.agent_task": {"queue": "default"},
+        "tasks.urgent_task": {"queue": "high"},
+        "tasks.batch_task": {"queue": "low"},
+    },
+    task_default_queue="default",
+    # 重试配置
+    task_acks_late=True,
+    task_reject_on_worker_lost=True,
+    task_track_started=True,
+    # 速率限制
+    worker_max_tasks_per_child=1000,
+)
+
+
+class BaseTaskWithRetry(Task):
+    """带重试和日志的基础任务"""
+
+    autoretry_for = (Exception,)
+    max_retries = 3
+    retry_backoff = True
+    retry_backoff_max = 60
+    retry_jitter = True
+
+    def on_failure(self, exc, task_id, args, kwargs, einfo):
+        print(f"[TASK FAIL] {task_id}: {exc}")
+        super().on_failure(exc, task_id, args, kwargs, einfo)
+
+
+@app.task(base=BaseTaskWithRetry, bind=True)
+def agent_task(self, agent_id: str, input_data: dict) -> dict:
+    """执行 Agent 任务"""
+    task_id = self.request.id
+    print(f"[执行] agent={agent_id}, task={task_id}")
+
+    # 实际执行 Agent 逻辑
+    result = run_agent(agent_id, input_data)
+
+    return {
+        "task_id": task_id,
+        "agent_id": agent_id,
+        "status": "completed",
+        "result": result,
+        "executed_at": datetime.now().isoformat(),
+    }
+
+
+@app.task(base=BaseTaskWithRetry, bind=True)
+def urgent_task(self, agent_id: str, input_data: dict) -> dict:
+    """高优先级紧急任务"""
+    self.request.delivery_info["routing_key"] = "high"
+    return agent_task(agent_id, input_data)
+
+
+# API 层
+from fastapi import FastAPI, BackgroundTasks, HTTPException
+from pydantic import BaseModel
+
+api = FastAPI(title="任务调度 API")
+
+
+class TaskSubmit(BaseModel):
+    agent_id: str
+    input: dict
+    priority: str = "default"  # high, default, low
+
+
+class TaskResponse(BaseModel):
+    task_id: str
+    status: str
+
+
+@api.post("/api/tasks", response_model=TaskResponse)
+async def submit_task(task: TaskSubmit):
+    """提交任务到队列"""
+    routing = {"high": "high", "default": "default", "low": "low"}
+    queue = routing.get(task.priority, "default")
+
+    if task.priority == "high":
+        async_result = urgent_task.apply_async(
+            args=[task.agent_id, task.input],
+            queue=queue,
+            priority=10,
+        )
+    else:
+        async_result = agent_task.apply_async(
+            args=[task.agent_id, task.input],
+            queue=queue,
+        )
+
+    return TaskResponse(task_id=async_result.id, status="queued")
+
+
+@api.get("/api/tasks/{task_id}")
+async def get_task_status(task_id: str):
+    """查询任务状态"""
+    result = AsyncResult(task_id, app=app)
+
+    if result.pending:
+        status = "pending"
+    elif result.failed():
+        status = "failed"
+        return {
+            "task_id": task_id,
+            "status": status,
+            "error": str(result.result),
+        }
+    elif result.successful():
+        status = "success"
+    else:
+        status = "running"
+
+    return {
+        "task_id": task_id,
+        "status": status,
+        "result": result.result if result.successful() else None,
+    }
+
+
+@api.get("/api/queues/stats")
+async def queue_stats():
+    """查看队列统计"""
+    from celery.app.control import Inspect
+    i = Inspect(app=app)
+
+    return {
+        "active": i.active() or {},
+        "reserved": i.reserved() or {},
+        "scheduled": i.scheduled() or {},
+    }
+```
+
+## Webhook 触发系统
+
+Webhook 允许外部系统通过 HTTP 请求触发自动化工作流。
+
+```python
+# webhook_engine.py
+import hmac
+import hashlib
+from fastapi import FastAPI, Request, HTTPException, Header
+from pydantic import BaseModel
+from typing import Optional, Callable, Dict, Any
+from datetime import datetime
+import json
+import logging
+
+logger = logging.getLogger("webhook")
+
+webhook_app = FastAPI()
+
+
+class WebhookRegistration(BaseModel):
+    """Webhook 注册信息"""
+    name: str
+    url: str  # 回调 URL
+    secret: str  # 签名密钥
+    events: list[str]  # 监听的事件类型
+    enabled: bool = True
+
+
+class WebhookEvent(BaseModel):
+    event_type: str
+    payload: dict
+    timestamp: str
+    signature: str
+
+
+class WebhookEngine:
+    """Webhook 触发引擎"""
+
+    def __init__(self):
+        self.handlers: Dict[str, Callable] = {}
+        self.registrations: Dict[str, WebhookRegistration] = {}
+        self.event_log: list = []
+
+    def register_handler(self, event_type: str, handler: Callable):
+        """注册事件处理器"""
+        self.handlers[event_type] = handler
+
+    def register_webhook(self, wh: WebhookRegistration):
+        """注册外部 Webhook"""
+        self.registrations[wh.name] = wh
+
+    def _sign_payload(self, payload: dict, secret: str) -> str:
+        """HMAC-SHA256 签名"""
+        body = json.dumps(payload, sort_keys=True)
+        return hmac.new(
+            secret.encode(), body.encode(), hashlib.sha256
+        ).hexdigest()
+
+    def _verify_signature(self, payload: dict, signature: str, secret: str) -> bool:
+        """验证签名"""
+        expected = self._sign_payload(payload, secret)
+        return hmac.compare_digest(expected, signature)
+
+    async def trigger(self, event_type: str, payload: dict):
+        """触发事件"""
+        event = WebhookEvent(
+            event_type=event_type,
+            payload=payload,
+            timestamp=datetime.now().isoformat(),
+            signature="",
+        )
+
+        # 1. 调用内部处理器
+        if event_type in self.handlers:
+            try:
+                await self.handlers[event_type](payload)
+            except Exception as e:
+                logger.error(f"处理器异常 [{event_type}]: {e}")
+
+        # 2. 触发外部 Webhook
+        for name, reg in self.registrations.items():
+            if event_type in reg.events and reg.enabled:
+                event.signature = self._sign_payload(payload, reg.secret)
+                await self._call_webhook(name, reg, event)
+
+        # 3. 记录事件
+        self.event_log.append(event)
+        logger.info(f"事件触发: {event_type} -> {len(self.registrations)} webhooks")
+
+    async def _call_webhook(self, name: str, reg: WebhookRegistration, event: WebhookEvent):
+        """调用外部 Webhook"""
+        import httpx
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    reg.url,
+                    json=event.model_dump(),
+                    headers={
+                        "X-Webhook-Signature": event.signature,
+                        "Content-Type": "application/json",
+                    },
+                    timeout=30,
+                )
+                logger.info(f"Webhook [{name}] 响应: {resp.status_code}")
+        except httpx.TimeoutException:
+            logger.error(f"Webhook [{name}] 超时")
+        except Exception as e:
+            logger.error(f"Webhook [{name}] 调用失败: {e}")
+
+    def verify_incoming_webhook(
+        self, payload: dict, signature: str, secret: str
+    ) -> bool:
+        """验证传入的 Webhook 请求"""
+        return self._verify_signature(payload, signature, secret)
+
+
+# 初始化引擎
+engine = WebhookEngine()
+
+
+@webhook_app.post("/webhook/event")
+async def receive_event(
+    request: Request,
+    x_signature: Optional[str] = Header(None),
+):
+    """接收外部 Webhook 事件"""
+    payload = await request.json()
+    secret = get_webhook_secret(request)  # 根据请求来源获取密钥
+
+    if not engine.verify_incoming_webhook(payload, x_signature or "", secret):
+        raise HTTPException(status_code=401, detail="签名验证失败")
+
+    event_type = payload.get("event_type", "unknown")
+    await engine.trigger(event_type, payload.get("data", {}))
+
+    return {"status": "received", "event": event_type}
+
+
+@webhook_app.post("/webhook/register")
+async def register_webhook(wh: WebhookRegistration):
+    """注册新的 Webhook"""
+    engine.register_webhook(wh)
+    return {"status": "registered", "name": wh.name}
+```
+
+## 告警与通知
+
+任务失败时自动告警，支持多种通知渠道。
+
+```python
+# alerting.py
+from enum import Enum
+from typing import Optional, List
+import smtplib
+import json
+from datetime import datetime, timedelta
+
+
+class AlertLevel(Enum):
+    INFO = "info"
+    WARNING = "warning"
+    CRITICAL = "critical"
+
+
+class AlertChannel:
+    """告警通道基类"""
+
+    def send(self, title: str, message: str, level: AlertLevel):
+        raise NotImplementedError
+
+
+class EmailChannel(AlertChannel):
+    def __init__(self, smtp_server: str, from_addr: str, to_addrs: List[str]):
+        self.smtp_server = smtp_server
+        self.from_addr = from_addr
+        self.to_addrs = to_addrs
+
+    def send(self, title: str, message: str, level: AlertLevel):
+        subject = f"[{level.value.upper()}] {title}"
+        body = f"时间: {datetime.now()}\n级别: {level.value}\n\n{message}"
+
+        # 实际发送邮件逻辑
+        print(f"[邮件] {subject} -> {self.to_addrs}")
+
+
+class WebhookChannel(AlertChannel):
+    def __init__(self, webhook_url: str):
+        self.webhook_url = webhook_url
+
+    def send(self, title: str, message: str, level: AlertLevel):
+        import httpx
+        payload = {
+            "title": title,
+            "message": message,
+            "level": level.value,
+            "timestamp": datetime.now().isoformat(),
+        }
+        # 异步发送
+        print(f"[Webhook] {title} -> {self.webhook_url}")
+
+
+class AlertManager:
+    """告警管理器，支持聚合和降噪"""
+
+    def __init__(self, window_minutes: int = 5):
+        self.channels: List[AlertChannel] = []
+        self.window = timedelta(minutes=window_minutes)
+        self.recent_alerts: dict = {}
+
+    def add_channel(self, channel: AlertChannel):
+        self.channels.append(channel)
+
+    def _should_suppress(self, alert_key: str) -> bool:
+        """避免重复告警（降噪）"""
+        now = datetime.now()
+        if alert_key in self.recent_alerts:
+            last_time = self.recent_alerts[alert_key]
+            if now - last_time < self.window:
+                return True
+        self.recent_alerts[alert_key] = now
+        return False
+
+    def alert(
+        self,
+        title: str,
+        message: str,
+        level: AlertLevel = AlertLevel.WARNING,
+        dedup_key: Optional[str] = None,
+    ):
+        key = dedup_key or title
+        if self._should_suppress(key):
+            return
+
+        for channel in self.channels:
+            try:
+                channel.send(title, message, level)
+            except Exception as e:
+                print(f"告警发送失败 [{type(channel).__name__}]: {e}")
+
+    def task_failed_alert(self, task_info: dict):
+        """任务失败告警"""
+        title = f"任务失败: {task_info.get('name', 'unknown')}"
+        message = json.dumps(task_info, indent=2, ensure_ascii=False)
+        level = AlertLevel.CRITICAL
+        dedup_key = f"task_fail:{task_info.get('task_id')}"
+
+        self.alert(title, message, level, dedup_key)
+
+
+# 集成使用
+alert_manager = AlertManager(window_minutes=10)
+alert_manager.add_channel(EmailChannel(
+    smtp_server="smtp.example.com",
+    from_addr="alerts@company.com",
+    to_addrs=["ops@company.com"],
+))
+alert_manager.add_channel(WebhookChannel(
+    webhook_url="https://hooks.slack.com/services/xxx",
+))
+```
+
+## 多租户隔离
+
+SaaS 平台必须支持多租户，确保数据和工作负载隔离。
+
+```python
+# multitenant.py
+from contextvars import ContextVar
+from typing import Optional
+from fastapi import FastAPI, Request, HTTPException, Depends
+import hashlib
+
+# 使用 ContextVar 实现线程/协程级别的租户上下文
+current_tenant: ContextVar[Optional[str]] = ContextVar("current_tenant", default=None)
+
+
+def get_current_tenant() -> Optional[str]:
+    return current_tenant.get()
+
+
+class TenantContext:
+    """租户上下文管理器"""
+
+    def __init__(self, tenant_id: str):
+        self.tenant_id = tenant_id
+        self.token = None
+
+    def __enter__(self):
+        self.token = current_tenant.set(self.tenant_id)
+        return self
+
+    def __exit__(self, *args):
+        current_tenant.reset(self.token)
+
+
+class TenantAwareTask(BaseTaskWithRetry):
+    """感知租户的任务基类"""
+
+    abstract = True
+
+    def __call__(self, *args, **kwargs):
+        tenant_id = kwargs.pop("_tenant_id", None)
+        if tenant_id:
+            with TenantContext(tenant_id):
+                return super().__call__(*args, **kwargs)
+        return super().__call__(*args, **kwargs)
+
+
+# 数据库层隔离
+class TenantAwareDB:
+    """根据租户 ID 路由到不同数据库/ Schema"""
+
+    def __init__(self):
+        self.connections = {
+            "tenant_a": "postgresql://host_a/db_a",
+            "tenant_b": "postgresql://host_b/db_b",
+        }
+
+    def get_connection(self):
+        tenant = get_current_tenant()
+        if not tenant:
+            raise RuntimeError("未指定租户")
+        if tenant not in self.connections:
+            raise RuntimeError(f"租户 {tenant} 无对应数据库")
+        # 返回对应的数据库连接
+        return f"连接: {self.connections[tenant]}"
+
+
+# API 层租户中间件
+from fastapi.middleware.base import BaseHTTPMiddleware
+
+
+class TenantMiddleware(BaseHTTPMiddleware):
+    """从 JWT Token 中提取租户 ID"""
+
+    async def dispatch(self, request: Request, call_next):
+        tenant_id = request.headers.get("X-Tenant-ID")
+        if tenant_id:
+            token = current_tenant.set(tenant_id)
+            try:
+                response = await call_next(request)
+                response.headers["X-Tenant-ID"] = tenant_id
+                return response
+            finally:
+                current_tenant.reset(token)
+        else:
+            return await call_next(request)
+
+
+# FastAPI 路由示例
+tenant_app = FastAPI()
+tenant_app.add_middleware(TenantMiddleware)
+
+
+@tenant_app.get("/api/workflows")
+async def list_workflows():
+    """列出当前租户的所有工作流"""
+    tenant = get_current_tenant()
+    # 查询时自动过滤租户
+    workflows = await db.query(
+        "SELECT * FROM workflows WHERE tenant_id = $1", tenant
+    )
+    return {"tenant": tenant, "workflows": workflows}
+
+
+@tenant_app.post("/api/workflows")
+async def create_workflow(data: dict):
+    """创建工作流（自动注入租户 ID）"""
+    tenant = get_current_tenant()
+    data["tenant_id"] = tenant
+    # 持久化...
+    return {"status": "created", "tenant": tenant}
+```
+
+## 审计日志
+
+完整的审计日志是合规运营的基础。
+
+```python
+# audit.py
+from datetime import datetime
+from typing import Dict, Any, Optional
+import json
+import logging
+
+audit_logger = logging.getLogger("audit")
+
+
+class AuditEvent:
+    """审计事件"""
+
+    def __init__(
+        self,
+        action: str,
+        actor: str,
+        resource: str,
+        tenant: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+        result: str = "success",
+    ):
+        self.timestamp = datetime.utcnow().isoformat() + "Z"
+        self.action = action
+        self.actor = actor
+        self.resource = resource
+        self.tenant = tenant
+        self.details = details or {}
+        self.result = result
+
+    def to_dict(self) -> Dict:
+        return {
+            "timestamp": self.timestamp,
+            "action": self.action,
+            "actor": self.actor,
+            "resource": self.resource,
+            "tenant": self.tenant,
+            "details": self.details,
+            "result": self.result,
+        }
+
+
+class AuditTrail:
+    """审计追踪系统"""
+
+    def __init__(self, storage_backend: str = "file"):
+        self.storage = storage_backend
+        self.events: list = []
+
+    def log(self, event: AuditEvent):
+        """记录审计事件"""
+        record = event.to_dict()
+        self.events.append(record)
+        audit_logger.info(json.dumps(record, ensure_ascii=False))
+
+        if self.storage == "file":
+            self._write_to_file(record)
+        elif self.storage == "db":
+            self._write_to_db(record)
+
+    def _write_to_file(self, record: dict):
+        with open("audit.log", "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+    def _write_to_db(self, record: dict):
+        # 写入审计数据库
+        pass
+
+    def query(
+        self,
+        actor: Optional[str] = None,
+        action: Optional[str] = None,
+        tenant: Optional[str] = None,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
+        limit: int = 100,
+    ) -> list:
+        """查询审计日志"""
+        results = self.events
+
+        if actor:
+            results = [e for e in results if e["actor"] == actor]
+        if action:
+            results = [e for e in results if e["action"] == action]
+        if tenant:
+            results = [e for e in results if e["tenant"] == tenant]
+        if start_time:
+            results = [e for e in results if e["timestamp"] >= start_time]
+        if end_time:
+            results = [e for e in results if e["timestamp"] <= end_time]
+
+        return results[:limit]
+
+    def generate_report(self, tenant: str, days: int = 7) -> Dict:
+        """生成审计报告"""
+        from collections import Counter
+
+        from datetime import timedelta
+        cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
+
+        tenant_events = [
+            e for e in self.events
+            if e.get("tenant") == tenant and e["timestamp"] >= cutoff
+        ]
+
+        action_counts = Counter(e["action"] for e in tenant_events)
+        result_counts = Counter(e["result"] for e in tenant_events)
+
+        return {
+            "tenant": tenant,
+            "period_days": days,
+            "total_events": len(tenant_events),
+            "actions": dict(action_counts),
+            "results": dict(result_counts),
+            "failed_events": [
+                e for e in tenant_events if e["result"] == "failure"
+            ],
+        }
+
+
+# 使用示例
+trail = AuditTrail(storage_backend="file")
+
+# 记录 API 调用
+trail.log(AuditEvent(
+    action="workflow.execute",
+    actor="user_123",
+    resource="workflow_456",
+    tenant="tenant_a",
+    details={"workflow_name": "数据分析流水线"},
+    result="success",
+))
+
+# 记录失败操作
+trail.log(AuditEvent(
+    action="task.update",
+    actor="user_123",
+    resource="task_789",
+    details={"error": "权限不足"},
+    result="failure",
+))
+```
+
+## 完整集成示例
+
+将所有组件整合到一个 FastAPI 应用中：
+
+```python
+# main.py
+from fastapi import FastAPI
+import uvicorn
+
+app = FastAPI(title="企业级自动化平台")
+
+# 注册中间件
+app.add_middleware(TenantMiddleware)
+
+# 挂载子路由
+app.mount("/webhook", webhook_app)
+app.mount("/tasks", api)
+
+# 初始化组件
+alert_manager = AlertManager()
+alert_manager.add_channel(WebhookChannel(
+    webhook_url="https://hooks.example.com/alerts"
+))
+
+# 注册事件处理器
+async def on_workflow_completed(payload: dict):
+    alert_manager.alert(
+        title=f"工作流完成: {payload.get('name')}",
+        message=f"执行耗时: {payload.get('duration')}s",
+        level=AlertLevel.INFO,
+    )
+
+engine.register_handler("workflow.completed", on_workflow_completed)
+
+
+@app.get("/health")
+async def health():
+    return {
+        "status": "ok",
+        "queues": ["high", "default", "low"],
+        "workers": 4,
+        "tenant_count": 2,
+    }
+
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+```
+
+## 练习
+
+1. 实现一个条件分支节点：根据上一个节点的输出决定执行哪个下游节点
+2. 为任务队列添加延迟执行功能（例如：30 分钟后执行）
+3. 设计一个 Webhook 重试机制：失败后自动重试 3 次，间隔递增
+4. 扩展审计系统，支持导出 PDF 格式的合规报告

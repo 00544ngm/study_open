@@ -1,0 +1,129 @@
+---
+title: Requests 完全指南
+order: 1
+difficulty: beginner
+estimated_time: 20min
+tags: [Requests, HTTP, 爬虫, Python]
+---
+
+## 安装
+
+```bash
+pip install requests
+```
+
+## GET 请求
+
+```python
+import requests
+
+# 基础 GET
+resp = requests.get("https://api.github.com")
+print(resp.status_code)   # 200
+print(resp.text)          # 响应体文本
+print(resp.json())        # JSON 解析
+
+# 带参数
+params = {"q": "python", "page": 1}
+resp = requests.get("https://api.github.com/search/repositories", params=params)
+print(resp.url)  # https://api.github.com/...?q=python&page=1
+
+# 带请求头
+headers = {
+    "User-Agent": "Mozilla/5.0",
+    "Accept": "application/json",
+}
+resp = requests.get("https://api.github.com", headers=headers)
+```
+
+## POST 请求
+
+```python
+# Form 表单
+resp = requests.post("https://httpbin.org/post", data={"key": "value"})
+
+# JSON 请求体
+resp = requests.post(
+    "https://api.example.com/data",
+    json={"name": "Alice", "age": 25},
+)
+
+# 文件上传
+files = {"file": open("data.csv", "rb")}
+resp = requests.post("https://httpbin.org/post", files=files)
+```
+
+## 会话管理
+
+```python
+# Session 保持 cookie，复用连接
+session = requests.Session()
+session.headers.update({"User-Agent": "Mozilla/5.0"})
+
+# 登录
+login_data = {"username": "admin", "password": "123456"}
+session.post("https://example.com/login", data=login_data)
+
+# 后续请求自动携带 cookie
+resp = session.get("https://example.com/dashboard")
+print(resp.text)
+```
+
+## 超时与重试
+
+```python
+# 超时（秒）
+resp = requests.get("https://api.github.com", timeout=10)
+
+# 连接超时 + 读取超时
+resp = requests.get("https://api.github.com", timeout=(3, 10))
+
+# 重试适配器
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+session = requests.Session()
+retries = Retry(
+    total=3,                # 总重试 3 次
+    backoff_factor=0.5,     # 退避因子
+    status_forcelist=[500, 502, 503, 504],
+)
+adapter = HTTPAdapter(max_retries=retries)
+session.mount("http://", adapter)
+session.mount("https://", adapter)
+```
+
+## 代理
+
+```python
+proxies = {
+    "http": "http://127.0.0.1:7890",
+    "https": "http://127.0.0.1:7890",
+}
+resp = requests.get("https://api.github.com", proxies=proxies)
+
+# 带认证的代理
+proxies = {
+    "http": "http://user:pass@127.0.0.1:7890",
+}
+```
+
+## 流式下载
+
+```python
+# 大文件流式下载
+resp = requests.get("https://example.com/big-file.zip", stream=True)
+with open("output.zip", "wb") as f:
+    for chunk in resp.iter_content(chunk_size=8192):
+        f.write(chunk)
+```
+
+| 方法 | 用途 |
+|------|------|
+| `get(url)` | GET 请求 |
+| `post(url)` | POST 请求 |
+| `session()` | 会话管理 |
+| `headers` | 自定义请求头 |
+| `params` | URL 查询参数 |
+| `timeout` | 超时控制 |
+| `proxies` | 代理设置 |

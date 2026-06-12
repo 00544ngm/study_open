@@ -1,0 +1,246 @@
+---
+title: Celery 与任务队列
+order: 1
+difficulty: intermediate
+estimated_time: 25min
+tags: [Celery, Redis, 异步, 任务队列]
+---
+
+## 入门
+
+Agent 任务可能耗时很长（文档处理、批量 LLM 调用），需要用任务队列异步执行。
+
+## 核心
+
+### 安装与配置
+
+```bash
+pip install celery redis
+# 需要 Redis 作为 Broker
+# docker run -d -p 6379:6379 redis:7-alpine
+```
+
+```python
+# tasks.py
+from celery import Celery
+
+app = Celery(
+    "agent_tasks",
+    broker="redis://localhost:6379/0",
+    backend="redis://localhost:6379/1",  # 存储结果
+)
+
+# 配置序列化
+app.conf.update(
+    task_serializer="json",
+    accept_content=["json"],
+    result_serializer="json",
+    timezone="Asia/Shanghai",
+    task_track_started=True,  # 追踪任务状态
+)
+```
+
+### 定义异步任务
+
+```python
+# tasks.py
+from celery import current_task
+
+@app.task(bind=True, max_retries=3)
+def process_document(self, doc_path: str):
+    """处理文档的异步任务"""
+    try:
+        current_task.update_state(
+            state="PROGRESS",
+            meta={"step": "parsing", "progress": 0.3}
+        )
+        # 解析文档
+        text = parse_document(doc_path)
+
+        current_task.update_state(
+            state="PROGRESS",
+            meta={"step": "embedding", "progress": 0.6}
+        )
+        # 生成向量
+        vector = generate_embedding(text)
+
+        current_task.update_state(
+            state="PROGRESS",
+            meta={"step": "indexing", "progress": 0.9}
+        )
+        # 存入向量库
+        index_to_qdrant(doc_path, vector)
+
+        return {"status": "success", "doc": doc_path}
+
+    except Exception as e:
+        # 自动重试
+        raise self.retry(exc=e, countdown=60)  # 60秒后重试
+```
+
+### 调用和查询
+
+```python
+# 提交任务
+from tasks import process_document
+
+task = process_document.delay("/data/docs/guide.pdf")
+print(f"任务 ID: {task.id}")
+
+# 查询状态
+task_result = app.AsyncResult(task.id)
+print(f"状态: {task_result.state}")    # PENDING / STARTED / PROGRESS / SUCCESS / FAILURE
+print(f"结果: {task_result.result}")
+
+# 等待结果（带超时）
+result = task_result.get(timeout=120)
+```
+
+## 进阶
+
+### Agent 任务工作流
+
+```python
+from celery import group, chain, chord
+
+@app.task
+def classify_intent(text: str) -> dict:
+    """意图分类"""
+    # 调用 LLM 分类
+    return {"intent": "complaint", "confidence": 0.95}
+
+@app.task
+def retrieve_knowledge(intent_result: dict) -> list:
+    """检索相关知识"""
+    intent = intent_result["intent"]
+    return search_kb(intent)
+
+@app.task
+def generate_reply(knowledge: list) -> str:
+    """生成回复"""
+    return llm_generate(knowledge)
+
+# 链式执行：按顺序执行
+pipeline = chain(
+    classify_intent.s("用户消息..."),
+    retrieve_knowledge.s(),
+    generate_reply.s()
+)
+
+result = pipeline()
+print(result.get())
+
+# 并行执行：同时处理多个文档
+parallel = group(
+    process_document.s("/docs/doc1.pdf"),
+    process_document.s("/docs/doc2.pdf"),
+    process_document.s("/docs/doc3.pdf"),
+)
+
+results = parallel()
+for r in results.get():
+    print(f"完成: {r}")
+```
+
+### 定时任务
+
+```python
+# 定时执行：定期同步知识库
+from celery.schedules import crontab
+
+@app.task
+def sync_knowledge_base():
+    """定时同步知识库"""
+    sources = load_source_urls()
+    for url in sources:
+        crawl_and_index.delay(url)
+
+@app.task
+def cleanup_old_sessions():
+    """清理过期会话"""
+    clean_sessions(days=30)
+
+@app.task
+def daily_report():
+    """每日 Token 消耗报告"""
+    generate_cost_report()
+
+# 配置定时任务
+app.conf.beat_schedule = {
+    "sync-kb-every-hour": {
+        "task": "tasks.sync_knowledge_base",
+        "schedule": crontab(minute=0),  # 每小时
+    },
+    "cleanup-daily": {
+        "task": "tasks.cleanup_old_sessions",
+        "schedule": crontab(hour=3, minute=0),  # 每天凌晨3点
+    },
+    "report-daily": {
+        "task": "tasks.daily_report",
+        "schedule": crontab(hour=9, minute=0),  # 每天上午9点
+    },
+}
+```
+
+### FastAPI 集成
+
+```python
+# api.py
+from fastapi import FastAPI, BackgroundTasks
+from celery.result import AsyncResult
+from tasks import process_document
+
+app = FastAPI()
+
+@app.post("/documents/process")
+async def start_processing(doc_path: str):
+    """异步处理文档，立即返回任务 ID"""
+    task = process_document.delay(doc_path)
+    return {"task_id": task.id, "status": "submitted"}
+
+@app.get("/tasks/{task_id}")
+async def get_task_status(task_id: str):
+    """查询任务状态"""
+    result = AsyncResult(task_id, app=process_document.app)
+
+    return {
+        "task_id": task_id,
+        "status": result.state,
+        "result": result.result if result.ready() else None,
+    }
+
+@app.get("/tasks/{task_id}/events")
+async def stream_task_events(task_id: str):
+    """SSE 推送任务进度"""
+    async def event_stream():
+        result = AsyncResult(task_id)
+        while not result.ready():
+            meta = result.result or {}
+            yield f"data: {json.dumps(meta)}\n\n"
+            await asyncio.sleep(1)
+
+        yield f"data: {json.dumps({'status': 'done', 'result': result.result})}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+```
+
+### 运行
+
+```bash
+# 启动 Celery Worker（3 个并发）
+celery -A tasks worker --loglevel=info --concurrency=3
+
+# 启动定时任务调度器
+celery -A tasks beat --loglevel=info
+
+# 启动 Flower 监控面板
+pip install flower
+celery -A tasks flower --port=5555
+# 访问 http://localhost:5555
+```
+
+## 练习
+
+1. 定义一个文档处理任务：解析 PDF → 分块 → 生成 Embedding → 存入 Qdrant
+2. 用 chain 实现三步流水线：意图分类 → 检索 → 生成回复
+3. 配置定时任务：每小时同步一次知识库，每天生成 Token 消耗报告

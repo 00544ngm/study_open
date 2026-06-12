@@ -1,0 +1,451 @@
+---
+title: React Hooks 深入
+order: 2
+difficulty: core
+estimated_time: 30min
+tags: [React, Hooks, useState, useEffect, useRef, useMemo, useCallback, 自定义Hook]
+---
+
+## useState 深入
+
+### 惰性初始值
+
+当初始状态需要昂贵计算时，传入函数避免每次渲染都重复执行：
+
+```jsx
+// 错误：每次渲染都执行 computeInitialState
+const [state, setState] = useState(computeInitialState());
+
+// 正确：只在首次渲染执行
+const [state, setState] = useState(() => {
+  const initial = computeInitialState();
+  return initial;
+});
+```
+
+### 函数式更新
+
+当新状态依赖旧状态时，使用函数式更新确保结果正确：
+
+```jsx
+function Counter() {
+  const [count, setCount] = useState(0);
+
+  // 依赖旧值 → 函数式
+  const handleClick = () => {
+    // 连续调用 3 次，每次基于最新值
+    setCount(c => c + 1);
+    setCount(c => c + 1);
+    setCount(c => c + 1); // 最终 +3
+  };
+
+  // 普通更新在闭包中可能拿到过期值
+  const problematic = () => {
+    setCount(count + 1);
+    setCount(count + 1); // 两次都是基于同一个 count
+  };
+
+  return <button onClick={handleClick}>{count}</button>;
+}
+```
+
+### 状态更新批处理
+
+React 18 自动批处理所有更新（包括 Promise、setTimeout 内部）：
+
+```jsx
+function BatchDemo() {
+  const [a, setA] = useState(0);
+  const [b, setB] = useState(0);
+
+  const handleClick = async () => {
+    // React 18: 以下两个 setState 被批处理，只触发一次渲染
+    await fetchData();
+    setA(x => x + 1);
+    setB(x => x + 1); // 与上面合并为一次渲染
+  };
+}
+```
+
+## useEffect 详解
+
+### 依赖数组语义
+
+```jsx
+// 1. 无依赖：每次渲染后执行（极少使用）
+useEffect(() => {
+  document.title = `点击 ${count} 次`;
+}); // 没有 []
+
+// 2. 空数组：仅挂载时执行
+useEffect(() => {
+  fetch("/api/init").then(setData);
+}, []); // 仅在挂载时执行一次
+
+// 3. 有依赖：依赖变化时重新执行
+useEffect(() => {
+  fetch(`/api/user/${userId}`).then(setUser);
+}, [userId]); // userId 变化时重新请求
+
+// 4. 多个依赖：任一变化都重新执行
+useEffect(() => {
+  const fullName = `${firstName} ${lastName}`;
+  document.title = fullName;
+}, [firstName, lastName]);
+```
+
+### 清除函数与 Effect 生命周期
+
+```jsx
+function SearchBox() {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState([]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const controller = new AbortController();
+    const delay = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/search?q=${query}`, {
+          signal: controller.signal,
+        });
+        const data = await res.json();
+        if (!cancelled) {
+          setResults(data);
+        }
+      } catch (err) {
+        if (err.name !== "AbortError" && !cancelled) {
+          console.error("搜索失败", err);
+        }
+      }
+    }, 300);
+
+    // 清除函数：在卸载或重新执行前运行
+    return () => {
+      cancelled = true;
+      clearTimeout(delay);
+      controller.abort();
+    };
+  }, [query]);
+
+  return (
+    <div>
+      <input value={query} onChange={e => setQuery(e.target.value)} />
+      <ul>{results.map(r => <li key={r.id}>{r.text}</li>)}</ul>
+    </div>
+  );
+}
+```
+
+### 不要欺骗依赖数组
+
+```jsx
+function BadEffect({ items }) {
+  const [filtered, setFiltered] = useState([]);
+
+  useEffect(() => {
+    // 错误：使用了 items 但未声明依赖
+    setFiltered(items.filter(i => i.active));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps ✗
+
+  // 正确：要么声明依赖
+  useEffect(() => {
+    setFiltered(items.filter(i => i.active));
+  }, [items]);
+
+  // 更好：直接用 useMemo 何必用 effect
+  const filtered2 = useMemo(
+    () => items.filter(i => i.active),
+    [items]
+  );
+}
+```
+
+## useRef
+
+### DOM 引用
+
+```jsx
+function AutoFocusInput() {
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    // 挂载后自动聚焦
+    inputRef.current?.focus();
+  }, []);
+
+  return <input ref={inputRef} placeholder="自动聚焦" />;
+}
+```
+
+### 存储可变值（不触发重渲染）
+
+```jsx
+function Timer() {
+  const [count, setCount] = useState(0);
+  const intervalRef = useRef(null);
+
+  const start = () => {
+    intervalRef.current = setInterval(() => {
+      setCount(c => c + 1);
+    }, 1000);
+  };
+
+  const stop = () => {
+    clearInterval(intervalRef.current);
+  };
+
+  // 组件卸载时自动清理
+  useEffect(() => () => clearInterval(intervalRef.current), []);
+
+  return (
+    <div>
+      <p>{count} 秒</p>
+      <button onClick={start}>开始</button>
+      <button onClick={stop}>停止</button>
+    </div>
+  );
+}
+```
+
+### 保存上一次的值
+
+```jsx
+function usePrevious(value) {
+  const ref = useRef();
+  useEffect(() => {
+    ref.current = value;
+  }, [value]);
+  return ref.current; // 返回上一次渲染时的值
+}
+
+function ComparePrice({ currentPrice }) {
+  const prevPrice = usePrevious(currentPrice);
+  const trend = prevPrice === undefined
+    ? "初始"
+    : currentPrice > prevPrice ? "上涨" : "下跌";
+
+  return <span>当前: {currentPrice} ({trend})</span>;
+}
+```
+
+## useMemo 与 useCallback
+
+### useMemo：缓存计算结果
+
+```jsx
+function UserList({ users, searchTerm }) {
+  // 只有依赖变化时才重新计算
+  const filteredUsers = useMemo(() => {
+    console.log("重新过滤...");
+    return users.filter(
+      u => u.name.includes(searchTerm) || u.email.includes(searchTerm)
+    );
+  }, [users, searchTerm]);
+
+  // 避免每次渲染都新建对象
+  const config = useMemo(
+    () => ({ theme: "dark", pageSize: 20 }),
+    []
+  );
+
+  return (
+    <ul>
+      {filteredUsers.map(u => (
+        <li key={u.id}>{u.name}</li>
+      ))}
+    </ul>
+  );
+}
+```
+
+### useCallback：缓存函数引用
+
+```jsx
+function ChatRoom({ roomId }) {
+  const [messages, setMessages] = useState([]);
+
+  // 缓存回调函数，避免子组件不必要重渲染
+  const handleNewMessage = useCallback(
+    (msg) => {
+      setMessages(prev => [...prev, msg]);
+    },
+    [] // setMessages 的 setter 本身稳定，无需依赖
+  );
+
+  // 等价写法：useCallback(fn, deps) === useMemo(() => fn, deps)
+  return (
+    <MessageList
+      messages={messages}
+      onNewMessage={handleNewMessage}
+    />
+  );
+}
+
+// 子组件配合 React.memo 避免不必要重渲染
+const MessageList = React.memo(function MessageList({ messages, onNewMessage }) {
+  return (
+    <div>
+      {messages.map((m, i) => <p key={i}>{m}</p>)}
+    </div>
+  );
+});
+```
+
+### 何时使用
+
+| 优化手段 | 适用场景 | 不适用场景 |
+|---------|---------|-----------|
+| `useMemo` | 计算量大（过滤、排序、转换） | 简单计算（反倒增加开销） |
+| `useCallback` | 传给 `React.memo` 子组件 | 传给原生 DOM 元素 |
+| `React.memo` | 纯展示组件、频繁重渲染 | 每次 props 必然变化时 |
+
+> **原则**：先用 `Profiler` 确认性能瓶颈，再考虑优化。不要过早优化。
+
+## 自定义 Hooks 模式
+
+### 提取共享逻辑
+
+```jsx
+// hooks/useWebSocket.js
+function useWebSocket(url) {
+  const [data, setData] = useState(null);
+  const [isConnected, setIsConnected] = useState(false);
+  const wsRef = useRef(null);
+
+  useEffect(() => {
+    const ws = new WebSocket(url);
+    wsRef.current = ws;
+
+    ws.onopen = () => setIsConnected(true);
+    ws.onclose = () => setIsConnected(false);
+    ws.onmessage = (event) => setData(JSON.parse(event.data));
+
+    return () => ws.close();
+  }, [url]);
+
+  const send = useCallback((msg) => {
+    wsRef.current?.send(JSON.stringify(msg));
+  }, []);
+
+  return { data, isConnected, send };
+}
+
+// 使用
+function AgentConsole() {
+  const { data, isConnected, send } = useWebSocket(
+    "wss://api.example.com/agent/events"
+  );
+
+  return (
+    <div>
+      <span>连接: {isConnected ? "在线" : "离线"}</span>
+      <button onClick={() => send({ action: "pause" })}>暂停</button>
+      <pre>{JSON.stringify(data, null, 2)}</pre>
+    </div>
+  );
+}
+```
+
+### Hook 组合模式
+
+```jsx
+// hooks/useAgentChat.js
+function useAgentChat(agentId) {
+  const [messages, setMessages] = useState([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const { data: agentStatus } = useWebSocket(
+    `wss://api.example.com/agents/${agentId}/ws`
+  );
+
+  const sendMessage = useCallback(async (text) => {
+    setIsLoading(true);
+    const userMsg = { role: "user", content: text };
+    setMessages(prev => [...prev, userMsg]);
+
+    try {
+      const response = await fetch(`/api/agents/${agentId}/chat`, {
+        method: "POST",
+        body: JSON.stringify({ message: text }),
+      });
+      const data = await response.json();
+      const assistantMsg = { role: "assistant", content: data.reply };
+      setMessages(prev => [...prev, assistantMsg]);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [agentId]);
+
+  return { messages, isLoading, agentStatus, sendMessage };
+}
+```
+
+### 参数化 Hook
+
+```jsx
+// hooks/useDebounce.js
+function useDebounce(value, delay = 300) {
+  const [debouncedValue, setDebouncedValue] = useState(value);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedValue(value), delay);
+    return () => clearTimeout(timer);
+  }, [value, delay]);
+
+  return debouncedValue;
+}
+
+// 使用
+function SearchAutocomplete() {
+  const [query, setQuery] = useState("");
+  const debouncedQuery = useDebounce(query, 500);
+
+  const { data: suggestions } = useFetch(
+    `/api/suggest?q=${debouncedQuery}`,
+    { enabled: debouncedQuery.length > 2 }
+  );
+
+  return (
+    <input
+      value={query}
+      onChange={e => setQuery(e.target.value)}
+      placeholder="搜索..."
+    />
+  );
+}
+```
+
+### Hook 范式检查清单
+
+```jsx
+// 1. 命名以 use 开头
+function useValidHook() { /* ... */ }
+
+// 2. 不条件调用
+function MyComponent({ flag }) {
+  // 错误：不能在条件中使用 Hook
+  // if (flag) {
+  //   useEffect(() => { ... });
+  // }
+
+  // 正确：条件逻辑放在 Hook 内部
+  useEffect(() => {
+    if (flag) { /* 条件执行 */ }
+  }, [flag]);
+}
+
+// 3. 不循环中调用
+// 错误：for (...) { useEffect(...) }
+
+// 4. 返回数组而非对象（当用户需要重命名时）
+function useWindowSize() {
+  const [width, setWidth] = useState(window.innerWidth);
+  const [height, setHeight] = useState(window.innerHeight);
+  // ...
+  return [width, height]; // 解构时可重命名
+}
+
+// 使用
+const [w, h] = useWindowSize();
+```

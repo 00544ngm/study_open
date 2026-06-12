@@ -1,0 +1,274 @@
+---
+title: 实战签名破解与反调试
+order: 2
+difficulty: advanced
+estimated_time: 50min
+tags: [JS逆向, 签名, 反调试, 实战]
+---
+
+## 反调试绕过
+
+网站用反调试阻止你打开 DevTools：
+
+```javascript
+// 反调试手段 1：检测 DevTools
+setInterval(function() {
+    if (window.outerWidth - window.innerWidth > 200 ||
+        window.outerHeight - window.innerHeight > 200) {
+        debugger;  // 无限断点
+    }
+}, 100);
+
+// 反调试手段 2：console.log 检测
+var element = new Image();
+Object.defineProperty(element, 'id', {
+    get: function() {
+        throw new Error('DevTools detected!');
+    }
+});
+console.log(element);
+```
+
+```javascript
+// 绕过方案 1：在 Console 中禁用断点
+// 点击 Sources → Deactivate breakpoints (Ctrl+F8)
+
+// 绕过方案 2：重写定时器
+window.setInterval = function() {};
+
+// 绕过方案 3：使用本地 Overrides
+// Sources → Overrides → 选择文件夹 → 保存修改后的 JS
+
+// 绕过方案 4：用 Charles / Fiddler 代理工具
+// 直接在响应中删除反调试代码
+```
+
+## 签名破解实战
+
+```python
+import re
+import execjs
+import requests
+from typing import Optional
+
+class SignatureCracker:
+    """API 签名破解"""
+
+    def __init__(self, target_url: str):
+        self.target_url = target_url
+        self.sign_function = None
+        self.js_context = None
+
+    def locate_sign_function(self) -> Optional[str]:
+        """定位签名函数"""
+        # 1. 先直接请求页面
+        resp = requests.get(self.target_url)
+        html = resp.text
+
+        # 2. 搜索常见签名关键词
+        keywords = ["sign", "token", "hash", "encrypt", "md5", "sha"]
+        for keyword in keywords:
+            matches = re.findall(
+                rf'function\s+\w*{keyword}\w*\s*\([^)]+\)\s*\{{[^}}]+\}}',
+                html
+            )
+            if matches:
+                return matches[0]
+
+        # 3. 查找 script 标签中的 JS
+        scripts = re.findall(r'<script[^>]*src=["\']([^"\']+)["\']', html)
+        for script_url in scripts:
+            if script_url.endswith(".js"):
+                resp = requests.get(script_url)
+                for keyword in keywords:
+                    if keyword in resp.text:
+                        return resp.text
+
+        return None
+
+    def extract_algorithm(self, js_code: str) -> str:
+        """提取并准备 JS 签名算法"""
+        # 浏览器环境模拟
+        env = """
+        var window = this;
+        var navigator = { userAgent: "Mozilla/5.0" };
+        var document = { cookie: "" };
+        var location = { href: "" };
+        """
+
+        self.js_context = execjs.compile(env + js_code)
+        return self.js_context
+
+    def crack(self, params: dict) -> str:
+        """生成签名"""
+        if not self.js_context:
+            self.extract_algorithm(self.locate_sign_function())
+
+        # 可能需要根据页面逻辑调整调用方式
+        try:
+            sign = self.js_context.call("generateSign", params)
+            return sign
+        except:
+            # 尝试不同函数名
+            for name in ["sign", "getSign", "encrypt", "hash"]:
+                try:
+                    return self.js_context.call(name, params)
+                except:
+                    continue
+        return None
+```
+
+## 动态参数追踪
+
+```python
+import time
+import hashlib
+import random
+
+class DynamicParamCracker:
+    """破解动态请求参数"""
+
+    def analyze_network(self):
+        """分析浏览器网络请求找出所有参数"""
+        # 需要结合 Selenium/Playwright
+        params_found = {
+            "timestamp": int(time.time() * 1000),
+            "nonce": self._generate_nonce(),
+            "sign": "",
+            "version": "1.0.0",
+        }
+        return params_found
+
+    def _generate_nonce(self) -> str:
+        """生成随机 nonce"""
+        return hashlib.md5(
+            str(random.random()).encode()
+        ).hexdigest()[:8]
+
+    def crack_sign_algorithm(self, seen_params: list[dict]) -> str:
+        """
+        通过多组请求参数反推签名算法
+        收集多组 {params → sign} 对，找出规律
+        """
+        if len(seen_params) < 2:
+            return "需要更多样本"
+
+        # 分析哪些参数影响签名
+        first = seen_params[0]
+        second = seen_params[1]
+
+        # 找出变化的参数
+        changed = []
+        for key in first:
+            if key != "sign" and first[key] != second[key]:
+                changed.append(key)
+
+        # 常见排序: 参数名按字母排序后拼接
+        sorted_params = sorted(
+            [(k, first[k]) for k in changed],
+            key=lambda x: x[0]
+        )
+        raw = "&".join(f"{k}={v}" for k, v in sorted_params)
+
+        # 常见算法: MD5 / SHA256
+        if len(first.get("sign", "")) == 32:
+            return hashlib.md5(raw.encode()).hexdigest()
+        elif len(first.get("sign", "")) == 64:
+            return hashlib.sha256(raw.encode()).hexdigest()
+
+        return raw
+```
+
+## WebSocket 协议逆向
+
+```python
+class WebSocketProtocolReverser:
+    """WebSocket 协议逆向"""
+
+    @staticmethod
+    def parse_frame(raw_data: bytes) -> dict:
+        """解析 WebSocket 帧"""
+        # 手动解析抓到的 WebSocket 数据
+        opcode = raw_data[0] & 0x0F
+        mask = bool(raw_data[1] & 0x80)
+        length = raw_data[1] & 0x7F
+
+        if length == 126:
+            length = int.from_bytes(raw_data[2:4], "big")
+            payload_start = 4
+        elif length == 127:
+            length = int.from_bytes(raw_data[2:10], "big")
+            payload_start = 10
+        else:
+            payload_start = 2
+
+        # 解掩码
+        if mask:
+            masking_key = raw_data[payload_start:payload_start + 4]
+            payload = bytes(
+                raw_data[payload_start + 4 + i] ^ masking_key[i % 4]
+                for i in range(length)
+            )
+        else:
+            payload = raw_data[payload_start:payload_start + length]
+
+        return {
+            "opcode": opcode,
+            "length": length,
+            "masked": mask,
+            "payload": payload.decode("utf-8", errors="ignore"),
+        }
+```
+
+## Charles / Fiddler 高级抓包
+
+```python
+# Charles 配合 Python 自动重写响应
+import sys
+import json
+
+def rewrite_response():
+    """Charles Rewrite 工具自动化"""
+    # 1. 捕获请求
+    # 2. 修改响应
+    # 3. 返回修改后的数据
+
+    # 常用修改：
+    rewrite_rules = [
+        # 关闭反调试
+        ("debugger", ""),
+        # 关闭签名验证
+        ('"sign":', '"sign":"bypass"'),
+        # 延长超时
+        ('"timeout": 5', '"timeout": 60'),
+    ]
+    return rewrite_rules
+```
+
+## 实战流程总结
+
+```
+定位 → 断点 → 分析 → 破解 → 模拟
+
+1. 定位加密点
+   - Network 面板看请求参数
+   - 搜索关键词 sign/token/encrypt
+
+2. 下断点追踪
+   - XHR Breakpoints
+   - Call Stack 回溯
+
+3. 提取算法
+   - 复制 JS 到本地
+   - 补环境（window/document/navigator）
+
+4. Python 调用
+   - execjs / py_mini_racer
+   - 或重写为 Python 版本
+
+5. 集成到爬虫
+   - 每次请求前计算签名
+   - 验证结果
+```
+
+> **JS 逆向的核心方法论**：不是死磕每一行混淆代码，而是找到输入输出关键点，用 Hook 和断点追踪数据流。80% 的情况下，一个关键的 Hook 点就能破解整套加密体系。

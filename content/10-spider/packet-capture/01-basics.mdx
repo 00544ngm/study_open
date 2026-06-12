@@ -1,0 +1,103 @@
+---
+title: F12 抓包分析
+order: 1
+difficulty: beginner
+estimated_time: 20min
+tags: [抓包, F12, DevTools, 调试]
+---
+
+## Network 面板
+
+打开方式：`F12` → Network 选项卡
+
+核心视图：
+
+| 列 | 说明 |
+|----|------|
+| Name | 请求名称/URL |
+| Status | HTTP 状态码 |
+| Type | 资源类型（document, xhr, js, css, img） |
+| Initiator | 发起者（哪个代码发起的） |
+| Size | 响应大小 |
+| Time | 耗时 |
+| Waterfall | 时间线可视化 |
+
+## 常用技巧
+
+```
+🟢 保留日志: Preserve log（页面跳转时不清空）
+🟢 禁用缓存: Disable cache（开发调试）
+🟢 筛选 XHR: 只看 AJAX/Fetch 请求
+🟢 筛选 API: 在 Filter 输入框搜索 /api/
+🟢 时间筛选: 只看特定时间段的请求
+```
+
+## 分析 API 请求
+
+点击任意 XHR 请求查看详情：
+
+**Headers 面板：**
+```
+Request URL: https://api.example.com/v1/articles
+Request Method: GET
+Status Code: 200
+Query String Parameters: ?page=1&limit=20
+```
+
+**Payload 面板**（POST 请求）：
+```json
+{
+  "keyword": "爬虫",
+  "page": 1
+}
+```
+
+**Response 面板**：
+```json
+{
+  "items": [
+    {"title": "爬虫入门", "url": "/article/1"},
+    {"title": "进阶技巧", "url": "/article/2"}
+  ]
+}
+```
+
+**Cookies 面板**：查看请求携带的 Cookie
+
+## 复制为 cURL
+
+右键请求 → Copy → Copy as cURL，可以直接在终端验证：
+
+```bash
+curl 'https://api.example.com/data' \
+  -H 'authorization: Bearer xxx' \
+  -H 'user-agent: Mozilla/5.0' \
+  --compressed
+```
+
+## 搜索所有请求
+
+`Ctrl+F` 在 Network 面板中搜索关键词：
+
+```
+搜索 "token" → 找到所有带 token 参数的请求
+搜索 "/api/" → 找到所有 API 调用
+搜索 "graphql" → 找到 GraphQL 请求
+```
+
+## 模拟限速
+
+Network 面板支持模拟不同网络条件：
+
+```
+Network → Throttling → Slow 3G / Fast 3G / Offline
+```
+
+| 功能 | 快捷键/操作 |
+|------|-----------|
+| 打开 DevTools | F12 / Ctrl+Shift+I |
+| Network 面板 | Ctrl+Shift+E |
+| 清空日志 | Ctrl+L |
+| 保留日志 | Preserve log ✅ |
+| 复制为 cURL | 右键 → Copy |
+| 搜索请求 | Ctrl+F |

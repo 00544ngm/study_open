@@ -1,0 +1,128 @@
+---
+title: LCEL 与 Chain
+order: 2
+difficulty: intermediate
+estimated_time: 20min
+tags: [LangChain, 链]
+---
+
+## 入门
+
+```python
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+
+llm = ChatOpenAI(model="gpt-4o")
+
+prompt = ChatPromptTemplate.from_template(
+    "用 {language} 解释 {concept}，要求通俗易懂"
+)
+
+# LCEL: 用 | 连接组件
+chain = prompt | llm | StrOutputParser()
+
+result = chain.invoke({
+    "language": "中文",
+    "concept": "RAG 检索增强生成"
+})
+```
+
+## 核心
+
+### Chain 组合模式
+
+```python
+from langchain_core.runnables import RunnableParallel, RunnablePassthrough
+
+# 并行执行
+parallel_chain = RunnableParallel(
+    summary=summary_chain,
+    keywords=keywords_chain,
+    sentiment=sentiment_chain
+)
+
+results = parallel_chain.invoke({"text": long_text})
+# {"summary": "...", "keywords": [...], "sentiment": "positive"}
+
+# 链式传递
+chain = (
+    {"context": retriever, "question": RunnablePassthrough()}
+    | prompt
+    | llm
+    | StrOutputParser()
+)
+```
+
+### 文档链
+
+```python
+from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain.chains import create_retrieval_chain
+from langchain_community.vectorstores import Qdrant
+from langchain_openai import OpenAIEmbeddings
+
+# 检索链
+retriever = Qdrant(
+    client=qdrant_client,
+    collection_name="knowledge",
+    embeddings=OpenAIEmbeddings()
+).as_retriever(search_kwargs={"k": 3})
+
+prompt = ChatPromptTemplate.from_template("""
+基于以下上下文回答问题。如果找不到答案，直接说不知道。
+
+上下文: {context}
+
+问题: {input}
+""")
+
+combine_docs_chain = create_stuff_documents_chain(llm, prompt)
+rag_chain = create_retrieval_chain(retriever, combine_docs_chain)
+
+result = rag_chain.invoke({"input": "什么是 AI Agent？"})
+print(result["answer"])
+```
+
+## 进阶
+
+```python
+from langchain_core.runnables import RunnableBranch
+from langchain_core.output_parsers import PydanticOutputParser
+from pydantic import BaseModel, Field
+
+# 条件路由
+class TopicClassifier(BaseModel):
+    topic: str = Field(description="分类: tech / general / urgent")
+
+parser = PydanticOutputParser(pydantic_object=TopicClassifier)
+
+classify_chain = prompt | llm | parser
+
+branch = RunnableBranch(
+    (lambda x: x.topic == "tech"), tech_chain,
+    (lambda x: x.topic == "urgent"), urgent_chain,
+    general_chain  # 默认
+)
+
+full_chain = classify_chain | branch
+
+# 流式输出
+async for chunk in chain.astream({"input": "服务器挂了怎么办？"}):
+    print(chunk, end="", flush=True)
+
+# 回调
+def log_callback():
+    # 记录每次 chain 调用的耗时和 Token
+    pass
+
+chain.with_config({
+    "callbacks": [log_callback],
+    "run_name": "agent_chain"
+})
+```
+
+## 练习
+
+1. 用 LCEL 构建一个 RAG 检索链，包含检索 + 生成两个步骤
+2. 使用 RunnableBranch 实现一个分类路由链：根据问题类型选择不同的处理分支

@@ -1,0 +1,113 @@
+---
+title: 云平台部署实战
+order: 1
+difficulty: intermediate
+estimated_time: 25min
+tags: [AWS, GCP, 云平台, 部署]
+---
+
+## 部署架构
+
+```
+用户 → 负载均衡 → 容器服务(ECS/Cloud Run) → 数据库(RDS)
+                  ↓
+            对象存储(S3/GCS)
+```
+
+## AWS 核心服务
+
+| 服务 | 用途 | 类比 |
+|------|------|------|
+| EC2 | 虚拟机 | 云服务器 |
+| ECS/EKS | 容器编排 | Docker + K8s 托管 |
+| RDS | 托管数据库 | PostgreSQL/MySQL |
+| S3 | 对象存储 | 文件存储 |
+| CloudFront | CDN | 内容分发 |
+| Lambda | 无服务器函数 | Serverless |
+
+## 部署 FastAPI + Docker
+
+```dockerfile
+# Dockerfile
+FROM python:3.12-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+COPY . .
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+### AWS ECS
+
+```bash
+# 构建推送
+aws ecr create-repository --repository-name agent-api
+docker build -t agent-api .
+aws ecr get-login-password | docker login --username AWS --password-stdin $AWS_ACCOUNT.dkr.ecr.$REGION.amazonaws.com
+docker tag agent-api:latest $AWS_ACCOUNT.dkr.ecr.$REGION.amazonaws.com/agent-api
+docker push $AWS_ACCOUNT.dkr.ecr.$REGION.amazonaws.com/agent-api
+
+# 创建 ECS 服务
+aws ecs create-cluster --cluster-name agent-cluster
+aws ecs register-task-definition --cli-input-json file://task-def.json
+aws ecs create-service --cluster agent-cluster --service-name agent-api --task-definition agent-task
+```
+
+### GCP Cloud Run
+
+```bash
+gcloud builds submit --tag gcr.io/$PROJECT/agent-api
+gcloud run deploy agent-api \
+  --image gcr.io/$PROJECT/agent-api \
+  --platform managed \
+  --region asia-east1 \
+  --memory 2Gi \
+  --concurrency 80 \
+  --min-instances 0 \
+  --max-instances 10
+```
+
+## 环境变量管理
+
+```python
+import os
+from pydantic_settings import BaseSettings
+
+class Settings(BaseSettings):
+    openai_api_key: str
+    database_url: str
+    redis_url: str = "redis://localhost:6379"
+    log_level: str = "INFO"
+
+    class Config:
+        env_file = ".env"
+
+settings = Settings()
+```
+
+云平台设置环境变量：
+
+```bash
+# AWS
+aws ssm put-parameter --name "/agent/OPENAI_API_KEY" --value "sk-xxx" --type SecureString
+
+# GCP
+gcloud secrets create openai-api-key --replication-policy="automatic"
+echo -n "sk-xxx" | gcloud secrets versions add openai-api-key --data-file=-
+```
+
+## 监控
+
+```bash
+# AWS CloudWatch
+aws logs create-log-group --log-group-name /agent/api
+
+# Prometheus + Grafana
+docker compose -f monitoring/docker-compose.yml up -d
+```
+
+| 服务 | 优点 | 缺点 |
+|------|------|------|
+| AWS ECS | 成熟稳定，VPC 安全 | 配置复杂 |
+| GCP Cloud Run | 全托管，自动伸缩 | 超时限制 |
+| VPS 自部署 | 完全控制 | 运维负担 |

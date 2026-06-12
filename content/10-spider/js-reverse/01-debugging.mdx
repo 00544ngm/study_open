@@ -1,0 +1,216 @@
+---
+title: JS 调试与反混淆
+order: 1
+difficulty: advanced
+estimated_time: 45min
+tags: [JS逆向, 混淆, 调试, 爬虫]
+---
+
+## 调试环境
+
+```bash
+# 浏览器 DevTools 是主要工具
+F12 → Sources 面板
+
+# Node.js 调试
+node --inspect-brk script.js
+# Chrome 打开 chrome://inspect 连接
+```
+
+## 断点调试
+
+```
+Sources 面板断点类型：
+
+🔴 行断点：点击行号，代码执行到该行暂停
+🔵 条件断点：右键行号，设置条件表达式
+🟢 DOM 断点：Elements → 右键节点 → Break on
+🟡 XHR 断点：Sources → XHR Breakpoints → 输入 URL 关键词
+🟠 事件断点：Sources → Event Listener Breakpoints
+```
+
+```javascript
+// 使用 debugger 语句（等价于手动断点）
+function encrypt(data) {
+    debugger;  // 执行到这里自动暂停
+    return window.btoa(data);
+}
+```
+
+## 搜索关键代码
+
+```
+Ctrl+Shift+F：全局搜索
+  "encrypt" → 找到加密函数
+  "/api/"  → 找到 API 请求封装
+  "sign"   → 找到签名算法
+  "token"  → 找到 Token 生成
+  "hex_md5" → 找到 MD5 相关
+```
+
+## XHR 断点技巧
+
+```python
+# 1. 在 XHR Breakpoints 中添加 URL 关键词（如 /api/）
+# 2. 触发请求，自动停在发起请求的代码行
+# 3. 查看 Call Stack 回溯调用链
+```
+
+```
+Call Stack 示例（从下到上看）：
+  onclick        ← 用户点击
+  fetchData      ← 封装函数
+  generateSign   ← 签名生成 ← 这是你需要的
+  makeRequest    ← 实际请求
+```
+
+## 常见混淆类型
+
+```javascript
+// 1. 变量名混淆
+var a = "hello", b = "world";
+// 实际变量名是 a, b，难以理解
+
+// 2. 字符串编码
+var s = String.fromCharCode(115, 101, 99, 114, 101, 116);
+// s = "secret"
+
+// 3. 控制流平坦化
+// switch-case 结构打乱代码执行顺序
+var _0x1234 = [...];
+while (true) {
+    switch (_0x1234[index++]) {
+        case 0: ...
+        case 1: ...
+    }
+}
+
+// 4. 自执行函数
+(function() {
+    // 全部代码在这里面，外部无法访问
+})();
+```
+
+## 反混淆工具
+
+```bash
+# 1. 浏览器自带格式化（{} 按钮）
+# 2. 在线工具
+#    https://beautifier.io/
+#    https://lelinhtinh.github.io/de4js/
+
+# 3. AST 还原（最强大）
+npm install -g js-beautify
+js-beautify obfuscated.js > cleaned.js
+```
+
+## 使用 AST 还原
+
+AST（抽象语法树）可以精确分析和修改 JS 代码：
+
+```javascript
+// 安装: npm install @babel/parser @babel/generator @babel/traverse
+
+const parser = require('@babel/parser');
+const generate = require('@babel/generator').default;
+const traverse = require('@babel/traverse').default;
+
+// 解析为 AST
+const ast = parser.parse(obfuscatedCode);
+
+// 遍历并修改
+traverse(ast, {
+    // 还原字符串拼接
+    BinaryExpression(path) {
+        if (path.node.operator === '+') {
+            const { left, right } = path.node;
+            if (left.type === 'StringLiteral' && right.type === 'StringLiteral') {
+                path.replaceWith({
+                    type: 'StringLiteral',
+                    value: left.value + right.value,
+                });
+            }
+        }
+    },
+    // 还原数字进制
+    NumericLiteral(path) {
+        // 0x1a → 26
+        path.node.extra = undefined;
+    },
+});
+
+// 重新生成
+const { code } = generate(ast);
+console.log(code);
+```
+
+## Hook 技术
+
+Hook 是在函数执行前拦截并修改行为：
+
+```javascript
+// 在 DevTools Console 中执行
+
+// 1. Hook JSON.parse（查看解密后的数据结构）
+const originalParse = JSON.parse;
+JSON.parse = function(text) {
+    console.log("[Hook] JSON.parse:", text.slice(0, 200));
+    debugger;  // 暂停查看调用栈
+    return originalParse(text);
+};
+
+// 2. Hook atob（Base64 解密）
+const originalAtob = window.atob;
+window.atob = function(str) {
+    console.log("[Hook] atob:", str);
+    debugger;
+    return originalAtob(str);
+};
+
+// 3. Hook Cookie 设置
+Object.defineProperty(document, 'cookie', {
+    set: function(val) {
+        console.log("[Hook] set cookie:", val);
+        debugger;
+        return val;
+    },
+});
+```
+
+## Python 调用 JS
+
+找到加密算法后用 Python 执行：
+
+```python
+# 方式 1：PyExecJS
+import execjs
+
+# 加载 JS 文件
+with open("encrypt.js") as f:
+    js_code = f.read()
+
+ctx = execjs.compile(js_code)
+result = ctx.call("encrypt", "hello")
+print(result)
+
+# 方式 2：Node.js 子进程
+import subprocess, json
+
+js_code = """
+const crypto = require('crypto');
+const data = process.argv[1];
+const hash = crypto.createHash('md5').update(data).digest('hex');
+console.log(JSON.stringify({hash}));
+"""
+result = subprocess.run(
+    ["node", "-e", js_code, "hello"],
+    capture_output=True, text=True,
+)
+print(json.loads(result.stdout))
+
+# 方式 3：PyMiniRacer (更快)
+from py_mini_racer import MiniRacer
+ctx = MiniRacer()
+ctx.eval(js_code)
+result = ctx.call("encrypt", "hello")
+```

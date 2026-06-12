@@ -1,0 +1,126 @@
+---
+title: Dockerfile 最佳实践
+order: 2
+difficulty: intermediate
+estimated_time: 20min
+tags: [Docker, 部署]
+---
+
+## 入门
+
+```dockerfile
+# 多阶段构建
+# 阶段1: 构建
+FROM python:3.12-slim AS builder
+
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir --user -r requirements.txt
+
+# 阶段2: 运行（更小的最终镜像）
+FROM python:3.12-slim AS runtime
+
+WORKDIR /app
+COPY --from=builder /root/.local /root/.local
+COPY ./app ./app
+
+ENV PATH=/root/.local/bin:$PATH
+ENV PYTHONUNBUFFERED=1
+
+USER 1000
+EXPOSE 8000
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0"]
+```
+
+## 核心
+
+### 镜像优化
+
+```dockerfile
+# 1. 使用轻量基础镜像
+FROM python:3.12-alpine  # 比 slim 更小
+
+# 2. 合并 RUN 命令减少层
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# 3. .dockerignore (减少构建上下文)
+# .dockerignore 文件内容:
+# __pycache__
+# .git
+# .env
+# *.pyc
+# .venv
+```
+
+```bash
+# 构建和检查
+docker build -t agent-api:latest .
+docker images agent-api
+docker scout quickview agent-api  # 安全扫描
+```
+
+### Agent 专用 Dockerfile
+
+```dockerfile
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# 安装系统依赖
+RUN apt-get update && apt-get install -y \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# 安装 Python 依赖
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# 健康检查
+HEALTHCHECK --interval=30s --timeout=3s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+COPY . .
+
+# 非 root 运行
+RUN groupadd -r agent && useradd -r -g agent agent
+USER agent
+
+EXPOSE 8000
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+## 进阶
+
+```yaml
+# docker-compose.yml 环境配置
+services:
+  agent-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    env_file: .env.production
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=postgresql+asyncpg://postgres:password@db:5432/agent
+    depends_on:
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+```
+
+## 练习
+
+1. 将现有的 Dockerfile 改为多阶段构建，减少镜像体积
+2. 添加 HEALTHCHECK 和 .dockerignore 配置

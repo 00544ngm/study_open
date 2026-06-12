@@ -1,0 +1,58 @@
+---
+title: Prometheus 入门
+order: 1
+difficulty: intermediate
+estimated_time: 20min
+tags: [Prometheus, 监控]
+---
+
+## 入门
+
+```bash
+# 安装 (Linux)
+wget https://github.com/prometheus/prometheus/releases/.../prometheus-*.tar.gz
+tar xzf prometheus-*.tar.gz
+cd prometheus-*
+
+# 启动
+./prometheus --config.file=prometheus.yml
+
+# 默认端口 9090
+# 浏览器访问 http://localhost:9090
+```
+
+## 核心
+
+```yaml
+# prometheus.yml 配置
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: "agent-app"
+    static_configs:
+      - targets: ["localhost:8000"]
+        labels:
+          service: "agent-api"
+```
+
+```python
+# Python 暴露 Prometheus 指标 (prometheus_client)
+from prometheus_client import start_http_server, Counter, Histogram
+import time
+
+REQUESTS = Counter("agent_requests_total", "总请求数")
+LATENCY = Histogram("agent_latency_seconds", "延迟分布", buckets=[0.1, 0.5, 1, 2, 5])
+
+# 在 FastAPI 中使用
+from prometheus_client import generate_latest
+
+@app.get("/metrics")
+def metrics():
+    return Response(content=generate_latest(), media_type="text/plain")
+```
+
+## 练习
+
+1. 下载 Prometheus 并启动，确认访问 localhost:9090
+2. 配置一个 scrape job 采集 FastAPI 的 /metrics 端点

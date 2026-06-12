@@ -1,0 +1,142 @@
+---
+title: State 管理与持久化
+order: 3
+difficulty: advanced
+estimated_time: 25min
+tags: [LangGraph, State, 持久化]
+---
+
+## 入门
+
+LangGraph 的核心是 State 管理。每个节点读写共享状态，图执行过程可中断、恢复和回放。
+
+## 核心
+
+### 定义 State
+
+```python
+from typing import TypedDict, Annotated, List
+import operator
+from langgraph.graph import StateGraph, START, END
+
+class AgentState(TypedDict):
+    messages: Annotated[List[str], operator.add]  # 追加模式
+    next_step: str
+    retries: int
+    finished: bool
+
+# operator.add: 多个节点返回同字段时自动合并列表
+# 也可以用 replace 覆盖: Annotated[str, lambda a, b: b]
+```
+
+### 构建 StateGraph
+
+```python
+from langgraph.checkpoint.memory import MemorySaver
+
+# 带持久化的图
+def step1(state: AgentState):
+    print(f"Step1, messages so far: {state['messages']}")
+    return {"messages": ["step1 完成"], "next_step": "step2"}
+
+def step2(state: AgentState):
+    print(f"Step2, messages so far: {state['messages']}")
+    return {"messages": ["step2 完成"], "finished": True}
+
+# 构建图
+builder = StateGraph(AgentState)
+builder.add_node("step1", step1)
+builder.add_node("step2", step2)
+builder.add_edge(START, "step1")
+builder.add_edge("step1", "step2")
+builder.add_edge("step2", END)
+
+# 启用 Checkpoint 持久化
+checkpointer = MemorySaver()
+graph = builder.compile(checkpointer=checkpointer)
+```
+
+### 执行与恢复
+
+```python
+# 首次运行，自动生成 thread_id
+config = {"configurable": {"thread_id": "session-1"}}
+result = graph.invoke(
+    {"messages": ["开始"], "next_step": "start", "retries": 0, "finished": False},
+    config
+)
+# 输出: {"messages": ["开始", "step1 完成", "step2 完成"], "finished": True}
+
+# 从 checkpoint 恢复
+# 如果执行中断，可以用相同 config 继续
+state = graph.get_state(config)
+print(f"当前状态: {state.values}")
+# AgentState 包含所有历史消息
+```
+
+## 进阶
+
+### 自定义 Checkpointer
+
+```python
+from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.checkpoint.postgres import PostgresSaver
+import asyncio
+
+# SQLite 持久化（本地文件）
+sqlite_checkpointer = SqliteSaver.from_conn_string("checkpoints.db")
+
+# PostgreSQL 持久化（生产环境）
+async def get_pg_checkpointer():
+    conn_string = "postgresql://user:pass@localhost:5432/agent"
+    saver = PostgresSaver.from_conn_string(conn_string)
+    await saver.setup()  # 创建表
+    return saver
+
+# 使用 SQLite Checkpointer
+graph = builder.compile(checkpointer=sqlite_checkpointer)
+```
+
+### State 管理与历史
+
+```python
+# 列出所有历史 checkpoint
+config = {"configurable": {"thread_id": "session-1"}}
+checkpoints = list(graph.get_state_history(config))
+for ckpt in checkpoints:
+    print(f"Checkpoint: {ckpt.checkpoint_id}, Step: {ckpt.step}")
+
+# 回滚到指定 checkpoint
+history_config = {"configurable": {"thread_id": "session-1", "checkpoint_id": checkpoints[1].checkpoint_id}}
+rolled_back = graph.get_state(history_config)
+
+# 从历史 checkpoint 继续执行（分支）
+branch_result = graph.invoke(None, history_config)
+# 会从该 checkpoint 之后重新执行，不影响原分支
+```
+
+### 条件 State 更新
+
+```python
+from typing import Optional
+
+class AdvancedState(TypedDict, total=False):
+    messages: List[str]
+    agent_output: Optional[str]
+    tool_results: Annotated[List[str], operator.add]
+    error_count: int
+    max_retries: int
+
+def retry_node(state: AdvancedState):
+    """如果出错，累加错误计数；超过阈值则结束"""
+    error_count = state.get("error_count", 0) + 1
+    if error_count >= state.get("max_retries", 3):
+        return {"error_count": error_count, "finished": True}
+    return {"error_count": error_count}
+```
+
+## 练习
+
+1. 用 StateGraph 构建一个三步流水线，每一步追加消息到 State
+2. 添加 SQLite Checkpointer，验证中断后恢复能拿到完整历史
+3. 实现 get_state_history 查看所有 checkpoint 并回滚到指定位置

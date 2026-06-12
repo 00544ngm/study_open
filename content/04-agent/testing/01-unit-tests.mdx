@@ -1,0 +1,213 @@
+---
+title: 单元测试
+order: 1
+difficulty: intermediate
+estimated_time: 25min
+tags: [测试, 单元测试, Mock]
+---
+
+## 入门
+
+LLM 应用的单元测试核心是 **mock LLM 调用** — 不真正调 API，用模拟返回值测试业务逻辑。
+
+## 核心
+
+### Mock LLM 调用
+
+```python
+# pip install pytest pytest-asyncio
+
+from unittest.mock import AsyncMock, patch
+import pytest
+
+# 待测试的函数
+async def classify_intent(user_input: str, llm_client) -> str:
+    """使用 LLM 对用户输入分类"""
+    response = await llm_client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": "分类: question / complaint / other"},
+            {"role": "user", "content": user_input}
+        ]
+    )
+    return response.choices[0].message.content.strip()
+
+# 测试：Mock ChatCompletion
+@pytest.mark.asyncio
+async def test_classify_intent_question():
+    # 创建 mock 客户端
+    mock_client = AsyncMock()
+
+    # 构造 mock 响应
+    class MockChoice:
+        def __init__(self, content):
+            self.message = type("msg", (), {"content": content})()
+
+    mock_client.chat.completions.create.return_value = type(
+        "resp", (), {"choices": [MockChoice("question")]}
+    )()
+
+    result = await classify_intent("Python 怎么安装？", mock_client)
+    assert result == "question"
+
+    # 验证 LLM 被调用了正确的参数
+    mock_client.chat.completions.create.assert_called_once()
+    call_args = mock_client.chat.completions.create.call_args
+    assert call_args[1]["model"] == "gpt-4o"
+```
+
+### 测试 Tool 逻辑
+
+```python
+from typing import List
+import json
+
+# 待测试：工具函数
+TOOLS = {
+    "calculator": {
+        "name": "calculator",
+        "fn": lambda expr: str(eval(expr)),
+        "description": "计算数学表达式"
+    },
+    "get_time": {
+        "name": "get_time",
+        "fn": lambda: "12:00",
+        "description": "获取当前时间"
+    }
+}
+
+class ToolExecutor:
+    def execute(self, tool_name: str, args: dict) -> str:
+        tool = TOOLS.get(tool_name)
+        if not tool:
+            raise ValueError(f"未知工具: {tool_name}")
+        return tool["fn"](**args)
+
+# 测试
+def test_calculator():
+    executor = ToolExecutor()
+    result = executor.execute("calculator", {"expr": "1 + 2 * 3"})
+    assert result == "7"  # eval("1 + 2 * 3") = 7
+
+def test_unknown_tool():
+    executor = ToolExecutor()
+    with pytest.raises(ValueError, match="未知工具"):
+        executor.execute("nonexistent", {})
+
+@pytest.mark.parametrize("expr,expected", [
+    ("2 + 2", "4"),
+    ("10 / 2", "5.0"),
+    ("2 ** 10", "1024"),
+])
+def test_calculator_parametrized(expr, expected):
+    executor = ToolExecutor()
+    assert executor.execute("calculator", {"expr": expr}) == expected
+```
+
+### 测试 Chain
+
+```python
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+
+def build_chain(llm):
+    """构建 LCEL 链"""
+    prompt = ChatPromptTemplate.from_template("用{language}解释{concept}")
+    return prompt | llm | StrOutputParser()
+
+# 测试 Chain
+def test_chain_builds():
+    """测试链是否正确构建"""
+    mock_llm = AsyncMock()
+    chain = build_chain(mock_llm)
+
+    # 验证 chain 包含预期组件
+    steps = list(chain.steps)
+    assert len(steps) == 3
+    assert "ChatPromptTemplate" in type(steps[0]).__name__
+
+@pytest.mark.asyncio
+async def test_chain_invocation():
+    """测试链调用参数传递"""
+    mock_llm = AsyncMock()
+    mock_llm.invoke.return_value = "mock response"
+    chain = build_chain(mock_llm)
+
+    result = await chain.ainvoke({"language": "中文", "concept": "RAG"})
+    assert result == "mock response"
+
+    # 验证 prompt 被正确渲染
+    called_args = mock_llm.invoke.call_args[0][0]
+    assert "中文" in called_args.content
+    assert "RAG" in called_args.content
+```
+
+## 进阶
+
+### Fixture 管理
+
+```python
+import pytest
+from unittest.mock import AsyncMock
+
+@pytest.fixture
+def mock_llm():
+    """提供 mock LLM 客户端的 fixture"""
+    llm = AsyncMock()
+
+    class MockChoice:
+        def __init__(self, content):
+            self.message = type("msg", (), {"content": content})()
+
+    def create_response(content="mock"):
+        return type("resp", (), {"choices": [MockChoice(content)]})()
+
+    llm.chat.completions.create.return_value = create_response()
+    return llm
+
+@pytest.fixture
+def sample_context():
+    return {"user_id": "123", "session_id": "abc"}
+
+# 使用 fixture
+class TestAgent:
+    @pytest.mark.asyncio
+    async def test_greeting(self, mock_llm, sample_context):
+        agent = Agent(llm=mock_llm)
+        result = await agent.process("你好", sample_context)
+        assert result is not None
+
+    @pytest.mark.asyncio
+    async def test_error_handling(self, mock_llm):
+        mock_llm.chat.completions.create.side_effect = Exception("API Error")
+        agent = Agent(llm=mock_llm)
+
+        with pytest.raises(Exception, match="API Error"):
+            await agent.process("hello", {})
+```
+
+### 覆盖率与 CI
+
+```python
+# 运行测试并生成覆盖率报告
+"""
+# pyproject.toml
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = ["slow: 慢测试"]
+
+[tool.coverage.run]
+source = ["app"]
+omit = ["tests/*"]
+"""
+
+# 运行
+# pytest --cov=app --cov-report=term-missing --cov-report=html
+```
+
+## 练习
+
+1. 为 ToolExecutor 写单元测试：测试 calculator 工具和未知工具的错误处理
+2. 用 pytest fixture 管理 mock LLM 客户端，测试 Agent 的意图分类逻辑
+3. 运行 pytest --cov 生成覆盖率报告，确保核心逻辑覆盖率 > 80%

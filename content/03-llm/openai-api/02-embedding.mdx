@@ -1,0 +1,66 @@
+---
+title: Embedding
+order: 2
+difficulty: intermediate
+estimated_time: 20min
+tags: [OpenAI, LLM, RAG]
+---
+
+## 入门
+
+```python
+from openai import AsyncOpenAI
+
+client = AsyncOpenAI()
+response = await client.embeddings.create(
+    model="text-embedding-3-small",
+    input="AI Agent 开发指南"
+)
+embedding = response.data[0].embedding
+print(f"向量维度: {len(embedding)}")  # 1536
+```
+
+## 核心
+
+```python
+import numpy as np
+from sklearn.metrics.pairwise import cosine_similarity
+
+class EmbeddingService:
+    def __init__(self):
+        self.client = AsyncOpenAI()
+        self.model = "text-embedding-3-small"
+
+    async def embed_text(self, text: str) -> list[float]:
+        response = await self.client.embeddings.create(
+            model=self.model,
+            input=text
+        )
+        return response.data[0].embedding
+
+    async def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        response = await self.client.embeddings.create(
+            model=self.model,
+            input=texts
+        )
+        return [d.embedding for d in response.data]
+
+    def similarity(self, a: list[float], b: list[float]) -> float:
+        return cosine_similarity([a], [b])[0][0]
+
+# 语义搜索示例
+async def semantic_search(query: str, documents: list[str], top_k: int = 3):
+    embedder = EmbeddingService()
+    query_vec = await embedder.embed_text(query)
+    doc_vecs = await embedder.embed_batch(documents)
+
+    scores = [(embedder.similarity(query_vec, dv), doc)
+              for dv, doc in zip(doc_vecs, documents)]
+    scores.sort(reverse=True)
+    return scores[:top_k]
+```
+
+## 练习
+
+1. 将一组学习笔记转换为向量，存入内存列表
+2. 实现一个简单的语义搜索，根据问题找到最相关的笔记

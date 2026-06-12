@@ -1,0 +1,179 @@
+---
+title: Asyncio 进阶与实战
+order: 2
+difficulty: advanced
+estimated_time: 30min
+tags: [Asyncio, 异步, 并发, 爬虫]
+---
+
+## Task 与 Future
+
+```python
+import asyncio
+
+async def work(name, delay):
+    await asyncio.sleep(delay)
+    return f"{name} 完成"
+
+async def main():
+    # 创建 Task（自动调度）
+    task1 = asyncio.create_task(work("任务1", 2))
+    task2 = asyncio.create_task(work("任务2", 1))
+
+    # 等待所有完成
+    done, pending = await asyncio.wait(
+        [task1, task2],
+        timeout=5,           # 超时
+        return_when=asyncio.ALL_COMPLETED,
+    )
+    for task in done:
+        print(task.result())
+
+asyncio.run(main())
+```
+
+## 超时与取消
+
+```python
+async def fetch_with_timeout(url: str, timeout: float = 5):
+    try:
+        # 带超时的协程
+        result = await asyncio.wait_for(
+            slow_fetch(url),
+            timeout=timeout,
+        )
+        return result
+    except asyncio.TimeoutError:
+        print(f"请求超时: {url}")
+        return None
+
+# 手动取消任务
+task = asyncio.create_task(slow_operation())
+await asyncio.sleep(1)
+task.cancel()  # 取消任务
+try:
+    await task
+except asyncio.CancelledError:
+    print("任务被取消")
+```
+
+## 生产者-消费者模式
+
+```python
+import asyncio
+import random
+
+async def producer(queue: asyncio.Queue, urls: list[str]):
+    """生产 URL"""
+    for url in urls:
+        await queue.put(url)
+        print(f"添加: {url}")
+        await asyncio.sleep(random.random())
+    # 发送结束信号
+    await queue.put(None)
+
+async def consumer(queue: asyncio.Queue, name: str):
+    """消费 URL"""
+    while True:
+        url = await queue.get()
+        if url is None:
+            queue.task_done()
+            break
+        print(f"{name} 处理: {url}")
+        await asyncio.sleep(random.uniform(0.5, 1.5))
+        queue.task_done()
+
+async def main():
+    queue = asyncio.Queue(maxsize=5)
+    urls = [f"https://page-{i}.com" for i in range(10)]
+
+    # 1 个生产者 + 3 个消费者
+    await asyncio.gather(
+        producer(queue, urls),
+        consumer(queue, "C1"),
+        consumer(queue, "C2"),
+        consumer(queue, "C3"),
+    )
+
+asyncio.run(main())
+```
+
+## 爬虫实战：并发下载
+
+```python
+import asyncio
+import aiohttp
+from asyncio import Semaphore
+from dataclasses import dataclass, field
+
+@dataclass
+class CrawlerStats:
+    total: int = 0
+    success: int = 0
+    failed: int = 0
+    total_bytes: int = 0
+
+class HighConcurrencyCrawler:
+    def __init__(self, max_concurrent: int = 20):
+        self.sem = Semaphore(max_concurrent)
+        self.stats = CrawlerStats()
+
+    async def fetch(self, session: aiohttp.ClientSession, url: str):
+        async with self.sem:
+            try:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    text = await resp.text()
+                    self.stats.success += 1
+                    self.stats.total_bytes += len(text)
+                    return text
+            except Exception as e:
+                self.stats.failed += 1
+                return None
+            finally:
+                self.stats.total += 1
+
+    async def crawl(self, urls: list[str]):
+        async with aiohttp.ClientSession() as session:
+            tasks = [self.fetch(session, url) for url in urls]
+            return await asyncio.gather(*tasks)
+
+async def main():
+    crawler = HighConcurrencyCrawler(max_concurrent=50)
+    urls = [f"https://httpbin.org/delay/{i % 3}" for i in range(30)]
+    results = await crawler.crawl(urls)
+    print(f"成功: {crawler.stats.success}, 失败: {crawler.stats.failed}")
+    print(f"总数据: {crawler.stats.total_bytes / 1024:.1f} KB")
+
+asyncio.run(main())
+```
+
+## 事件循环高级
+
+```python
+# 在不同线程运行事件循环
+import threading
+
+def run_loop(loop):
+    asyncio.set_event_loop(loop)
+    loop.run_forever()
+
+new_loop = asyncio.new_event_loop()
+t = threading.Thread(target=run_loop, args=(new_loop,), daemon=True)
+t.start()
+
+# 向另一个线程的循环提交任务
+future = asyncio.run_coroutine_threadsafe(
+    fetch_data("https://example.com"),
+    new_loop,
+)
+result = future.result()  # 同步等待结果
+```
+
+| 模式 | 说明 |
+|------|------|
+| gather | 并发等待多个协程 |
+| wait | 带超时的等待 |
+| Queue | 生产者-消费者 |
+| Semaphore | 并发限流 |
+| create_task | 后台任务创建 |
+| CancelledError | 任务取消处理 |

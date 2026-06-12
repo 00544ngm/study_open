@@ -1,0 +1,38 @@
+---
+title: 文本处理
+order: 2
+difficulty: intermediate
+estimated_time: 15min
+tags: [Linux, 进阶]
+---
+
+## 入门
+
+```bash
+# grep - 搜索文本
+grep "ERROR" app.log
+grep -r "class Agent" src/     # 递归搜索
+grep -i "timeout" *.py         # 忽略大小写
+
+# sed - 替换文本
+sed 's/old/new/g' file.txt
+sed -i 's/gpt-3.5/gpt-4/g' config.py
+```
+
+## 核心
+
+```bash
+# 管道组合
+cat agent.log | grep "ERROR" | tail -20
+ps aux | grep python | grep -v grep
+
+# 查看API返回
+curl -s https://api.openai.com/v1/models \
+  | python -m json.tool \
+  | head -50
+```
+
+## 练习
+
+1. 用 grep 统计日志中 ERROR 出现的次数
+2. 用 sed 批量替换项目中所有 `model: "gpt-3.5"` 为 `model: "gpt-4"`

@@ -1,0 +1,111 @@
+---
+title: Playwright 浏览器自动化
+order: 1
+difficulty: beginner
+estimated_time: 25min
+tags: [Playwright, 浏览器, 自动化, 爬虫]
+---
+
+## 安装
+
+```bash
+pip install playwright
+playwright install chromium
+```
+
+## 基础用法
+
+```python
+from playwright.sync_api import sync_playwright
+
+with sync_playwright() as p:
+    browser = p.chromium.launch(headless=False)  # headless=True 无头模式
+    page = browser.new_page()
+    page.goto("https://example.com")
+    print(page.title())
+    page.screenshot(path="screenshot.png")
+    browser.close()
+```
+
+## 异步 API
+
+```python
+import asyncio
+from playwright.async_api import async_playwright
+
+async def main():
+    async with async_playwright() as p:
+        browser = await p.chromium.launch()
+        page = await browser.new_page()
+        await page.goto("https://example.com")
+        content = await page.content()
+        await browser.close()
+
+asyncio.run(main())
+```
+
+## 元素定位
+
+```python
+# 多种定位方式
+page.click("text=登录")                  # 文本
+page.click("button.submit")              # CSS
+page.fill("input[name='username']", "admin")  # 输入
+page.select_option("select#city", "北京")
+
+# 等待元素
+page.wait_for_selector(".result")
+page.wait_for_load_state("networkidle")
+
+# 获取内容
+text = page.text_content(".title")
+html = page.inner_html(".content")
+attrs = page.get_attribute("a", "href")
+```
+
+## 拦截网络请求
+
+```python
+# 拦截并修改请求
+def intercept_request(route):
+    headers = route.request.headers
+    headers["Custom-Header"] = "value"
+    route.continue_(headers=headers)
+
+page.route("**/*", intercept_request)
+
+# 拦截响应获取数据
+def handle_response(response):
+    if "/api/data" in response.url:
+        data = response.json()
+        print(data)
+
+page.on("response", handle_response)
+```
+
+## 处理 JavaScript 页面
+
+```python
+# 等待 AJAX 加载
+page.goto("https://spa-example.com")
+page.wait_for_selector(".content-loaded")
+
+# 滚动加载更多
+for _ in range(5):
+    page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+    page.wait_for_timeout(1000)
+
+# 模拟点击
+page.click(".load-more-button")
+page.wait_for_selector(".item:last-child")
+```
+
+| 方法 | 说明 |
+|------|------|
+| `goto(url)` | 导航到 URL |
+| `click(selector)` | 点击元素 |
+| `fill(selector, text)` | 输入文本 |
+| `screenshot(path)` | 截图 |
+| `content()` | 获取页面 HTML |
+| `wait_for_selector()` | 等待元素出现 |
+| `on("response")` | 监听网络响应 |

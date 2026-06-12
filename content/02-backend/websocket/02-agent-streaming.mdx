@@ -1,0 +1,198 @@
+---
+title: WebSocket 与 Agent 实战
+order: 2
+difficulty: intermediate
+estimated_time: 30min
+tags: [WebSocket, Agent, 流式, FastAPI]
+---
+
+## Agent 流式输出
+
+用 WebSocket 实现 Agent 逐字输出：
+
+```python
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from langchain_openai import ChatOpenAI
+from langchain.schema import HumanMessage
+import asyncio
+import json
+
+app = FastAPI()
+llm = ChatOpenAI(model="gpt-4o", streaming=True)
+
+@app.websocket("/chat")
+async def chat_stream(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        while True:
+            user_input = await websocket.receive_text()
+
+            # 告诉前端开始接收
+            await websocket.send_json({
+                "type": "start",
+                "message": "思考中..."
+            })
+
+            # 流式输出
+            async for chunk in llm.astream([HumanMessage(content=user_input)]):
+                await websocket.send_json({
+                    "type": "chunk",
+                    "content": chunk.content,
+                })
+
+            # 结束信号
+            await websocket.send_json({"type": "done"})
+
+    except WebSocketDisconnect:
+        print("客户端断开")
+```
+
+## 前端消费
+
+```html
+<script>
+const ws = new WebSocket("ws://localhost:8000/chat");
+const output = document.getElementById("output");
+
+ws.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    switch (data.type) {
+        case "start":
+            output.innerHTML = "";
+            break;
+        case "chunk":
+            output.innerHTML += data.content;
+            break;
+        case "done":
+            console.log("完成");
+            break;
+    }
+};
+
+function send() {
+    ws.send(document.getElementById("input").value);
+}
+</script>
+```
+
+## 多房间聊天
+
+```python
+from collections import defaultdict
+
+class RoomManager:
+    def __init__(self):
+        self.rooms: dict[str, set[WebSocket]] = defaultdict(set)
+
+    async def join(self, room: str, ws: WebSocket):
+        await ws.accept()
+        self.rooms[room].add(ws)
+        await self.broadcast(room, f"新用户加入 {room}")
+
+    async def leave(self, room: str, ws: WebSocket):
+        self.rooms[room].discard(ws)
+        if not self.rooms[room]:
+            del self.rooms[room]
+
+    async def broadcast(self, room: str, message: str, exclude: WebSocket = None):
+        for ws in self.rooms.get(room, set()):
+            if ws != exclude:
+                try:
+                    await ws.send_text(message)
+                except:
+                    self.rooms[room].discard(ws)
+
+manager = RoomManager()
+
+@app.websocket("/ws/{room_id}")
+async def room_chat(websocket: WebSocket, room_id: str):
+    await manager.join(room_id, websocket)
+    try:
+        while True:
+            data = await websocket.receive_text()
+            await manager.broadcast(room_id, data, exclude=websocket)
+    except WebSocketDisconnect:
+        await manager.leave(room_id, websocket)
+```
+
+## Agent 任务状态推送
+
+```python
+import asyncio
+import uuid
+
+class TaskNotifier:
+    def __init__(self):
+        self.tasks: dict[str, list[WebSocket]] = defaultdict(list)
+
+    async def subscribe(self, task_id: str, ws: WebSocket):
+        await ws.accept()
+        self.tasks[task_id].append(ws)
+
+    async def notify(self, task_id: str, status: str, data: dict = {}):
+        for ws in self.tasks.get(task_id, [])[:]:
+            try:
+                await ws.send_json({
+                    "task_id": task_id,
+                    "status": status,
+                    "data": data,
+                })
+            except:
+                self.tasks[task_id].remove(ws)
+
+notifier = TaskNotifier()
+
+@app.websocket("/tasks/{task_id}/subscribe")
+async def subscribe_task(websocket: WebSocket, task_id: str):
+    await notifier.subscribe(task_id, websocket)
+    await asyncio.Future()  # 保持连接
+
+@app.post("/tasks")
+async def create_task():
+    task_id = str(uuid.uuid4())
+    asyncio.create_task(run_agent_task(task_id))
+    return {"task_id": task_id}
+
+async def run_agent_task(task_id: str):
+    await notifier.notify(task_id, "running")
+    try:
+        # Agent 执行中...
+        await notifier.notify(task_id, "progress", {"step": "检索知识库"})
+        await asyncio.sleep(1)
+        await notifier.notify(task_id, "progress", {"step": "调用 LLM"})
+        await asyncio.sleep(2)
+        await notifier.notify(task_id, "completed", {"result": "最终结果"})
+    except Exception as e:
+        await notifier.notify(task_id, "failed", {"error": str(e)})
+```
+
+## WebSocket 性能
+
+```python
+# 连接数限制
+import asyncio
+from contextlib import asynccontextmanager
+
+MAX_CONNECTIONS = 1000
+current_connections = 0
+
+@app.websocket("/ws")
+async def ws(websocket: WebSocket):
+    global current_connections
+    if current_connections >= MAX_CONNECTIONS:
+        await websocket.close(code=1008)
+        return
+    current_connections += 1
+    try:
+        await websocket.accept()
+        # ...
+    finally:
+        current_connections -= 1
+```
+
+| 场景 | 方案 |
+|------|------|
+| 聊天 | WebSocket + 房间管理 |
+| LLM 流式 | WebSocket + async for chunk |
+| Agent 状态 | WebSocket + JSON 事件 |
+| 多个监听 | 广播模式 |

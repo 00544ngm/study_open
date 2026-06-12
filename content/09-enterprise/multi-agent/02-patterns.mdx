@@ -1,0 +1,191 @@
+---
+title: 多 Agent 协作模式
+order: 2
+difficulty: advanced
+estimated_time: 30min
+tags: [Multi-Agent, 协作, 架构]
+---
+
+## 入门
+
+多 Agent 系统通过分工协作完成复杂任务，常见模式有：主管-下属、投票、辩论等。
+
+## 核心
+
+### Supervisor 模式
+
+```python
+from typing import List
+from openai import OpenAI
+
+client = OpenAI()
+
+class Agent:
+    def __init__(self, name: str, role: str):
+        self.name = name
+        self.role = role
+
+    def run(self, task: str, context: str = "") -> str:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": f"你是{self.name}，职责: {self.role}"},
+                {"role": "user", "content": f"任务: {task}\n上下文: {context}"}
+            ]
+        )
+        return response.choices[0].message.content
+
+class Supervisor:
+    def __init__(self, agents: List[Agent]):
+        self.agents = agents
+        self.planner = Agent("规划师", "拆解任务、分配子任务")
+
+    def run(self, task: str) -> str:
+        # 1. 规划阶段
+        plan = self.planner.run(
+            f"将任务拆解为子任务: {task}"
+        )
+
+        # 2. 分配执行
+        results = {}
+        for agent in self.agents:
+            results[agent.name] = agent.run(
+                task, context=plan
+            )
+
+        # 3. 汇总结果
+        summary = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "汇总多个Agent的输出为统一报告"},
+                {"role": "user", "content": str(results)}
+            ]
+        )
+        return summary.choices[0].message.content
+```
+
+### 投票共识模式
+
+```python
+class VotingSystem:
+    def __init__(self, agents: List[Agent]):
+        self.agents = agents
+
+    def decide(self, question: str, options: List[str]) -> str:
+        votes = []
+        for agent in self.agents:
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": f"你是{agent.name}，从选项中选出最佳答案"},
+                    {"role": "user", "content": f"问题: {question}\n选项: {options}"}
+                ]
+            )
+            votes.append(response.choices[0].message.content)
+
+        # 统计投票
+        from collections import Counter
+        vote_count = Counter(votes)
+        winner = vote_count.most_common(1)[0][0]
+
+        return f"投票结果: {winner}\n详情: {dict(vote_count)}"
+
+# 使用
+agents = [
+    Agent("分析师A", "关注技术可行性"),
+    Agent("分析师B", "关注用户体验"),
+    Agent("分析师C", "关注成本效益"),
+]
+
+voter = VotingSystem(agents)
+decision = voter.decide(
+    "应该选哪个技术方案？",
+    ["方案1: LangChain", "方案2: 自研框架", "方案3: 混合方案"]
+)
+```
+
+## 进阶
+
+### 辩论-协作模式
+
+```python
+class DebateCollaboration:
+    """Agent 先辩论，再达成共识"""
+
+    def __init__(self, agents: List[Agent]):
+        self.agents = agents
+        self.rounds = 3
+
+    def debate(self, topic: str) -> str:
+        history = [f"讨论主题: {topic}"]
+
+        for round_num in range(self.rounds):
+            round_opinions = []
+            for agent in self.agents:
+                response = client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=[
+                        {"role": "system", "content": f"你是{agent.name}，参与讨论达成共识"},
+                        {"role": "user", "content": f"第{round_num+1}轮\n历史: {history[-1]}\n你的观点:"}
+                    ]
+                )
+                opinion = response.choices[0].message.content
+                round_opinions.append(f"{agent.name}: {opinion}")
+
+            summary = "\n".join(round_opinions)
+            history.append(summary)
+
+            # 最后一轮输出最终共识
+            if round_num == self.rounds - 1:
+                consensus = client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=[
+                        {"role": "system", "content": "总结多个观点，输出最终共识"},
+                        {"role": "user", "content": summary}
+                    ]
+                )
+                return consensus.choices[0].message.content
+        return "未达成共识"
+```
+
+### 工具编排模式
+
+```python
+class Orchestrator:
+    """中心调度器，动态分配任务给专用 Agent"""
+
+    def __init__(self):
+        self.specialists = {
+            "搜索": Agent("搜索专家", "从知识库和网络中检索信息"),
+            "分析": Agent("数据分析师", "处理和分析数据"),
+            "代码": Agent("程序员", "编写和审查代码"),
+            "写作": Agent("撰稿人", "撰写和润色文档")
+        }
+
+    def run(self, task: str):
+        # 分析任务需要哪些专业技能
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": f"这个任务需要哪些角色: {task}\n可选: {list(self.specialists.keys())}"}]
+        )
+
+        needed_roles = response.choices[0].message.content
+
+        # 并行分配给相关 Agent
+        import asyncio
+
+        async def execute():
+            tasks = []
+            for role, agent in self.specialists.items():
+                if role in needed_roles:
+                    tasks.append(self._run_agent(agent, task))
+            results = await asyncio.gather(*tasks)
+            return results
+
+        return asyncio.run(execute())
+```
+
+## 练习
+
+1. 实现一个 Supervisor 模式：一个规划 Agent + 三个执行 Agent 协作完成市场分析报告
+2. 实现投票共识模式：三个 Agent 对代码审查结果投票，决定是否通过

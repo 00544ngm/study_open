@@ -1,0 +1,436 @@
+---
+title: F12 抓包高级技巧
+order: 2
+difficulty: core
+estimated_time: 30min
+tags: [抓包, F12, DevTools, Network, 调试, HAR]
+---
+
+## Network 面板高级筛选
+
+基础筛选只是输入关键词，高级筛选使用**过滤器语法**精确定位请求：
+
+```text
+# === 按域名筛选 ===
+domain:api.example.com          # 只显示该域名
+-domain:google-analytics.com    # 排除特定域名
+domain:*.example.com            # 子域名通配
+
+# === 按请求方法 ===
+method:POST                     # 只显示 POST
+method:GET method:POST          # 多个方法叠加
+-method:OPTIONS                 # 排除 OPTIONS
+
+# === 按状态码 ===
+status-code:200                 # 精确状态码
+status-code:4xx                 # 所有 4xx 错误
+status-code:>300                # 大于 300 的状态码
+-status-code:200                # 排除 200
+
+# === 按资源类型 ===
+mime-type:application/json      # JSON 响应
+mime-type:image/webp            # WebP 图片
+mime-type:text/html             # HTML 文档
+has-response-header:Set-Cookie  # 有 Set-Cookie 头的请求
+
+# === 按大小和时间 ===
+larger-than:100k                # 大于 100KB 的响应
+larger-than:1m                  # 大于 1MB
+transfer-size:>1k               # 传输大小大于 1KB
+
+# === 按是否缓存 ===
+is:from-cache                   # 来自缓存
+is:from-service-worker          # 来自 Service Worker
+
+# === 组合筛选 ===
+method:POST status-code:200 domain:api.example.com
+# 筛选：POST 方法 + 200 状态码 + 特定域名的 API 请求
+
+# === 保存筛选条件 ===
+# Chrome 不会保存筛选条件，建议在 Filter 输入框中用多行存储常用组合
+```
+
+## Waterfall 时间线分析
+
+Waterfall 列是诊断性能瓶颈的关键，每个阶段代表不同的网络耗时：
+
+```text
+Queued          ■■■■  请求排队等待（浏览器限制了并发连接数）
+Stalled         ■■■■  停滞（代理协商、等待可用 socket）
+DNS Lookup      ■■■   DNS 解析（耗时长说明 DNS 缓存未命中）
+Initial Connection ■■■  TCP 连接建立（三次握手）
+SSL             ■■■   TLS 握手（HTTPS 加密协商）
+Request Sent    ■■    发送请求数据
+Waiting (TTFB)  ■■■■■■■■■■ 等待服务器响应首字节（后端性能关键指标）
+Content Download ■■■■■ 内容下载（响应体传输）
+```
+
+### 性能诊断实战
+
+```python
+# === 用 Python 分析 HAR 中的 Waterfall 数据 ===
+import json
+
+def analyze_waterfall(har_file: str):
+    """分析 HAR 文件中每个请求的耗时分布"""
+    with open(har_file, "r") as f:
+        har = json.load(f)
+
+    entries = har["log"]["entries"]
+
+    for entry in entries:
+        url = entry["request"]["url"][:80]
+        timings = entry["timings"]
+
+        print(f"\n=== {url} ===")
+        print(f"  阻塞/排队: {timings.get('blocked', 0):>6}ms")
+        print(f"  DNS 查询:   {timings.get('dns', 0):>6}ms")
+        print(f"  连接建立:   {timings.get('connect', 0):>6}ms")
+        print(f"  SSL 握手:   {timings.get('ssl', 0):>6}ms")
+        print(f"  发送请求:   {timings.get('send', 0):>6}ms")
+        print(f"  等待(TTFB): {timings.get('wait', 0):>6}ms")
+        print(f"  下载内容:   {timings.get('receive', 0):>6}ms")
+        print(f"  总耗时:     {entry['time']:>6}ms")
+
+        # 标记慢请求
+        if timings.get("wait", 0) > 1000:
+            print(f"  ⚠️ TTFB 超过 1s，后端可能较慢")
+        if timings.get("dns", 0) > 500:
+            print(f"  ⚠️ DNS 耗时过长，建议配置 DNS 预解析")
+        if entry.get("blocked", 0) > 500:
+            print(f"  ⚠️ 请求排队过久，并发连接数可能不足")
+```
+
+### Waterfall 中读取关键信息
+
+```text
+1. 看到长条 SSL 块：
+   → 检查是否重复握手，启用 Keep-Alive 和连接复用
+
+2. 看到长条 TTFB（Waiting）块：
+   → 后端 API 性能问题，或网络延迟
+
+3. 看到长条 Content Download 块：
+   → 响应体过大，考虑分页或压缩
+
+4. 看到多个请求排队（Queued/Stalled）：
+   → 浏览器对同域名有 6 个并发限制（HTTP/1.1）
+   → 解决方案：使用 HTTP/2（多路复用）或域名分片
+
+5. 鼠标悬停在 Waterfall 上：
+   → 显示精确的起止时间和各阶段毫秒数
+```
+
+## Initiator 堆栈追踪
+
+Initiator 列显示**哪个代码发起了这个请求**，是追查 API 调用源的利器：
+
+```text
+# Initiator 类型解析
+
+Parser          由 HTML 解析触发（如 <img>、<link>、<script> 标签）
+                点击跳转到对应的 HTML 行
+
+Script          由 JavaScript 代码触发（如 fetch()、XMLHttpRequest）
+                点击跳转到对应的 JS 文件及行号（堆栈信息）
+
+Redirect        由 HTTP 重定向触发（301/302）
+                点击跳转到原始请求
+
+Other           其他方式（如 Service Worker、浏览器扩展）
+```
+
+```javascript
+// === 实用场景：在 Sources 面板中利用 Initiator 链 ===
+// 1. 在 Network 面板找到目标 API 请求
+// 2. 查看 Initiator 列，点击蓝色链接
+// 3. 跳转到 Sources 面板对应 JS 文件的行
+// 4. 在该行设置断点
+// 5. 刷新页面，断点触发后查看调用栈（Call Stack）
+
+// Iniitator 堆栈示例（点击 Initiator 中的链接可逐帧查看）：
+// fetch (https://example.com/app.js:120:30)
+//   handleSearch (https://example.com/app.js:80:15)
+//     onSubmit (https://example.com/app.js:45:10)
+//       HTMLButtonElement.onclick (https://example.com/index.html:30:5)
+```
+
+## 屏蔽无关请求
+
+爬虫开发中，屏蔽图片、字体、统计脚本等无关请求可以净化 Network 面板：
+
+```text
+# 方法一：右键屏蔽
+在 Network 面板右键请求 → Block request domain → 确认
+被屏蔽的域名会显示为红色，后续请求不会发出
+
+# 方法二：Request Blocking 面板
+DevTools 右侧三点 → More tools → Request Blocking
+或者 Ctrl+Shift+P → 输入 "Request Blocking"
+
+# 添加屏蔽规则（支持通配符）：
+*.google-analytics.com
+*.facebook.net
+*.doubleclick.net
+*.png
+*.jpg
+*.woff2
+
+# 方法三：通过 Network 面板 Filter 排除
+在 Filter 输入框输入：
+-mime-type:image -mime-type:font -domain:google-analytics.com
+
+# 方法四：DevTools 设置中禁用特定功能
+Settings → Preferences → Network → Disable cache (while DevTools is open)
+Settings → Preferences → Network → Show overview
+```
+
+```python
+# === Python 脚本自动构建屏蔽列表 ===
+# 通过分析 HAR 确定需要屏蔽的域名
+import json
+from collections import Counter
+
+def analyze_har_domains(har_file: str, top_n: int = 10):
+    """分析 HAR 中被请求最多的域名，辅助构建屏蔽规则"""
+    with open(har_file, "r") as f:
+        har = json.load(f)
+
+    from urllib.parse import urlparse
+    domains = Counter()
+    mime_types = Counter()
+
+    for entry in har["log"]["entries"]:
+        url = entry["request"]["url"]
+        domain = urlparse(url).hostname or "unknown"
+        mime = entry["response"].get("content", {}).get("mimeType", "unknown")
+        domains[domain] += 1
+        mime_types[mime.split("/")[0]] += 1
+
+    print("=== 请求最多的域名 ===")
+    for domain, count in domains.most_common(top_n):
+        print(f"  {domain}: {count} 次请求")
+
+    print("\n=== 资源类型分布 ===")
+    for mime, count in mime_types.most_common():
+        print(f"  {mime}: {count} 次")
+```
+
+## HAR 导出与自动化分析
+
+HAR（HTTP Archive）包含所有网络请求的完整信息，可以导出并用代码分析：
+
+```text
+# 导出 HAR
+Network 面板右键 → Save all as HAR with content
+或点击 Export HAR 按钮（下载箭头图标）
+
+# HAR 文件结构（JSON）
+{
+  "log": {
+    "version": "1.2",
+    "creator": { "name": "Chrome", "version": "120" },
+    "entries": [
+      {
+        "request": { "method": "GET", "url": "...", "headers": [...], "queryString": [...] },
+        "response": { "status": 200, "bodySize": 12345, "content": {...}, "headers": [...] },
+        "timings": { "blocked": 0, "dns": 5, "connect": 30, "ssl": 15, "send": 1, "wait": 200, "receive": 50 },
+        "time": 301,
+        "cache": {}
+      }
+    ]
+  }
+}
+```
+
+```python
+# === HAR 自动化分析工具 ===
+import json
+from datetime import datetime
+from urllib.parse import urlparse, parse_qs
+
+class HARAnalyzer:
+    """HAR 文件自动化分析"""
+
+    def __init__(self, har_path: str):
+        with open(har_path, "r") as f:
+            self.har = json.load(f)
+        self.entries = self.har["log"]["entries"]
+
+    def find_api_endpoints(self) -> set:
+        """提取所有唯一的 API 端点"""
+        endpoints = set()
+        for entry in self.entries:
+            url = entry["request"]["url"]
+            parsed = urlparse(url)
+            # 只保留路径部分（去掉查询参数）
+            endpoints.add(f"{parsed.scheme}://{parsed.netloc}{parsed.path}")
+        return endpoints
+
+    def extract_headers(self) -> dict:
+        """提取所有请求头中的公共部分"""
+        common_headers = {}
+        header_counts = {}
+
+        for entry in self.entries:
+            for header in entry["request"]["headers"]:
+                name = header["name"].lower()
+                if name in ("cookie", "authorization"):
+                    continue  # 敏感头单独处理
+                header_counts[name] = header_counts.get(name, 0) + 1
+
+        # 找出出现在 80% 以上请求中的头
+        threshold = len(self.entries) * 0.8
+        return {k: v for k, v in header_counts.items() if v >= threshold}
+
+    def extract_api_patterns(self, api_prefix: str = "/api/") -> list[dict]:
+        """提取特定 API 路径的请求模式"""
+        patterns = []
+        for entry in self.entries:
+            url = entry["request"]["url"]
+            if api_prefix in url:
+                parsed = urlparse(url)
+                params = parse_qs(parsed.query)
+                patterns.append({
+                    "method": entry["request"]["method"],
+                    "path": parsed.path,
+                    "params": {k: v[0] for k, v in params.items()},
+                    "status": entry["response"]["status"],
+                    "response_type": entry["response"].get("content", {}).get("mimeType"),
+                })
+        return patterns
+
+    def generate_python_code(self) -> str:
+        """根据 HAR 生成 Python 请求代码"""
+        # 找到第一个 JSON API 请求
+        for entry in self.entries:
+            url = entry["request"]["url"]
+            if "/api/" in url or ".json" in url:
+                headers = {h["name"]: h["name"] for h in entry["request"]["headers"]}
+                # 过滤掉 browser 自动添加的头
+                skip_headers = {"accept-encoding", "accept-language", "sec-*"}
+                code = f"""import requests
+
+headers = {json.dumps(headers, indent=4, ensure_ascii=False)}
+
+params = {json.dumps({k: v[0] for k, v in parse_qs(urlparse(url).query).items()}, indent=4)}
+
+resp = requests.get("{url}", headers=headers, params=params)
+print(resp.status_code)
+print(resp.json())
+"""
+                return code
+        return "# 未找到合适的 API 请求"
+
+# === 使用 ===
+analyzer = HARAnalyzer("network-export.har")
+print("API 端点:", analyzer.find_api_endpoints())
+print("公共请求头:", analyzer.extract_headers())
+print("生成的代码:", analyzer.generate_python_code())
+```
+
+## 请求重放与修改
+
+重放请求用于验证分析结果、测试参数变化：
+
+```text
+# === 方法一：Copy as fetch ===
+右键请求 → Copy → Copy as fetch
+在 Console 中粘贴执行：
+> await fetch("https://api.example.com/data", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({page: 1})
+  }).then(r => r.json())
+> // 修改参数后再次执行
+
+# === 方法二：Copy as cURL ===
+右键请求 → Copy → Copy as cURL
+粘贴到终端执行：
+$ curl 'https://api.example.com/data' ...
+修改参数后再次执行对比响应
+
+# === 方法三：Replay XHR in Console ===
+# 对于 XHR 请求，可以直接在 Console 粘贴以下代码：
+const xhr = new XMLHttpRequest();
+xhr.open('GET', 'https://api.example.com/data?page=1');
+xhr.setRequestHeader('Authorization', 'Bearer xxx');
+xhr.send();
+xhr.onload = () => console.log(xhr.responseText);
+
+# === 方法四：使用 Snippets 保存常用重放脚本 ===
+# Sources → Snippets → New snippet
+// 保存以下脚本，随时执行
+(async () => {
+  const urls = ['page=1', 'page=2', 'page=3'];
+  for (const param of urls) {
+    const resp = await fetch(`https://api.example.com/data?${param}`);
+    console.log(param, await resp.json());
+  }
+})();
+```
+
+## 请求断点（Breakpoint on Request）
+
+在请求发出前拦截并暂停执行，是调试和签名分析的利器：
+
+```text
+# === 设置 XHR/Fetch 断点 ===
+Sources → Event Listener Breakpoints → XHR
+勾选:
+  □ readystatechange   — XMLHttpRequest 状态变化时暂停
+  □ load               — 请求完成时暂停
+  □ error              — 请求出错时暂停
+
+更精确的方式 — URL 断点：
+Sources 面板右侧 → XHR/fetch Breakpoints → +
+输入 URL 关键词（支持部分匹配）如: /api/product
+
+# === 断点触发后的操作 ===
+1. 暂停后查看 Call Stack 找到发起请求的代码
+2. 在 Console 中查看和修改变量：
+   > requestBody = '{"page": 100}';  // 修改请求体
+3. 按 F10 单步执行
+4. 按 F8 恢复执行
+
+# === 实战：断点修改请求 ===
+场景：某 API 的 sign 参数在 JS 中生成，你想跳过签名验证
+
+1. 设置 XHR Breakpoint 关键字为 "sign"
+2. 触发请求，断点停在 sign 生成附近
+3. 在 Sources 面板找到 sign 生成逻辑
+4. 在 Console 中覆盖函数：
+   > window.generateSign = function() { return "fixed_sign"; }
+5. 恢复执行，观察请求是否使用修改后的签名
+```
+
+```javascript
+// === 高级：利用 Console 在断点处执行自动化 ===
+// 在 Sources 断点处，Console 上下文就是当前作用域
+
+// 查看请求参数
+console.log(requestData);
+
+// 修改请求参数
+requestData.sign = "bypassed";
+
+// 甚至阻止请求发出
+// window.stop()  // 谨慎使用
+
+// 录制请求序列
+window.__capturedRequests = window.__capturedRequests || [];
+window.__capturedRequests.push({
+  url: requestUrl,
+  params: requestData,
+  time: Date.now()
+});
+```
+
+| 功能 | 快捷键 / 操作 | 用途 |
+|------|-------------|------|
+| 筛选语法 | Filter 输入框 | 精确定位特定请求 |
+| 屏蔽请求 | 右键 → Block | 过滤无关流量 |
+| 导出 HAR | 右键 → Save as HAR | 离线分析网络请求 |
+| 重放请求 | Copy as fetch/curl | 快速验证 API |
+| 请求断点 | Sources → XHR Breakpoints | 调试请求发起逻辑 |
+| Waterfall | 悬停查看 | 性能瓶颈定位 |

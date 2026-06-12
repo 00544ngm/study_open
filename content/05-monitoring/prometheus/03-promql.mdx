@@ -1,0 +1,79 @@
+---
+title: PromQL 查询
+order: 3
+difficulty: advanced
+estimated_time: 20min
+tags: [Prometheus, 查询]
+---
+
+## 入门
+
+```promql
+# 简单查询
+agent_requests_total                    # 当前值
+rate(agent_requests_total[5m])         # 每秒增长率(5分钟窗口)
+
+# 标签过滤
+agent_errors_total{type="TimeoutError"}
+agent_errors_total{type=~"Timeout|RateLimit"}  # 正则匹配
+```
+
+## 核心
+
+```promql
+# 聚合查询
+sum(rate(agent_requests_total[5m]))    # 总请求速率
+avg(rate(agent_latency_seconds_sum[5m]) / rate(agent_latency_seconds_count[5m]))
+
+# 按标签分组
+sum by (service) (rate(agent_requests_total[5m]))
+topk(3, sum(rate(agent_requests_total[5m])))
+```
+
+```promql
+# 常用 Agent 监控查询
+
+# 错误率
+sum(rate(agent_errors_total[5m])) / sum(rate(agent_requests_total[5m])) * 100
+
+# P99 延迟
+histogram_quantile(0.99,
+  sum(rate(agent_latency_seconds_bucket[5m])) by (le)
+)
+
+# Token 消耗速率
+rate(agent_tokens_total[5m])
+```
+
+## 进阶
+
+```promql
+# 告警规则
+# rules/agent_alerts.yml
+groups:
+  - name: agent
+    rules:
+      - alert: HighErrorRate
+        expr: |
+          sum(rate(agent_errors_total[5m])) 
+          / sum(rate(agent_requests_total[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "错误率超过 5%"
+
+      - alert: HighLatency
+        expr: |
+          histogram_quantile(0.99, 
+            rate(agent_latency_seconds_bucket[5m]) by (le)
+          ) > 5
+        for: 2m
+        labels:
+          severity: warning
+```
+
+## 练习
+
+1. 用 PromQL 查询 Agent 最近 1 小时的平均延迟
+2. 创建一条告警规则：当错误率超过 5% 且持续 5 分钟触发告警

@@ -1,0 +1,851 @@
+---
+title: K8s 应用部署实战
+order: 2
+difficulty: advanced
+estimated_time: 40min
+tags: [Kubernetes, Deployment, Service, Ingress, HPA, Helm]
+---
+
+## 完整应用部署
+
+本节将一个 AI Agent 应用完整部署到 Kubernetes 集群，涵盖 Deployment、Service、ConfigMap、Secrets、Ingress、HPA 等核心资源。
+
+## Deployment & Service
+
+### API 服务部署
+
+```yaml
+# api-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-api
+  namespace: agent-platform
+  labels:
+    app: agent-api
+    tier: backend
+    version: v1
+spec:
+  replicas: 3
+  # 更新策略
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1           # 更新时最多额外启动 1 个 Pod
+      maxUnavailable: 0     # 更新时不允许不可用
+  selector:
+    matchLabels:
+      app: agent-api
+  template:
+    metadata:
+      labels:
+        app: agent-api
+        version: v1
+    spec:
+      # Pod 安全上下文
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 2000
+
+      containers:
+      - name: agent-api
+        image: registry.example.com/agent-api:v1.2.3
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8000
+          protocol: TCP
+          name: http
+        - containerPort: 9090
+          protocol: TCP
+          name: metrics
+
+        # 从 ConfigMap 注入环境变量
+        envFrom:
+        - configMapRef:
+            name: agent-config
+        # 从 Secret 注入敏感信息
+        - secretRef:
+            name: app-secrets
+
+        # 单个环境变量
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: db-secret
+              key: password
+
+        # 资源限制
+        resources:
+          requests:
+            cpu: 500m
+            memory: 512Mi
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+
+        # 存活探针（容器是否正常）
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 15
+          timeoutSeconds: 5
+          failureThreshold: 3
+
+        # 就绪探针（Pod 是否可接收流量）
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8000
+          initialDelaySeconds: 15
+          periodSeconds: 10
+          timeoutSeconds: 3
+          successThreshold: 1
+          failureThreshold: 2
+
+        # 启动探针（慢启动应用）
+        startupProbe:
+          httpGet:
+            path: /healthz
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          failureThreshold: 30  # 容许 30 次失败（150 秒启动时间）
+
+        # 挂载卷
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        - name: app-config
+          mountPath: /app/config
+          readOnly: true
+
+      # 优雅终止
+      terminationGracePeriodSeconds: 60
+
+      # 镜像拉取秘钥
+      imagePullSecrets:
+      - name: registry-credentials
+
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      - name: app-config
+        configMap:
+          name: app-config-files
+---
+# api-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-api-service
+  namespace: agent-platform
+  labels:
+    app: agent-api
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9090"
+spec:
+  selector:
+    app: agent-api
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8000
+  - name: metrics
+    port: 9090
+    targetPort: 9090
+  type: ClusterIP
+  # 会话保持（如需）
+  # sessionAffinity: ClientIP
+```
+
+### Worker 部署
+
+```yaml
+# worker-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-worker
+  namespace: agent-platform
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: agent-worker
+  template:
+    metadata:
+      labels:
+        app: agent-worker
+    spec:
+      containers:
+      - name: worker
+        image: registry.example.com/agent-worker:v1.2.3
+        command: ["celery", "-A", "app.tasks", "worker", "-Q", "agent,llm", "--concurrency=4"]
+        envFrom:
+        - configMapRef:
+            name: agent-config
+        - secretRef:
+            name: app-secrets
+        resources:
+          requests:
+            cpu: 1
+            memory: 1Gi
+          limits:
+            cpu: 2
+            memory: 2Gi
+```
+
+## ConfigMap & Secrets
+
+### ConfigMap
+
+```yaml
+# configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agent-config
+  namespace: agent-platform
+data:
+  # 键值对形式
+  LOG_LEVEL: "info"
+  ENVIRONMENT: "production"
+  MAX_TOKENS: "4096"
+  API_RATE_LIMIT: "100"
+  REDIS_URL: "redis://redis-service:6379/0"
+  DATABASE_URL: "postgresql://agent@postgres-service:5432/agent_platform"
+
+  # 配置文件形式
+  app-config.yaml: |
+    server:
+      host: 0.0.0.0
+      port: 8000
+      workers: 4
+    model:
+      default: gpt-4o
+      max_retries: 3
+    logging:
+      format: json
+      level: info
+```
+
+### Secrets
+
+```yaml
+# secrets.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: app-secrets
+  namespace: agent-platform
+type: Opaque
+stringData:
+  # stringData 自动 base64 编码
+  OPENAI_API_KEY: "sk-your-key-here"
+  ANTHROPIC_API_KEY: "sk-ant-your-key"
+  DB_PASSWORD: "strong-password"
+
+---
+# 使用外部 Secret 管理（Sealed Secrets）
+apiVersion: bitnami.com/v1alpha1
+kind: SealedSecret
+metadata:
+  name: app-secrets
+  namespace: agent-platform
+spec:
+  encryptedData:
+    OPENAI_API_KEY: AgB...encrypted...
+    DB_PASSWORD: AgC...encrypted...
+```
+
+### 通过 External Secrets Operator 集成云 Secret
+
+```yaml
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: aws-secrets
+  namespace: agent-platform
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: aws-secretstore
+    kind: SecretStore
+  target:
+    name: app-secrets
+  data:
+  - secretKey: OPENAI_API_KEY
+    remoteRef:
+      key: /agent-platform/production/OPENAI_API_KEY
+  - secretKey: DB_PASSWORD
+    remoteRef:
+      key: /agent-platform/production/DB_PASSWORD
+```
+
+```bash
+# 创建秘密（推荐 CLI 方式）
+kubectl create secret generic app-secrets \
+  --namespace agent-platform \
+  --from-literal=OPENAI_API_KEY=sk-xxx \
+  --from-literal=DB_PASSWORD=pass123 \
+  --dry-run=client -o yaml | kubectl apply -f -
+
+# 从文件创建
+kubectl create secret generic db-secret \
+  --from-file=./config/db-password.txt
+```
+
+## Ingress
+
+Ingress 将外部流量路由到集群内的 Service。
+
+```yaml
+# ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: agent-api-ingress
+  namespace: agent-platform
+  annotations:
+    # 使用 nginx-ingress 控制器
+    kubernetes.io/ingress.class: "nginx"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    # 跨域配置
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "https://app.agent.example.com"
+    nginx.ingress.kubernetes.io/cors-allow-methods: "GET, POST, PUT, DELETE, OPTIONS"
+    nginx.ingress.kubernetes.io/cors-allow-credentials: "true"
+    # 请求体大小
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    # 超时
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60s"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "10s"
+    # 速率限制
+    nginx.ingress.kubernetes.io/limit-rps: "50"
+    nginx.ingress.kubernetes.io/limit-burst-multiplier: "3"
+    # 客户端真实 IP
+    nginx.ingress.kubernetes.io/forwarded-for-header: "X-Forwarded-For"
+    # 安全头部
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      add_header X-Frame-Options "SAMEORIGIN" always;
+      add_header X-Content-Type-Options "nosniff" always;
+      add_header X-XSS-Protection "1; mode=block" always;
+spec:
+  tls:
+  - hosts:
+    - api.agent.example.com
+    - ws.agent.example.com
+    secretName: agent-tls
+  rules:
+  - host: api.agent.example.com
+    http:
+      paths:
+      - path: /api/v1
+        pathType: Prefix
+        backend:
+          service:
+            name: agent-api-service
+            port:
+              number: 80
+      - path: /ws
+        pathType: Prefix
+        backend:
+          service:
+            name: agent-ws-service
+            port:
+              number: 8001
+  - host: admin.agent.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: agent-admin-service
+            port:
+              number: 80
+```
+
+### Ingress Controller 安装
+
+```bash
+# 使用 Helm 安装 NGINX Ingress
+helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx \
+  --namespace ingress-nginx --create-namespace \
+  --set controller.replicaCount=2 \
+  --set controller.service.type=LoadBalancer
+
+# 查看 Ingress Controller 的外部 IP
+kubectl get svc -n ingress-nginx
+kubectl get ingress -n agent-platform
+```
+
+## Horizontal Pod Autoscaler
+
+基于 CPU/内存或自定义指标自动扩缩容。
+
+### 基于 CPU 和内存
+
+```yaml
+# hpa.yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: agent-api-hpa
+  namespace: agent-platform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: agent-api
+  minReplicas: 2
+  maxReplicas: 20
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300     # 缩容稳定窗口
+      policies:
+      - type: Percent
+        value: 50
+        periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 0       # 立即扩容
+      policies:
+      - type: Percent
+        value: 100                         # 每次翻倍
+        periodSeconds: 15
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+```
+
+### 基于自定义指标（每秒请求数）
+
+```yaml
+# 需要 Prometheus Adapter 或 KEDA
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: agent-api-rps-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: agent-api
+  minReplicas: 2
+  maxReplicas: 50
+  metrics:
+  - type: Pods
+    pods:
+      metric:
+        name: http_requests_per_second
+      target:
+        type: AverageValue
+        averageValue: 100
+```
+
+```bash
+# 查看 HPA 状态
+kubectl get hpa -n agent-platform
+kubectl describe hpa agent-api-hpa -n agent-platform
+
+# 模拟负载测试自动扩缩容
+kubectl run load-generator --image=busybox -- /bin/sh -c \
+  "while true; do wget -q -O- http://agent-api-service.agent-platform.svc.cluster.local/health; done"
+
+# 资源监控
+kubectl top pods -n agent-platform
+kubectl top nodes
+```
+
+## 存活/就绪/启动探针
+
+三种探针的适用场景：
+
+| 探针 | 作用 | 失败后果 | 推荐场景 |
+|------|------|----------|----------|
+| `livenessProbe` | 检查容器是否存活 | 重启 Pod | 死锁、内存泄漏 |
+| `readinessProbe` | 检查服务是否就绪 | 从 Service 移除 | 启动加载、依赖未就绪 |
+| `startupProbe` | 检查应用是否启动完成 | 重启 Pod | 慢启动应用（> 启动探针周期前不执行存活探针） |
+
+### 自定义探针类型
+
+```yaml
+# TCP 探针（数据库等服务）
+livenessProbe:
+  tcpSocket:
+    port: 5432
+  initialDelaySeconds: 15
+  periodSeconds: 20
+
+# 命令探针（Redis）
+livenessProbe:
+  exec:
+    command:
+    - redis-cli
+    - ping
+  initialDelaySeconds: 15
+  periodSeconds: 10
+
+# gRPC 探针（K8s 1.24+）
+livenessProbe:
+  grpc:
+    port: 50051
+  initialDelaySeconds: 15
+```
+
+### gRPC 健康检查实现
+
+```go
+// 服务端示例（Go）
+import "google.golang.org/grpc/health/grpc_health_v1"
+
+func (s *server) Check(ctx context.Context, req *grpc_health_v1.HealthCheckRequest) (*grpc_health_v1.HealthCheckResponse, error) {
+    if s.db == nil {
+        return &grpc_health_v1.HealthCheckResponse{
+            Status: grpc_health_v1.HealthCheckResponse_NOT_SERVING,
+        }, nil
+    }
+    return &grpc_health_v1.HealthCheckResponse{
+        Status: grpc_health_v1.HealthCheckResponse_SERVING,
+    }, nil
+}
+```
+
+## kubectl 实用技巧
+
+### 日常操作
+
+```bash
+# ========== 上下文管理 ==========
+kubectl config get-contexts                         # 查看所有上下文
+kubectl config use-context prod-cluster             # 切换集群
+kubectl config set-context --current --namespace=agent-platform  # 设置默认命名空间
+
+# ========== 部署管理 ==========
+kubectl apply -f deployment.yaml                    # 应用配置
+kubectl apply -f configmap.yaml                     # 更新 ConfigMap（Pod 不会自动重载）
+kubectl rollout restart deployment/agent-api        # 滚动重启（加载新配置）
+kubectl rollout status deployment/agent-api -w      # 查看滚动更新状态
+kubectl rollout undo deployment/agent-api           # 回滚到上一个版本
+kubectl rollout undo deployment/agent-api --to-revision=2  # 回滚到指定版本
+kubectl rollout history deployment/agent-api        # 查看更新历史
+
+# ========== 排查调试 ==========
+kubectl get pods -n agent-platform -w               # 监听 Pod 事件
+kubectl describe pod agent-api-xxxx                 # 查看 Pod 详细信息
+kubectl logs agent-api-xxxx -f                      # 跟踪日志
+kubectl logs agent-api-xxxx --previous              # 查看上次崩溃日志
+kubectl exec -it agent-api-xxxx -- /bin/sh          # 进入容器
+kubectl port-forward svc/agent-api-service 8000:80  # 本地端口转发
+kubectl cp local-file agent-api-xxxx:/tmp/          # 文件复制
+
+# ========== 资源监控 ==========
+kubectl top pods                                    # Pod 资源使用
+kubectl top nodes                                   # 节点资源使用
+kubectl get events -n agent-platform --sort-by='.lastTimestamp'  # 查看事件
+
+# ========== 网络 ==========
+kubectl get svc -n agent-platform                   # 查看服务
+kubectl get ingress -n agent-platform               # 查看 Ingress
+kubectl run test-pod --image=busybox --rm -it -- sh # 启动临时调试 Pod
+kubectl get endpoints -n agent-platform             # 查看端点状态
+
+# ========== YAML 快捷操作 ==========
+kubectl get deploy agent-api -o yaml                # 导出为 YAML
+kubectl get deploy agent-api -o jsonpath='{.spec.replicas}'  # 取值
+kubectl diff -f deployment.yaml                     # 对比变更
+kubectl set image deployment/agent-api agent-api=registry.example.com/agent-api:v2  # 快捷更新镜像
+```
+
+### 别名与插件
+
+```bash
+# 常用别名（配置到 ~/.bashrc）
+alias k='kubectl'
+alias kg='kubectl get'
+alias kd='kubectl describe'
+alias kaf='kubectl apply -f'
+alias kdel='kubectl delete'
+alias kpf='kubectl port-forward'
+alias kexec='kubectl exec -it'
+alias klo='kubectl logs -f'
+
+alias kgp='kubectl get pods'
+alias kgs='kubectl get svc'
+alias kgd='kubectl get deploy'
+alias kgi='kubectl get ingress'
+alias kgh='kubectl get hpa'
+
+# 安装 kubectl 插件（使用 krew）
+kubectl krew install sniff                        # 网络抓包
+kubectl krew install view-secret                  # 查看 Secret 明文
+kubectl krew install tail                         # 多 Pod 日志聚合
+kubectl krew install neat                         # 清理 YAML 输出
+kubectl krew install tree                         # 资源树状展示
+
+# 使用插件
+kubectl tree deployment agent-api
+kubectl view-secret app-secrets -n agent-platform
+kubectl tail agent-api                            # 查看所有副本日志
+kubectl sniff agent-api-xxxx                      # Pod 网络抓包
+```
+
+## Helm 基础
+
+Helm 是 K8s 的包管理器，使用 Chart 管理应用定义。
+
+### Chart 结构
+
+```
+agent-platform/
+├── Chart.yaml              # Chart 元信息
+├── values.yaml             # 默认配置值
+├── values-production.yaml  # 生产环境覆盖
+├── templates/
+│   ├── _helpers.tpl        # 模板帮助函数
+│   ├── deployment.yaml     # Deployment 模板
+│   ├── service.yaml        # Service 模板
+│   ├── ingress.yaml        # Ingress 模板
+│   ├── configmap.yaml      # ConfigMap 模板
+│   ├── hpa.yaml            # HPA 模板
+│   └── NOTES.txt           # 安装后提示
+└── charts/                 # 子依赖 Chart
+```
+
+### Chart.yaml
+
+```yaml
+apiVersion: v2
+name: agent-platform
+description: AI Agent Platform Helm Chart
+version: 0.1.0
+appVersion: "1.2.3"
+type: application
+
+dependencies:
+  - name: postgresql
+    version: "15.x"
+    repository: "https://charts.bitnami.com/bitnami"
+    condition: postgresql.enabled
+  - name: redis
+    version: "19.x"
+    repository: "https://charts.bitnami.com/bitnami"
+    condition: redis.enabled
+```
+
+### values.yaml
+
+```yaml
+# values.yaml
+replicaCount: 3
+
+image:
+  repository: registry.example.com/agent-api
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8000
+
+ingress:
+  enabled: true
+  host: api.agent.example.com
+  tls:
+    enabled: true
+    secretName: agent-tls
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 512Mi
+  limits:
+    cpu: 1
+    memory: 1Gi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 20
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+config:
+  LOG_LEVEL: info
+  ENVIRONMENT: production
+  MAX_TOKENS: 4096
+
+secrets:
+  OPENAI_API_KEY: ""
+  DB_PASSWORD: ""
+
+postgresql:
+  enabled: true
+  auth:
+    database: agent_platform
+    username: agent
+
+redis:
+  enabled: true
+  architecture: standalone
+```
+
+### Deployment 模板
+
+```yaml
+# templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "agent-platform.fullname" . }}
+  labels:
+    {{- include "agent-platform.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "agent-platform.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "agent-platform.selectorLabels" . | nindent 8 }}
+    spec:
+      containers:
+      - name: {{ .Chart.Name }}
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        ports:
+        - containerPort: {{ .Values.service.targetPort }}
+        env:
+        - name: LOG_LEVEL
+          value: {{ .Values.config.LOG_LEVEL }}
+        - name: ENVIRONMENT
+          value: {{ .Values.config.ENVIRONMENT }}
+        - name: OPENAI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "agent-platform.fullname" . }}
+              key: OPENAI_API_KEY
+        resources:
+          {{- toYaml .Values.resources | nindent 10 }}
+        {{- with .Values.probes }}
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: {{ $.Values.service.targetPort }}
+          initialDelaySeconds: {{ .liveness.initialDelaySeconds }}
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: {{ $.Values.service.targetPort }}
+          initialDelaySeconds: {{ .readiness.initialDelaySeconds }}
+        {{- end }}
+```
+
+### Helm 操作命令
+
+```bash
+# 添加 Chart 仓库
+helm repo add bitnami https://charts.bitnami.com/bitnami
+helm repo update
+
+# 安装 Chart
+helm install agent-platform ./agent-platform \
+  --namespace agent-platform --create-namespace \
+  --values values-production.yaml
+
+# 升级
+helm upgrade agent-platform ./agent-platform \
+  --set image.tag=v2.0.0 \
+  --set replicaCount=5
+
+# 回滚
+helm rollback agent-platform 1
+
+# 查看状态
+helm list -n agent-platform
+helm status agent-platform -n agent-platform
+helm history agent-platform -n agent-platform
+
+# 渲染模板（调试）
+helm template ./agent-platform --debug
+
+# 卸载
+helm uninstall agent-platform -n agent-platform
+```
+
+## 完整部署流程
+
+```bash
+# 1. 创建命名空间
+kubectl create namespace agent-platform
+
+# 2. 部署基础设施
+kubectl apply -f configmap.yaml -n agent-platform
+kubectl apply -f secrets.yaml -n agent-platform
+
+# 3. 部署数据服务（使用 Helm）
+helm repo add bitnami https://charts.bitnami.com/bitnami
+helm upgrade --install postgresql bitnami/postgresql \
+  --namespace agent-platform \
+  --set auth.database=agent_platform \
+  --set auth.username=agent \
+  --set auth.password=strong-password \
+  --set primary.persistence.size=50Gi
+
+helm upgrade --install redis bitnami/redis \
+  --namespace agent-platform \
+  --set architecture=standalone \
+  --set auth.enabled=false
+
+# 4. 部署应用
+kubectl apply -f api-deployment.yaml -n agent-platform
+kubectl apply -f api-service.yaml -n agent-platform
+kubectl apply -f worker-deployment.yaml -n agent-platform
+
+# 5. 配置自动扩缩容
+kubectl apply -f hpa.yaml -n agent-platform
+
+# 6. 配置 Ingress
+kubectl apply -f ingress.yaml -n agent-platform
+
+# 7. 验证
+kubectl get all -n agent-platform
+kubectl get ingress -n agent-platform
+curl -H "Host: api.agent.example.com" http://<INGRESS_IP>/api/v1/health
+```
+
+## 练习
+
+1. 编写 agent-api 的 Deployment 和 Service 清单，包含存活探针、资源限制、环境变量注入
+2. 创建 ConfigMap 管理非敏感配置，使用 Secret 管理 API Key 等敏感信息
+3. 配置 Ingress 将 `api.agent.example.com` 路由到 agent-api-service
+4. 编写 HPA 配置，基于 CPU 使用率自动扩缩容（2-20 副本）
+5. 使用 Helm Chart 将以上所有资源打包，通过 `helm install` 一键部署
+6. 模拟 Pod 故障，验证存活探针自动重启，以及滚动更新时的零宕机部署

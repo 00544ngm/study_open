@@ -1,0 +1,120 @@
+---
+title: Dify 基础入门
+order: 1
+difficulty: beginner
+estimated_time: 25min
+tags: [Dify, Agent, 低代码, RAG]
+---
+
+## 安装
+
+```bash
+# Docker Compose 一键部署
+git clone https://github.com/langgenius/dify.git
+cd dify/docker
+cp .env.example .env
+docker compose up -d
+```
+
+浏览器打开 `http://localhost:3000`，注册管理员账号。
+
+## 核心概念
+
+| 概念 | 说明 |
+|------|------|
+| 应用 | 一个 AI 应用（聊天机器人、Agent、RAG 等） |
+| 模型供应商 | 可用的 LLM（OpenAI、Claude、Ollama 等） |
+| 知识库 | 上传文档构建 RAG |
+| 工作流 | 可视化编排 LLM 调用链 |
+| 工具 | 外部 API 集成 |
+| 变量 | 对话记忆、用户输入参数 |
+
+## 配置模型
+
+Dify 支持主流模型供应商：
+
+```
+设置 → 模型供应商 → 添加
+  • OpenAI: 输入 API Key
+  • Anthropic: 输入 API Key
+  • Ollama: 配置 http://host.docker.internal:11434
+  • vLLM: 配置 http://host.docker.internal:8000/v1
+```
+
+## 创建聊天应用
+
+1. 点击"创建应用" → "聊天助手"
+2. 选择模型（如 gpt-4o）
+3. 填写系统提示词
+4. 发布即可获得聊天 URL 和 API
+
+```python
+# API 调用 Dify 应用
+import requests
+
+api_key = "app-xxxxx"
+url = "https://your-dify.com/v1/chat-messages"
+
+resp = requests.post(url, json={
+    "inputs": {},
+    "query": "你好",
+    "response_mode": "streaming",
+    "user": "user-123",
+}, headers={
+    "Authorization": f"Bearer {api_key}",
+})
+
+for line in resp.iter_lines():
+    if line:
+        print(line.decode())
+```
+
+## Agent 模式
+
+Dify 的 Agent 支持工具调用：
+
+```
+创建应用 → Agent → 功能配置:
+  • 启用"Agent 模式"
+  • 添加工具（内置搜索、计算器等）
+  • 添加自定义工具（API）
+  • 配置提示词
+```
+
+Agent 会自动推理是否调用工具，并组合结果。
+
+## 知识库
+
+```bash
+# 支持上传的文件格式
+.txt, .pdf, .md, .html, .docx, .csv, .json
+
+# 处理流程
+上传 → 分段(chunk) → 向量化 → 存储到向量数据库
+```
+
+通过知识库构建 RAG 应用：
+
+```
+1. 创建知识库 → 上传文档
+2. 选择分段策略
+3. 嵌入到向量库
+4. 在应用中关联知识库
+```
+
+## 日志与监控
+
+Dify 内置完整的日志系统：
+
+- 每次对话记录
+- Token 消耗统计
+- 用户反馈收集
+- 标注（标注好/坏回复用于优化）
+
+| 功能 | 说明 |
+|------|------|
+| Chatflow | 对话流程编排 |
+| Agent | 工具调用模式 |
+| Knowledge | RAG 知识库 |
+| Endpoint | API 发布 |
+| Logs | 对话日志与分析 |

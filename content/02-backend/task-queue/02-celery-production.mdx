@@ -1,0 +1,656 @@
+---
+title: Celery 生产级实践
+order: 2
+difficulty: advanced
+estimated_time: 40min
+tags: [Celery, Redis, 生产部署, 任务路由, Flower, 错误重试, 监控]
+---
+
+## 生产级配置
+
+### Broker 调优
+
+```python
+# config.py
+from celery import Celery
+
+app = Celery("production_tasks")
+
+app.conf.update(
+    # Redis 连接池配置
+    broker_url="redis://:password@redis-host:6379/0",
+    broker_pool_limit=30,           # 连接池上限
+    broker_connection_retry=True,   # 启动时自动重试连接
+    broker_connection_retry_on_startup=True,
+    broker_connection_max_retries=10,
+    broker_transport_options={
+        "max_connections": 30,      # 传输层连接池
+        "socket_timeout": 5,
+        "socket_connect_timeout": 5,
+        "retry_on_timeout": True,
+        "health_check_interval": 30, # 每30秒健康检查
+    },
+
+    # 结果后端配置
+    result_backend="redis://:password@redis-host:6379/1",
+    result_expires=3600,            # 结果1小时后过期
+    result_extended=True,           # 记录更详细的结果信息
+    task_track_started=True,
+    task_acks_late=True,            # 任务完成后才确认（防止丢失）
+)
+```
+
+### Redis Sentinel 高可用
+
+```python
+# 使用 Redis Sentinel 实现高可用
+app.conf.broker_url = "redis-sentinel://sentinel-1:26379;sentinel-2:26379;sentinel-3:26379"
+app.conf.broker_transport_options = {
+    "master_name": "mymaster",
+    "sentinels": [
+        ("sentinel-1", 26379),
+        ("sentinel-2", 26379),
+        ("sentinel-3", 26379),
+    ],
+    "socket_timeout": 0.5,
+    "retry_on_timeout": True,
+}
+```
+
+## 任务路由
+
+### 多队列架构
+
+将不同类型的任务分发到不同队列，避免"慢任务"阻塞"快任务"：
+
+```python
+# routing.py
+app.conf.task_routes = {
+    # 按任务名自动路由
+    "tasks.llm.*":          {"queue": "gpu"},       # LLM 调用 → GPU 队列
+    "tasks.document.*":     {"queue": "io"},        # 文档处理 → IO 队列
+    "tasks.email.*":        {"queue": "urgent"},    # 邮件 → 紧急队列
+    "tasks.cleanup.*":      {"queue": "background", "routing_key": "slow"},
+}
+```
+
+启动 Worker 时按需监听队列：
+
+```bash
+# GPU Worker: 只处理 LLM 任务 + 默认任务
+celery -A tasks worker -Q gpu,default --concurrency=2
+
+# IO Worker: 处理文档任务（高并发，适合 gevent）
+celery -A tasks worker -Q io --concurrency=10 -P gevent
+
+# 紧急队列 Worker: 专门响应
+celery -A tasks worker -Q urgent --concurrency=4
+
+# 后台处理 Worker
+celery -A tasks worker -Q background --concurrency=1
+```
+
+### QoS 与优先级
+
+```python
+# 任务优先级（需 Redis 支持）
+app.conf.task_queue_max_priority = 10
+app.conf.task_default_priority = 5
+
+# 定义任务时指定优先级
+@app.task(queue="urgent", priority=10)
+def send_password_reset(email: str):
+    """紧急任务提到最高优先级"""
+    pass
+
+@app.task(queue="background", priority=1)
+def clean_expired_sessions():
+    """后台任务最低优先级"""
+    pass
+```
+
+## 高级错误处理
+
+### 指数退避重试
+
+```python
+@app.task(
+    bind=True,
+    max_retries=5,
+    default_retry_delay=60,    # 首次重试等待60秒
+    autoretry_for=(Exception,),
+    retry_backoff=True,         # 启用指数退避
+    retry_backoff_max=600,      # 最长等待10分钟
+    retry_jitter=True,          # 添加随机抖动避免"惊群"
+)
+def call_llm_api(self, prompt: str):
+    """LLM API 调用含自动退避重试"""
+    try:
+        response = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            json={"model": "gpt-4", "messages": [{"role": "user", "content": prompt}]},
+            timeout=30,
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.Timeout:
+        # 超时快速重试
+        raise self.retry(exc=TimeoutError("API 超时"), countdown=5)
+    except requests.HTTPError as e:
+        if e.response.status_code == 429:
+            # 限流：等待时间从响应头读取
+            wait = int(e.response.headers.get("Retry-After", 60))
+            raise self.retry(exc=e, countdown=wait)
+        elif e.response.status_code >= 500:
+            # 服务端错误：指数退避
+            raise self.retry(exc=e)
+        raise  # 4xx 客户端错误不重试
+```
+
+### 死信队列模式
+
+```python
+# 重试耗尽后转入死信，而非丢弃
+@app.task(
+    bind=True,
+    max_retries=3,
+    routing_key="document",
+)
+def process_document(self, doc_id: int):
+    try:
+        doc = fetch_document(doc_id)
+        result = analyze_document(doc)
+        return result
+    except Exception as e:
+        if self.request.retries >= self.max_retries - 1:
+            # 最后一次重试失败 → 记录到死信队列
+            dead_letter.delay(doc_id, str(e), self.request.retries)
+        raise self.retry(exc=e, countdown=2 ** self.request.retries * 10)
+
+
+# 死信处理任务（独立队列，专人排查）
+@app.task(queue="dead_letter")
+def dead_letter(doc_id: int, error: str, retries: int):
+    """记录失败任务到数据库并告警"""
+    FailedTask.objects.create(
+        task_id=dead_letter.request.id,
+        doc_id=doc_id,
+        error=error,
+        retries=retries,
+    )
+    # 发送告警
+    send_alert(f"文档 {doc_id} 处理失败: {error}")
+```
+
+## 签名与画布进阶
+
+### 签名 (Signature)
+
+```python
+# 签名是任务 + 参数的封装，可传递、组合、延迟执行
+from celery import signature
+
+# 创建签名
+process_sig = signature("tasks.process_document", args=[42], kwargs={"lang": "zh"})
+
+# 等同于 .s() 简写语法
+process_sig = process_document.s(42, lang="zh")
+
+# 部分参数（partial）
+process_sig = process_document.s(doc_id=42)  # 稍后补充其余参数
+complete_sig = process_sig.clone(args=(42, "high"), kwargs={"lang": "zh"})
+```
+
+### 画布原语 (Canvas)
+
+```python
+from celery import chain, group, chord, canvas
+
+# chain — 串联：前一个的输出作为后一个的输入
+pipeline = chain(
+    fetch_raw_data.s("https://example.com/data"),
+    parse_html.s(),
+    extract_entities.s(),
+    store_to_db.s(),
+)
+# 等价
+pipeline = fetch_raw_data.s("https://example.com/data") | parse_html.s() | extract_entities.s() | store_to_db.s()
+
+result = pipeline()
+
+# group — 并联：所有任务并行执行
+parallel = group(
+    crawl_page.s("/page/1"),
+    crawl_page.s("/page/2"),
+    crawl_page.s("/page/3"),
+)
+results = parallel()
+
+# chord — 并联 + 回调（全部完成后执行回调）
+chord(
+    group(
+        embed_document.s("/docs/doc1.pdf"),
+        embed_document.s("/docs/doc2.pdf"),
+        embed_document.s("/docs/doc3.pdf"),
+    ),
+    merge_embeddings.s(),  # 收到所有结果的列表
+)()
+
+# 使用 | 操作符的 chord 语法
+tasks = group(embed_document.s("/docs/doc1.pdf"),
+              embed_document.s("/docs/doc2.pdf")) | merge_embeddings.s()
+tasks()
+```
+
+### 不可变签名与回调
+
+```python
+# 默认情况下 chain 会将前一个结果作为第一个参数传递
+# 使用 .si() (immutable signature) 阻止这种行为
+
+@app.task
+def notify_admin(message: str):
+    """通知管理员（不需要前一步的结果）"""
+    send_email("admin@example.com", message)
+
+# 错误：notify_admin 会收到前一步的结果作为额外参数
+pipeline = process_document.s(42) | notify_admin.s("处理完成")  
+# → notify_admin("处理完成", {"result": ...})  ✓ 正确，extra 参数会被忽略
+
+# 如果不想传递前一步结果，用 immutable
+pipeline = process_document.s(42) | notify_admin.si("处理完成")
+# → notify_admin("处理完成")
+
+# 回调：在任务完成后执行
+from celery.canvas import chain
+
+@app.task(bind=True)
+def process_with_callback(self, doc_id):
+    """处理文档后自动触发回调"""
+    result = do_process(doc_id)
+
+    # 在任务内部创建链式调用
+    chain(
+        post_process.si(result),
+        notify_admin.si(f"文档 {doc_id} 处理完毕"),
+    ).apply_async()
+
+    return result
+```
+
+## Worker 调优
+
+### 并发模型选择
+
+| 并发模型 | 命令 | 适用场景 | 注意事项 |
+|---------|------|---------|---------|
+| prefork (默认) | `-P prefork` | CPU 密集型 | 进程隔离，内存占用高 |
+| gevent | `-P gevent -c 100` | IO 密集型（网络请求、文件读写） | 需 `monkey.patch_all()` |
+| threads | `-P threads -c 20` | IO 密集型 | GIL 限制 CPU 密集 |
+| solo | `-P solo` | 调试 | 单线程，阻塞式 |
+
+```python
+# 在配置中设定 Worker 默认参数
+app.conf.worker_concurrency = 4           # 默认并发数
+app.conf.worker_prefetch_multiplier = 1   # 每次只预取1个任务（配合 task_acks_late）
+app.conf.worker_max_tasks_per_child = 200 # 每个 Worker 处理200个任务后重启（防内存泄漏）
+app.conf.worker_max_memory_per_child = 500000  # 内存超过500MB自动重启
+app.conf.worker_send_task_events = True   # 发送任务事件（Flower 需要）
+```
+
+### 速率限制
+
+```python
+# 在任务装饰器上限制
+@app.task(rate_limit="10/m")  # 每分钟最多10次
+def call_rate_limited_api(param):
+    pass
+
+# 在运行时调整
+app.conf.task_annotations = {
+    "tasks.heavy_computation": {"rate_limit": "1/s"},
+    "tasks.external_api_call": {"rate_limit": "30/m"},
+}
+```
+
+## Flower 监控
+
+### 安全配置
+
+```bash
+# 启用基本认证
+celery -A tasks flower \
+    --port=5555 \
+    --basic_auth=admin:secure_password_here \
+    --url_prefix=flower \
+    --max_tasks=10000 \
+    --inspect_timeout=5000 \
+    --persistent=true \
+    --db=/data/flower.db \
+    --state_save_interval=30000
+```
+
+### 自定义指标上报
+
+```python
+# tasks.py — 自定义监控事件
+from celery import current_task
+
+@app.task(bind=True)
+def monitored_task(self):
+    # 发送自定义事件
+    self.app.events.Event("myapp-task-started", {
+        "task_id": self.request.id,
+        "agent_name": self.request.kwargs.get("agent_name"),
+    }).send(self.app.events.default_dispatcher)
+
+    try:
+        result = perform_work()
+        # 上报性能指标
+        self.app.events.Event("myapp-performance", {
+            "task_id": self.request.id,
+            "duration_ms": result.duration_ms,
+            "token_count": result.token_count,
+        }).send(self.app.events.default_dispatcher)
+        return result
+    except Exception as e:
+        self.app.events.Event("myapp-task-failed", {
+            "task_id": self.request.id,
+            "error": str(e),
+        }).send(self.app.events.default_dispatcher)
+        raise
+```
+
+### Prometheus + Grafana
+
+```python
+# 安装：pip install celery-prometheus-exporter
+
+# 启动 Prometheus exporter（独立进程）
+# celery_prometheus_exporter --broker_url=redis://localhost:6379/0 --port=8000
+
+# 暴露指标：
+# - celery_tasks_total{state="..."}        任务总数
+# - celery_tasks_duration_seconds          任务耗时
+# - celery_worker_online                   在线 Worker 数
+# - celery_task_runtime_seconds            任务运行时
+```
+
+## 生产部署
+
+### Docker 部署
+
+```dockerfile
+# Dockerfile
+FROM python:3.11-slim
+
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+
+COPY . .
+
+# 启动脚本
+COPY docker-entrypoint.sh /
+RUN chmod +x /docker-entrypoint.sh
+ENTRYPOINT ["/docker-entrypoint.sh"]
+```
+
+```bash
+#!/bin/bash
+# docker-entrypoint.sh
+set -e
+
+case "$1" in
+  worker)
+    exec celery -A tasks worker \
+      --loglevel=info \
+      --concurrency=4 \
+      --max-tasks-per-child=200 \
+      --time-limit=600 \
+      --soft-time-limit=300 \
+      --events \
+      --without-gossip \
+      --without-mingle \
+      --without-heartbeat
+    ;;
+  beat)
+    exec celery -A tasks beat \
+      --loglevel=info \
+      --pidfile=/tmp/celerybeat.pid \
+      --schedule=/tmp/celerybeat-schedule
+    ;;
+  flower)
+    exec celery -A tasks flower --loglevel=info --port=5555
+    ;;
+  *)
+    exec "$@"
+    ;;
+esac
+```
+
+```yaml
+# docker-compose.yml
+version: "3.8"
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: always
+
+  worker-llm:
+    build: .
+    command: worker
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+    deploy:
+      replicas: 3
+
+  worker-io:
+    build: .
+    command: worker
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_QUEUES=io
+    depends_on:
+      - redis
+    deploy:
+      replicas: 2
+
+  beat:
+    build: .
+    command: beat
+    depends_on:
+      - redis
+
+  flower:
+    build: .
+    command: flower
+    ports:
+      - "5555:5555"
+    depends_on:
+      - redis
+
+volumes:
+  redis_data:
+```
+
+### 优雅关闭
+
+```python
+# Worker 信号处理
+import signal
+
+@app.task(bind=True)
+def long_running_task(self):
+    self._stopped = False
+
+    def stop_requested(*args):
+        self._stopped = True
+        print(f"任务 {self.request.id} 收到停止信号，正在清理...")
+
+    signal.signal(signal.SIGTERM, stop_requested)
+
+    for chunk in stream_data():
+        if self._stopped:
+            # 保存检查点以便后续恢复
+            save_checkpoint(self.request.id, chunk.offset)
+            return {"status": "interrupted", "checkpoint": chunk.offset}
+        process_chunk(chunk)
+
+    return {"status": "completed"}
+```
+
+## 测试 Celery 任务
+
+### 单元测试
+
+```python
+# tests/test_tasks.py
+from celery import Celery
+
+# 使用 CELERY_ALWAYS_EAGER 模式（同步执行，不经过 Broker）
+@pytest.fixture
+def celery_app():
+    app = Celery("test")
+    app.conf.update(
+        task_always_eager=True,      # 同步执行
+        task_eager_propagates=True,  # 同步抛出异常
+        broker_url="memory://",
+        result_backend="cache+memory://",
+    )
+    return app
+
+
+def test_process_document_success(celery_app):
+    """测试文档处理任务"""
+    from tasks import process_document
+
+    result = process_document.delay("/test/doc.pdf")
+    assert result.successful()
+    assert "status" in result.result
+    assert result.result["status"] == "success"
+
+
+def test_process_document_retry_on_failure(celery_app, mocker):
+    """测试任务重试逻辑"""
+    from tasks import process_document
+
+    mocker.patch("tasks.parse_document", side_effect=Exception("parse error"))
+
+    with pytest.raises(Exception, match="parse error"):
+        process_document.delay("/test/doc.pdf")
+```
+
+### Mock Redis 集成测试
+
+```python
+# tests/test_integration.py
+from unittest.mock import patch, MagicMock
+from tasks import app
+
+
+def test_task_routing():
+    """验证任务路由配置"""
+    routes = app.conf.task_routes
+
+    assert "tasks.llm.*" in routes
+    assert routes["tasks.llm.*"]["queue"] == "gpu"
+
+    assert "tasks.email.*" in routes
+    assert routes["tasks.email.*"]["queue"] == "urgent"
+
+
+@patch("tasks.requests.post")
+def test_llm_call_retry(mock_post):
+    """测试 LLM 调用重试"""
+    from tasks import call_llm_api
+
+    # 前两次超时，第三次成功
+    mock_post.side_effect = [
+        requests.Timeout("timeout"),
+        requests.Timeout("timeout"),
+        MagicMock(status_code=200, json=lambda: {"choices": [{"text": "Hello"}]}),
+    ]
+
+    result = call_llm_api.delay("Hello")
+    assert result.successful()
+    assert mock_post.call_count == 3
+```
+
+## 最佳实践汇总
+
+```python
+# app.py — 完整的生产级配置示例
+from celery import Celery
+
+app = Celery("production")
+
+app.conf.update(
+    # Broker
+    broker_url="redis://redis:6379/0",
+    broker_pool_limit=30,
+    broker_connection_retry_on_startup=True,
+
+    # 结果后端
+    result_backend="redis://redis:6379/1",
+    result_expires=3600,
+    result_extended=True,
+
+    # 序列化
+    task_serializer="json",
+    result_serializer="json",
+    accept_content=["json"],
+    timezone="Asia/Shanghai",
+    enable_utc=True,
+
+    # 任务设置
+    task_acks_late=True,           # Worker 崩溃后任务重新排队
+    task_reject_on_worker_lost=True, # Worker 丢失时拒绝任务
+    task_track_started=True,
+    task_soft_time_limit=300,      # 软超时 5 分钟
+    task_time_limit=600,           # 硬超时 10 分钟
+    task_annotations={
+        "tasks.llm.*": {"soft_time_limit": 120, "time_limit": 180},
+        "tasks.document.*": {"soft_time_limit": 600, "time_limit": 900},
+    },
+
+    # Worker
+    worker_concurrency=4,
+    worker_prefetch_multiplier=1,
+    worker_max_tasks_per_child=200,
+    worker_max_memory_per_child=500000,
+    worker_send_task_events=True,
+    worker_disable_rate_limits=False,
+
+    # 路由
+    task_routes={
+        "tasks.llm.*":       {"queue": "gpu"},
+        "tasks.document.*":  {"queue": "io"},
+        "tasks.email.*":     {"queue": "urgent"},
+        "tasks.background.*": {"queue": "background"},
+    },
+
+    # 定时任务
+    beat_schedule={
+        "sync-kb-every-hour": {
+            "task": "tasks.background.sync_knowledge_base",
+            "schedule": crontab(minute=0),
+        },
+        "cleanup-daily": {
+            "task": "tasks.background.clean_expired_sessions",
+            "schedule": crontab(hour=3, minute=0),
+        },
+        "report-daily": {
+            "task": "tasks.background.generate_report",
+            "schedule": crontab(hour=9, minute=0),
+        },
+    },
+)
+```

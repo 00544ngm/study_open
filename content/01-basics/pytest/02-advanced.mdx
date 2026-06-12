@@ -1,0 +1,151 @@
+---
+title: 进阶测试技巧
+order: 2
+difficulty: intermediate
+estimated_time: 30min
+tags: [Pytest, 测试, Mock, Python, Agent]
+---
+
+## Mock 基础
+
+```python
+from unittest.mock import Mock, patch
+
+# 手动 Mock
+mock_llm = Mock()
+mock_llm.invoke.return_value = "模拟回复"
+result = mock_llm.invoke("你好")
+assert result == "模拟回复"
+```
+
+## 在测试中 Mock LLM
+
+```python
+import pytest
+from unittest.mock import patch
+
+def test_agent_response():
+    """模拟 LLM 调用，不消耗真实 API"""
+    with patch("app.agent.ChatOpenAI") as mock:
+        mock_instance = mock.return_value
+        mock_instance.invoke.return_value = "模拟的 Agent 回复"
+
+        from app.agent import run_agent
+        result = run_agent("你好")
+        assert "模拟" in result
+
+# 或使用 fixture
+@pytest.fixture
+def mock_llm():
+    with patch("app.agent.ChatOpenAI") as mock:
+        instance = mock.return_value
+        instance.invoke.return_value = "Mocked response"
+        yield instance
+
+def test_with_fixture(mock_llm):
+    from app.agent import run_agent
+    result = run_agent("test")
+    mock_llm.invoke.assert_called_once()
+```
+
+## 测试 LLM 结构化输出
+
+```python
+from pydantic import BaseModel
+from unittest.mock import Mock
+
+class Weather(BaseModel):
+    city: str
+    temperature: float
+
+def test_structured_output():
+    mock = Mock()
+    mock.with_structured_output.return_value.invoke.return_value = Weather(
+        city="北京",
+        temperature=22.5,
+    )
+
+    result = mock.with_structured_output(Weather).invoke("天气")
+    assert result.city == "北京"
+    assert result.temperature == 22.5
+```
+
+## conftest 共享 Fixture
+
+```python
+# conftest.py — 自动被同级及子目录测试共享
+import pytest
+from unittest.mock import patch
+
+@pytest.fixture(autouse=True)
+def mock_redis():
+    """自动 Mock Redis，所有测试无需手动配置"""
+    with patch("redis.Redis") as mock:
+        mock.return_value.ping.return_value = True
+        yield mock
+
+@pytest.fixture
+def test_db():
+    """测试数据库连接"""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+    engine = create_engine("sqlite:///:memory:")
+    # 创建表...
+    yield engine
+```
+
+## 测试 Agent 工具调用
+
+```python
+def test_agent_tool_call():
+    """验证 Agent 在正确场景下调用了工具"""
+    from unittest.mock import ANY
+
+    mock_llm = Mock()
+    mock_llm.invoke.return_value = "查询结果：北京 22°C"
+
+    # 假设 Agent 内部调用 get_weather 工具
+    with patch("app.agent.get_weather") as mock_weather:
+        mock_weather.return_value = {"temperature": 22}
+
+        from app.agent import agent_query
+        result = agent_query("北京天气怎么样？")
+
+        # 验证工具被调用的参数
+        mock_weather.assert_called_with(city="北京")
+```
+
+## 异步测试
+
+```python
+import pytest
+
+@pytest.mark.asyncio
+async def test_async_agent():
+    """测试异步 Agent"""
+    from app.agent import async_agent
+    result = await async_agent.run("你好")
+    assert result is not None
+
+# 需要安装: pip install pytest-asyncio
+```
+
+## 测试覆盖率
+
+```bash
+pip install pytest-cov
+
+pytest --cov=src --cov-report=term-missing
+pytest --cov=src --cov-report=html  # 生成 HTML 报告
+```
+
+## 实用插件
+
+| 插件 | 用途 |
+|------|------|
+| pytest-cov | 测试覆盖率 |
+| pytest-asyncio | 异步测试支持 |
+| pytest-xdist | 并行执行测试 |
+| pytest-mock | 增强 Mock 支持 |
+| pytest-timeout | 超时控制 |
+| pytest-vcr | 录制/回放 HTTP 请求 |

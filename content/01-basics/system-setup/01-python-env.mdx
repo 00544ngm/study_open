@@ -1,0 +1,56 @@
+---
+title: Python 环境搭建
+order: 1
+difficulty: beginner
+estimated_time: 15min
+tags: [环境配置, 基础]
+---
+
+## 入门
+
+```bash
+# 检查是否已安装
+python --version
+pip --version
+
+# macOS / Linux
+brew install python      # macOS
+sudo apt install python3 python3-pip  # Ubuntu
+
+# Windows
+# 从 python.org 下载安装包，勾选 "Add Python to PATH"
+```
+
+## 核心
+
+### 虚拟环境（必须养成习惯）
+
+```bash
+# 创建虚拟环境
+python -m venv .venv
+
+# 激活
+source .venv/bin/activate   # Linux/macOS
+.venv\Scripts\activate      # Windows
+
+# 安装依赖
+pip install openai langchain fastapi uvicorn
+
+# 导出依赖
+pip freeze > requirements.txt
+
+# 安装项目依赖
+pip install -r requirements.txt
+```
+
+### Python 版本管理
+
+```bash
+# 安装 pyenv (macOS/Linux)
+curl https://pyenv.run | bash
+pyenv install 3.12
+pyenv global 3.12
+
+# Windows: 使用 pyenv-win
+# 或直接从 python.org 下载
+```

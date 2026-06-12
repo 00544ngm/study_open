@@ -1,0 +1,78 @@
+---
+title: Prompt 设计基础
+order: 1
+difficulty: beginner
+estimated_time: 15min
+tags: [Prompt, LLM]
+---
+
+## 入门
+
+```text
+系统提示词（System Prompt）：
+你是一个专业的 AI Agent 开发助手。
+- 回答要简洁准确
+- 提供代码示例
+- 如果不确定，直接说不知道
+```
+
+## 核心
+
+### Agent 系统提示词模板
+
+```python
+AGENT_SYSTEM_PROMPT = """你是 {agent_name}，一个 AI 助手。
+
+## 能力
+- 你拥有以下工具：{tools_list}
+- 需要时主动使用工具
+- 一次只调用一个工具
+
+## 行为准则
+1. 分析用户需求后选择合适工具
+2. 工具返回结果后，用自然语言总结
+3. 如果工具调用失败，告诉用户原因
+4. 保持对话上下文的连贯性
+
+## 输出格式
+{output_format}
+"""
+
+# 动态构建 Prompt
+def build_system_prompt(agent_name: str, tools: list[dict]) -> str:
+    return AGENT_SYSTEM_PROMPT.format(
+        agent_name=agent_name,
+        tools_list="\n".join(f"- {t['name']}: {t['description']}" for t in tools),
+        output_format="使用自然语言回复用户"
+    )
+```
+
+## 进阶
+
+### Few-shot Prompting
+
+```python
+FEW_SHOT_EXAMPLES = [
+    {"user": "查询北京的天气", "assistant": "让我搜索一下北京的天气。\n工具调用: search_weather(city='北京')"},
+    {"user": "帮我写一封邮件", "assistant": "请问收件人和主要内容是什么？"},
+]
+
+# ReAct 模式的 Prompt
+REACT_PROMPT = """Answer the following question. You have access to tools.
+
+Question: {question}
+
+Thought: Let me think about what tools I need.
+Action: tool_name
+Action Input: {{"param": "value"}}
+Observation: tool_result
+
+Thought: I now have the answer.
+Final Answer: ...
+"""
+```
+
+## 练习
+
+1. 为一个代码审查 Agent 设计系统提示词
+2. 用 ReAct 模式 Prompt 实现一个简单的推理循环

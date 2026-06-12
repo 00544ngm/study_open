@@ -1,0 +1,254 @@
+---
+title: 流式响应与实时展示
+order: 2
+difficulty: advanced
+estimated_time: 25min
+tags: [前端, Streaming, SSE, 实时]
+---
+
+## 入门
+
+流式响应让用户看到 Agent "边想边写"，体验远好于等待全部生成完毕。
+
+## 核心
+
+### Server-Sent Events (SSE)
+
+```tsx
+// app/api/chat/stream/route.ts
+import OpenAI from 'openai'
+
+const client = new OpenAI()
+
+export async function POST(req: Request) {
+  const { message } = await req.json()
+
+  const stream = await client.chat.completions.create({
+    model: 'gpt-4o',
+    messages: [{ role: 'user', content: message }],
+    stream: true,
+  })
+
+  // 创建 SSE 流
+  const encoder = new TextEncoder()
+
+  const readable = new ReadableStream({
+    async start(controller) {
+      for await (const chunk of stream) {
+        const text = chunk.choices[0]?.delta?.content || ''
+        if (text) {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ text })}\n\n`))
+        }
+      }
+      controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+      controller.close()
+    },
+  })
+
+  return new Response(readable, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    },
+  })
+}
+```
+
+### 前端消费流式响应
+
+```tsx
+// components/StreamChat.tsx
+'use client'
+import { useState, useRef } from 'react'
+
+export function StreamChat() {
+  const [messages, setMessages] = useState<Message[]>([])
+  const [currentText, setCurrentText] = useState('')
+  const abortRef = useRef<AbortController | null>(null)
+
+  async function sendMessage(input: string) {
+    const userMsg = { id: Date.now(), role: 'user', content: input, timestamp: Date.now() }
+    setMessages(prev => [...prev, userMsg])
+    setCurrentText('')
+
+    // 创建 AbortController 以便取消
+    abortRef.current = new AbortController()
+
+    try {
+      const res = await fetch('/api/chat/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: input }),
+        signal: abortRef.current.signal,
+      })
+
+      const reader = res.body!.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const data = line.slice(6)
+            if (data === '[DONE]') {
+              // 流结束，将当前文本加入消息列表
+              setMessages(prev => [...prev, {
+                id: Date.now() + 1,
+                role: 'assistant',
+                content: currentText,
+                timestamp: Date.now(),
+              }])
+              setCurrentText('')
+            } else {
+              const parsed = JSON.parse(data)
+              setCurrentText(prev => prev + parsed.text)
+            }
+          }
+        }
+      }
+    } catch (err: any) {
+      if (err.name !== 'AbortError') {
+        console.error('流错误:', err)
+      }
+    }
+  }
+
+  function stopGeneration() {
+    abortRef.current?.abort()
+  }
+
+  return (
+    <div>
+      {/* 已完成的回复 */}
+      {messages.map(msg => (
+        <ChatMessage key={msg.id} message={msg} />
+      ))}
+
+      {/* 正在生成的回复 */}
+      {currentText && (
+        <div className="flex gap-3">
+          <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center">A</div>
+          <div className="bg-gray-100 rounded-lg px-4 py-2">
+            <p>{currentText}</p>
+            <span className="inline-block w-2 h-4 bg-gray-400 animate-pulse ml-1" />
+          </div>
+        </div>
+      )}
+
+      {/* 停止按钮 */}
+      {currentText && (
+        <button onClick={stopGeneration} className="text-red-500 text-sm">
+          停止生成
+        </button>
+      )}
+    </div>
+  )
+}
+```
+
+## 进阶
+
+### Agent 推理过程展示
+
+```tsx
+// Agent 可以输出"思考链"，前端逐步展示
+type AgentEvent = {
+  type: 'thought' | 'tool_call' | 'tool_result' | 'text'
+  content: string
+  metadata?: Record<string, any>
+}
+
+function AgentStreamView({ events }: { events: AgentEvent[] }) {
+  return (
+    <div className="space-y-2">
+      {events.map((event, i) => {
+        switch (event.type) {
+          case 'thought':
+            return (
+              <div key={i} className="flex gap-2 text-gray-500 italic">
+                <span>💭</span>
+                <p>{event.content}</p>
+              </div>
+            )
+          case 'tool_call':
+            return (
+              <div key={i} className="border border-blue-200 bg-blue-50 rounded p-2">
+                <span className="text-blue-600">🔧 调用 {event.content}</span>
+                {event.metadata && (
+                  <pre className="text-xs mt-1">{JSON.stringify(event.metadata, null, 2)}</pre>
+                )}
+              </div>
+            )
+          case 'tool_result':
+            return (
+              <div key={i} className="border border-green-200 bg-green-50 rounded p-2 text-sm">
+                <span className="text-green-600">✓ 结果</span>
+                <p className="text-gray-600">{event.content}</p>
+              </div>
+            )
+          case 'text':
+            return <p key={i} className="text-gray-800">{event.content}</p>
+        }
+      })}
+    </div>
+  )
+}
+```
+
+### Agent 端输出结构化事件
+
+```python
+# Agent 端：输出结构化事件流
+async def agent_stream(question: str):
+    """生成带推理过程的事件流"""
+    # 思考
+    yield {"type": "thought", "content": "让我先搜索相关信息"}
+
+    # 工具调用
+    yield {"type": "tool_call", "content": "search_web", "metadata": {"query": question}}
+
+    # 工具结果
+    result = await search_web(question)
+    yield {"type": "tool_result", "content": result[:200]}
+
+    # 最终回答
+    response = await llm.generate(question, context=result)
+    for chunk in response:
+        yield {"type": "text", "content": chunk}
+```
+
+```python
+# FastAPI 端点
+from fastapi import FastAPI
+from fastapi.responses import StreamingResponse
+import json
+
+app = FastAPI()
+
+@app.post("/api/agent/stream")
+async def agent_endpoint(request: dict):
+    question = request["message"]
+
+    async def event_stream():
+        async for event in agent_stream(question):
+            yield f"data: {json.dumps(event)}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream"
+    )
+```
+
+## 练习
+
+1. 实现 SSE 端点，流式返回 LLM 生成的文本
+2. 前端逐词展示响应，带闪烁光标指示正在生成
+3. 扩展 AgentEvent 类型，展示思考链（思考 → 工具调用 → 结果 → 回答）

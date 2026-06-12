@@ -1,0 +1,75 @@
+---
+title: WebSocket
+order: 5
+difficulty: advanced
+estimated_time: 20min
+tags: [FastAPI, 进阶]
+---
+
+## 入门
+
+```python
+from fastapi import WebSocket
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    while True:
+        data = await websocket.receive_text()
+        await websocket.send_text(f"Echo: {data}")
+```
+
+## 核心
+
+```python
+from fastapi import WebSocket, WebSocketDisconnect
+import json
+
+class AgentWebSocket:
+    def __init__(self):
+        self.active_connections: list[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+
+    def disconnect(self, websocket: WebSocket):
+        self.active_connections.remove(websocket)
+
+    async def send_message(self, message: str, websocket: WebSocket):
+        await websocket.send_text(message)
+
+    async def broadcast(self, message: str):
+        for connection in self.active_connections:
+            await connection.send_text(message)
+
+manager = AgentWebSocket()
+
+@app.websocket("/ws/agent/{agent_id}")
+async def agent_websocket(websocket: WebSocket, agent_id: str):
+    await manager.connect(websocket)
+    try:
+        while True:
+            data = await websocket.receive_text()
+            request = json.loads(data)
+
+            # 流式返回 Agent 响应
+            async for token in run_agent(agent_id, request["message"]):
+                await manager.send_message(json.dumps({
+                    "type": "token",
+                    "content": token
+                }), websocket)
+
+            # 完成信号
+            await manager.send_message(json.dumps({
+                "type": "done"
+            }), websocket)
+
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+```
+
+## 练习
+
+1. 实现一个 WebSocket 心跳检测机制
+2. 在 WebSocket 中处理 Agent 的工具调用结果返回

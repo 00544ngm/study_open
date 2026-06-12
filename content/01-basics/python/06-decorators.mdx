@@ -1,0 +1,118 @@
+---
+title: 装饰器
+order: 6
+difficulty: intermediate
+estimated_time: 20min
+tags: [Python, 进阶]
+---
+
+## 入门
+
+装饰器是在不修改函数代码的情况下，给函数增加功能的方式：
+
+```python
+def log_call(func):
+    def wrapper(*args, **kwargs):
+        print(f"调用: {func.__name__}")
+        return func(*args, **kwargs)
+    return wrapper
+
+@log_call
+def say_hello(name):
+    print(f"Hello {name}")
+
+say_hello("Agent")  # 输出: 调用: say_hello \n Hello Agent
+```
+
+## 核心
+
+### Agent 开发中的实用装饰器
+
+```python
+import functools
+import time
+import asyncio
+from typing import Any, Callable
+
+# 1. 重试装饰器
+def retry(max_attempts: int = 3, delay: float = 1.0):
+    def decorator(func: Callable) -> Callable:
+        @functools.wraps(func)
+        async def wrapper(*args, **kwargs) -> Any:
+            last_error = None
+            for attempt in range(max_attempts):
+                try:
+                    return await func(*args, **kwargs)
+                except Exception as e:
+                    last_error = e
+                    print(f"第 {attempt + 1} 次失败: {e}")
+                    if attempt < max_attempts - 1:
+                        await asyncio.sleep(delay * (2 ** attempt))
+            raise last_error
+        return wrapper
+    return decorator
+
+@retry(max_attempts=3, delay=0.5)
+async def call_llm(prompt: str) -> str:
+    # 模拟可能失败的 LLM 调用
+    return f"response: {prompt}"
+
+# 2. 计时装饰器
+def timer(func: Callable) -> Callable:
+    @functools.wraps(func)
+    async def wrapper(*args, **kwargs) -> Any:
+        start = time.time()
+        result = await func(*args, **kwargs)
+        duration = time.time() - start
+        print(f"{func.__name__} 耗时: {duration:.2f}s")
+        return result
+    return wrapper
+
+@timer
+async def search_and_analyze(query: str) -> str:
+    await asyncio.sleep(2)
+    return f"分析结果: {query}"
+```
+
+## 进阶
+
+### 带状态的装饰器（用于监控和统计）
+
+```python
+class StatsCollector:
+    def __init__(self):
+        self.stats = {}
+
+    def collect(self, name: str = None):
+        def decorator(func: Callable) -> Callable:
+            @functools.wraps(func)
+            async def wrapper(*args, **kwargs) -> Any:
+                nonlocal name
+                name = name or func.__name__
+                start = time.time()
+                result = await func(*args, **kwargs)
+                duration = time.time() - start
+
+                if name not in self.stats:
+                    self.stats[name] = {"calls": 0, "total_time": 0}
+                self.stats[name]["calls"] += 1
+                self.stats[name]["total_time"] += duration
+                return result
+            return wrapper
+        return decorator
+
+stats = StatsCollector()
+
+@stats.collect("llm_call")
+async def call_llm(prompt: str) -> str:
+    await asyncio.sleep(1)
+    return "response"
+
+# 查看统计
+print(stats.stats)
+```
+
+## 练习
+
+1. 实现一个 `@rate_limit` 装饰器，限制函数每分钟最多调用 N 次
+2. 实现一个 `@cache` 装饰器，缓存函数结果（TTL 可配置）

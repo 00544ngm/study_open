@@ -1,0 +1,88 @@
+---
+title: Redis 基础
+order: 1
+difficulty: beginner
+estimated_time: 20min
+tags: [Redis, 缓存]
+---
+
+## 入门
+
+```python
+import redis.asyncio as redis
+
+client = redis.Redis(host='localhost', port=6379, db=0)
+
+# 字符串
+await client.set('agent:status', 'running')
+status = await client.get('agent:status')
+
+# 带过期时间
+await client.setex('session:token', 3600, 'token_value')
+```
+
+## 核心
+
+### Agent 项目中的 Redis 应用
+
+```python
+import redis.asyncio as redis
+import json
+from typing import Optional
+
+class AgentCache:
+    def __init__(self):
+        self.client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+    # 缓存 LLM 响应
+    async def cache_response(self, prompt: str, response: str, ttl: int = 3600):
+        key = f"cache:llm:{hash(prompt)}"
+        await self.client.setex(key, ttl, response)
+
+    async def get_cached(self, prompt: str) -> Optional[str]:
+        key = f"cache:llm:{hash(prompt)}"
+        return await self.client.get(key)
+
+    # Session 存储
+    async def save_session(self, session_id: str, data: dict, ttl: int = 7200):
+        await self.client.setex(
+            f"session:{session_id}",
+            ttl,
+            json.dumps(data)
+        )
+
+    # 速率限制
+    async def check_rate_limit(self, user_id: str, limit: int = 10, window: int = 60) -> bool:
+        key = f"ratelimit:{user_id}"
+        current = await self.client.incr(key)
+        if current == 1:
+            await self.client.expire(key, window)
+        return current <= limit
+
+    # 消息队列（用于 Agent 任务调度）
+    async def push_task(self, task: dict):
+        await self.client.rpush("agent:tasks", json.dumps(task))
+
+    async def pop_task(self) -> Optional[dict]:
+        _, data = await self.client.blpop("agent:tasks", timeout=5)
+        return json.loads(data) if data else None
+```
+
+## 进阶
+
+```python
+# 发布订阅（实时 Agent 状态更新）
+async def publish_agent_status(agent_id: str, status: str):
+    await client.publish(f"agent:{agent_id}:status", status)
+
+async def subscribe_agent_status(agent_id: str):
+    pubsub = client.pubsub()
+    await pubsub.subscribe(f"agent:{agent_id}:status")
+    async for message in pubsub.listen():
+        print(f"Agent {agent_id} 状态: {message['data']}")
+```
+
+## 练习
+
+1. 实现一个基于 Redis 的分布式锁，防止同一个 Agent 被并发调用
+2. 用 Redis List 实现一个 Agent 任务队列，支持优先级

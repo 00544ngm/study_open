@@ -1,0 +1,163 @@
+---
+title: 文本分块策略
+order: 2
+difficulty: intermediate
+estimated_time: 20min
+tags: [Embedding, 分块, RAG]
+---
+
+## 入门
+
+文本分块（Chunking）是 RAG 系统的关键环节，分块策略直接影响检索质量。
+
+## 核心
+
+### 基础分块方法
+
+```python
+def fixed_size_chunk(text: str, chunk_size: int = 500, overlap: int = 50) -> list[str]:
+    """固定大小分块 + 重叠"""
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = start + chunk_size
+        chunk = text[start:end]
+        chunks.append(chunk)
+        start = end - overlap  # 重叠防止切断上下文
+    return chunks
+
+def sentence_chunk(text: str, max_sentences: int = 5) -> list[str]:
+    """按句子分块"""
+    import re
+    sentences = re.split(r'[。！？.!?]', text)
+    sentences = [s.strip() for s in sentences if s.strip()]
+
+    chunks = []
+    for i in range(0, len(sentences), max_sentences):
+        chunk = "。".join(sentences[i:i + max_sentences])
+        chunks.append(chunk)
+    return chunks
+```
+
+### LangChain 分块器
+
+```python
+from langchain.text_splitter import (
+    RecursiveCharacterTextSplitter,
+    MarkdownTextSplitter,
+    PythonCodeTextSplitter,
+)
+
+# 递归字符分块（推荐）
+text_splitter = RecursiveCharacterTextSplitter(
+    chunk_size=500,
+    chunk_overlap=50,
+    separators=["\n\n", "\n", "。", ".", " ", ""],
+    length_function=len,
+)
+
+chunks = text_splitter.split_text(long_text)
+
+# Markdown 分块（保留标题层级）
+markdown_splitter = MarkdownTextSplitter(
+    chunk_size=500,
+    chunk_overlap=50
+)
+
+# 代码分块
+python_splitter = PythonCodeTextSplitter(
+    chunk_size=1000,
+    chunk_overlap=100
+)
+```
+
+### 分块参数选择
+
+```python
+chunk_strategies = {
+    "代码": {"chunk_size": 500, "separator": "\n"},
+    "文档": {"chunk_size": 1000, "separator": "\n\n"},
+    "对话": {"chunk_size": 200, "separator": "\n"},
+    "论文": {"chunk_size": 1500, "separator": "。"},
+}
+
+def select_chunk_strategy(content_type: str) -> dict:
+    """根据内容类型选择分块策略"""
+    return chunk_strategies.get(content_type, {
+        "chunk_size": 500,
+        "separator": "\n\n"
+    })
+```
+
+## 进阶
+
+### 语义分块
+
+```python
+from openai import OpenAI
+
+client = OpenAI()
+
+def semantic_chunk(text: str, min_chunk_size: int = 300) -> list[str]:
+    """根据语义边界分块（检测主题变化）"""
+    # 先用 LLM 识别主题变化点
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": "找出文本中主题变化的位置，返回变化处的行号"},
+            {"role": "user", "content": text[:3000]}
+        ]
+    )
+
+    # 按主题变化点分块
+    lines = text.split("\n")
+    cut_points = [0]  # 实际应解析 LLM 返回的行号
+    cut_points.append(len(lines))
+
+    chunks = []
+    for i in range(len(cut_points) - 1):
+        chunk = "\n".join(lines[cut_points[i]:cut_points[i + 1]])
+        if len(chunk) >= min_chunk_size:
+            chunks.append(chunk)
+
+    return chunks
+```
+
+### 分块评估
+
+```python
+class ChunkEvaluator:
+    """评估不同分块策略的检索效果"""
+
+    def __init__(self, retriever):
+        self.retriever = retriever
+
+    def evaluate_chunk_strategy(self, test_queries: list[str],
+                                documents: list[str],
+                                chunk_func) -> dict:
+        """测试分块策略对检索效果的影响"""
+        chunks = chunk_func(documents)
+
+        # 索引分块
+        self.retriever.index(chunks)
+
+        # 测试检索
+        total_relevant = 0
+        for query in test_queries:
+            results = self.retriever.search(query, top_k=3)
+            # 计算命中率
+            relevant = sum(1 for r in results if r.score > 0.7)
+            total_relevant += relevant
+
+        return {
+            "total_chunks": len(chunks),
+            "avg_chunk_size": sum(len(c) for c in chunks) / len(chunks) if chunks else 0,
+            "hit_rate": total_relevant / (len(test_queries) * 3),
+        }
+```
+
+## 练习
+
+1. 对比固定分块、递归分块和语义分块对检索质量的差异
+2. 为不同类型的内容（Markdown、代码、对话日志）选择最佳分块参数
+3. 实现分块评估器，用 hit_rate 指标比较不同策略

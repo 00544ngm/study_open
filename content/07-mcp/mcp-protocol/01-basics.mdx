@@ -1,0 +1,70 @@
+---
+title: MCP 协议基础
+order: 1
+difficulty: intermediate
+estimated_time: 20min
+tags: [MCP, 协议]
+---
+
+## 入门
+
+```text
+MCP 核心概念：
+
+Host          → 需要访问数据的 AI 应用 (Claude Desktop, Cursor, Claude Code)
+Client        → 与 MCP Server 建立一对一连接的客户端
+Server        → 提供工具、资源、提示的轻量级服务
+Transport     → 通信方式 (stdio, SSE)
+```
+
+## 核心
+
+### MCP 的三类能力
+
+```text
+1. Tools（工具）
+   - Agent 可以调用的函数
+   - 类似 OpenAI Function Calling
+   - 需要用户授权
+
+2. Resources（资源）
+   - 暴露给 Agent 的数据
+   - 类似 GET 请求
+   - 可自动同步
+
+3. Prompts（提示模板）
+   - 预定义的 Prompt 模板
+   - 方便复用
+```
+
+### Python MCP Server 示例
+
+```python
+# mcp_server.py
+from mcp.server.fastmcp import FastMCP
+
+mcp = FastMCP("learning-assistant")
+
+@mcp.tool()
+def search_notes(query: str) -> str:
+    """搜索学习笔记"""
+    return f"搜索结果: {query}"
+
+@mcp.tool()
+def get_topic_summary(topic: str) -> str:
+    """获取知识点摘要"""
+    return f"{topic} 的核心概念..."
+
+@mcp.resource("notes://latest")
+def latest_notes() -> str:
+    """获取最近的学习笔记"""
+    return "最近笔记内容..."
+
+if __name__ == "__main__":
+    mcp.run()
+```
+
+## 练习
+
+1. 创建一个 MCP Server，暴露一个读取本地笔记的工具
+2. 在 Claude Desktop 中配置并测试该 MCP Server
