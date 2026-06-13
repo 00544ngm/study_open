@@ -15,11 +15,18 @@ export default function Sidebar() {
     return match?.[1] || "";
   });
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [mounted, setMounted] = useState(false);
+  const [stageProgress, setStageProgress] = useState<Record<string, { completed: number; total: number }>>({});
   const [topicCounts, setTopicCounts] = useState<Record<string, number>>({});
   const [interestedCount, setInterestedCount] = useState(0);
 
-  useEffect(() => { setMounted(true); }, []);
+  // 延迟从 localStorage 读取进度，避免水合不匹配
+  useEffect(() => {
+    const progress: Record<string, { completed: number; total: number }> = {};
+    for (const stage of stages) {
+      progress[stage.id] = getStageProgress(stage.id, stage.topics.length);
+    }
+    setStageProgress(progress);
+  }, []);
 
   useEffect(() => {
     const updateInterested = () => {
@@ -59,7 +66,7 @@ export default function Sidebar() {
       {/* Stages */}
       <nav className="flex-1 overflow-y-auto py-4 px-2">
         {stages.map((stage) => {
-          const progress = getStageProgress(stage.id, stage.topics.length);
+          const progress = stageProgress[stage.id] || { completed: 0, total: stage.topics.length };
           const isExpanded = expanded === stage.id;
           const isStageActive = pathname.startsWith(`/stages/${stage.id}`);
 
@@ -78,8 +85,8 @@ export default function Sidebar() {
                 <span className="flex-1 text-left font-medium">
                   {stage.number}. {stage.title}
                 </span>
-                {mounted && progress.total > 0 && (
-                  <span className="text-xs text-[var(--text-muted)]" suppressHydrationWarning>
+                {progress.total > 0 && (
+                  <span className="text-xs text-[var(--text-muted)]">
                     {progress.completed}/{progress.total}
                   </span>
                 )}
@@ -108,7 +115,7 @@ export default function Sidebar() {
                           isTopicActive ? "text-[var(--color-accent)]" : "text-[var(--text-muted)]"
                         )} />
                         <span className="flex-1 truncate">{topic.title}</span>
-                        {mounted && topicCounts[`${stage.id}/${topic.id}`] !== undefined && (
+                        {topicCounts[`${stage.id}/${topic.id}`] !== undefined && (
                           <span className="text-xs text-[var(--text-muted)]">
                             {topicCounts[`${stage.id}/${topic.id}`]}
                           </span>
