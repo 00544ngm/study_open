@@ -1,0 +1,103 @@
+---
+title: TypeScript 高级类型
+order: 2
+difficulty: intermediate
+estimated_time: 30min
+tags: [TypeScript, 高级类型]
+---
+
+## 进阶
+
+### 条件类型
+
+根据输入类型动态决定输出类型：
+
+```typescript
+// 条件类型：T 是 string 吗？是则返回 number，否则返回 boolean
+type IsString<T> = T extends string ? number : boolean;
+
+let a: IsString<string> = 42;       // ✅ number
+let b: IsString<number> = false;    // ✅ boolean
+
+// 实际应用：函数重载的泛型版本
+type ToolResponse<T> = 
+  T extends "read" ? { content: string } :
+  T extends "write" ? { success: boolean } :
+  T extends "search" ? { results: string[] } :
+  never;
+
+// 使用
+async function runTool<T extends "read" | "write">(
+  type: T
+): Promise<ToolResponse<T>> {
+  // 返回类型根据输入自动变化
+}
+```
+
+### 模板字面量类型
+
+```typescript
+// 类型级别的字符串模板！
+type EventName = `agent:${"start" | "stop" | "error"}`;
+// 等价于: "agent:start" | "agent:stop" | "agent:error"
+
+type Permission = `can_${"read" | "write" | "delete"}_${"file" | "config"}`;
+// 6 种组合：can_read_file | can_read_config | ...
+
+// 实际应用：类型安全的事件系统
+type AgentEvent = {
+  [K in EventName]: { type: K; payload: unknown };
+}[EventName];
+```
+
+### keyof 与映射类型
+
+```typescript
+interface Agent {
+  name: string;
+  model: string;
+  temperature: number;
+  maxTokens: number;
+}
+
+// 获取所有键的联合
+type AgentKey = keyof Agent;  // "name" | "model" | "temperature" | "maxTokens"
+
+// 映射类型：将每个属性的值包装为 getter/setter
+type Getters<T> = {
+  [K in keyof T as `get${Capitalize<string & K>}`]: () => T[K];
+};
+
+type AgentGetters = Getters<Agent>;
+// { getName: () => string; getModel: () => string; ... }
+```
+
+### 类型守卫
+
+```typescript
+// 自定义类型守卫：让 AI 生成的代码更安全
+function isToolResult<T>(obj: unknown): obj is ToolResult<T> {
+  return (
+    typeof obj === "object" &&
+    obj !== null &&
+    "success" in obj &&
+    "data" in obj
+  );
+}
+
+// 使用：if 块内自动获得类型
+if (isToolResult<AgentConfig>(result)) {
+  console.log(result.data.model); // TS 知道类型
+}
+```
+
+### 类型与 AI 编程
+
+TypeScript 类型对 AI 代码生成质量的影响：
+
+```
+无类型 → AI 猜类型 → 50% 概率猜错 → 生成的代码要改
+有类型 → AI 读类型 → 90% 概率正确 → 生成的代码直接用
+```
+
+类型越精确，AI 生成的代码质量越高。

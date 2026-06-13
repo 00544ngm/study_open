@@ -8,7 +8,12 @@ tags: [Git, AI编程]
 
 ## 核心
 
-AI 修改代码按文件维度，这会导致大量的细粒度变更。需要合适的 Git 策略来管理。
+### AI 协作的 Git 挑战
+
+AI 修改代码是按文件维度的，一个对话可能涉及 5-10 个文件的改动。如果不管理好 Git，你会面临：
+- 无法逐一审查 AI 的修改
+- 无法回退有问题的部分
+- 提交历史混乱
 
 ### 推荐工作流
 
@@ -23,15 +28,97 @@ feature 分支 (AI 生成)
     └── squash merge（保持历史干净）
 ```
 
+### 阶段 1：AI 生成阶段
+
+```bash
+# 创建独立分支，不影响主分支
+git checkout -b ai/feature-order-validation
+
+# 让 AI 工作
+claude "给订单系统添加输入验证"
+
+# AI 完成后，立即查看所有改动
+git status
+git diff --stat
+```
+
+### 阶段 2：审查阶段
+
+```bash
+# 逐文件审查 AI 的修改
+git diff src/order/validator.py
+
+# 分块暂存（只接受合理的修改）
+git add -p src/order/validator.py
+# y - 接受这个 hunk
+# n - 跳过
+# s - 拆分为更小 hunk
+# e - 手动编辑
+
+# 放弃不合理的修改
+git checkout -- src/order/bad_file.py
+```
+
+### 阶段 3：整理阶段
+
+```bash
+# 查看 AI 的提交历史
+git log --oneline
+
+# 如果 AI 做了多次零碎提交，合并它们
+git rebase -i HEAD~5
+
+# 压缩提交（pick → squash）
+# 保持每个提交有意义的粒度
+```
+
 ### 关键操作
 
 ```bash
 # 审查 AI 的修改
-git diff --cached
+git diff --cached                    # 查看已暂存的
+git diff                             # 查看未暂存的
+git diff main...HEAD                 # 查看整个分支的改动
 
-# 分块暂存（只接受部分 AI 修改）
-git add -p
+# 回退部分 AI 修改
+git checkout HEAD -- src/file.py     # 恢复文件到上一提交
+git revert <commit-hash>             # 撤销某次提交
 
-# 交互式 rebase 整理 AI 的提交
-git rebase -i HEAD~5
+# 比较不同 AI 方案的差异
+git diff ai/approach-1 ai/approach-2
 ```
+
+### 提交信息规范
+
+AI 协助的提交信息应该标注来源：
+
+```
+feat(order): 添加输入验证逻辑
+
+AI 生成，人工审查后提交
+
+- 添加 Pydantic schema 校验
+- 添加空值和格式错误处理
+- 添加对应单元测试
+
+AI-generated: claude-opus-4-7
+Reviewed-by: [开发者]
+```
+
+### 避免的陷阱
+
+```
+❌ "让 AI 直接往 main 分支写代码"
+→ 无法审查，无法回退
+
+❌ "AI 一次性改了 20 个文件但不提交"
+→ 出问题了不知道回退到哪里
+
+❌ "AI 改了我不懂的代码，但我不看就直接合"
+→ 迟早出生产事故
+
+✅ 正确做法：
+   分支隔离 → 逐文件审查 → 分块暂存 → 合理提交 → 测试验证 → 合并
+```
+
+> **知识关联**：Git 工作流与[AI 代码审查](/11-ai-programming/code-review-ai/01-basics)紧密结合——审查时机、回退策略、协作流程互为补充。

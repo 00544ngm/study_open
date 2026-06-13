@@ -6,10 +6,28 @@ estimated_time: 20min
 tags: [Prometheus, 监控]
 ---
 
-## 入门
+## 概述
+
+Prometheus 是 CNCF 毕业的开源监控和告警系统，采用 **拉取（Pull）模型** 定期从目标服务采集指标。
+
+核心流程：**目标服务暴露 /metrics 端点** → **Prometheus 定期拉取** → **存储时序数据** → **Grafana 可视化**
+
+## 安装启动
 
 ```bash
-# 安装 (Linux)
+# Docker 方式（推荐开发环境）
+docker run -d \
+  --name prometheus \
+  -p 9090:9090 \
+  -v $(pwd)/prometheus.yml:/etc/prometheus/prometheus.yml \
+  prom/prometheus
+
+# 访问 http://localhost:9090 → 内置查询页面
+# 访问 http://localhost:9090/targets → 查看采集目标状态
+```
+
+```bash
+# Linux 二进制安装
 wget https://github.com/prometheus/prometheus/releases/.../prometheus-*.tar.gz
 tar xzf prometheus-*.tar.gz
 cd prometheus-*
@@ -18,41 +36,154 @@ cd prometheus-*
 ./prometheus --config.file=prometheus.yml
 
 # 默认端口 9090
-# 浏览器访问 http://localhost:9090
 ```
 
-## 核心
+## 核心概念
+
+### 指标类型
+
+| 类型 | 说明 | 适用场景 |
+|------|------|----------|
+| **Counter** | 只增不减的计数器 | 请求总数、错误总数 |
+| **Gauge** | 可增可减的值 | 当前连接数、内存使用量 |
+| **Histogram** | 分布统计（分桶） | 请求延迟分布 |
+| **Summary** | 分位数统计 | 延迟 p50/p95/p99 |
+
+### 数据模型
+
+Prometheus 每一条时序数据由 **metric name** + **labels** 唯一标识：
+
+```
+agent_requests_total{method="GET", endpoint="/api/chat", status="200"} 1024
+```
+
+- `agent_requests_total` — 指标名
+- `{method="GET", endpoint="/api/chat", status="200"}` — 标签（维度）
+- `1024` — 当前值
+- 每个时间点采样一次，形成时间序列
+
+## 配置
 
 ```yaml
 # prometheus.yml 配置
 global:
-  scrape_interval: 15s
+  scrape_interval: 15s       # 全局采集间隔
+  evaluation_interval: 15s   # 规则评估间隔
 
 scrape_configs:
   - job_name: "agent-app"
+    scrape_interval: 10s      # 覆盖全局，每 10 秒采集一次
+    static_configs:
+      - targets: ["localhost:8000"]
+        labels:
+          service: "agent-api"
+          environment: "production"
+
+  - job_name: "agent-worker"
+    static_configs:
+      - targets: ["worker:8001"]
+```
+
+### 常用配置项
+
+```yaml
+scrape_configs:
+  - job_name: "agent-app"
+    metrics_path: "/metrics"          # 指标路径，默认 /metrics
+    scheme: http                      # http 或 https
+    scrape_interval: 10s
+    scrape_timeout: 5s                # 超时时间
     static_configs:
       - targets: ["localhost:8000"]
         labels:
           service: "agent-api"
 ```
 
+## Python 接入
+
 ```python
-# Python 暴露 Prometheus 指标 (prometheus_client)
-from prometheus_client import start_http_server, Counter, Histogram
+# 安装: pip install prometheus-client
+from prometheus_client import start_http_server, Counter, Histogram, Gauge
+import time
+import random
+
+# 定义指标
+REQUESTS = Counter("agent_requests_total", "总请求数", ["method", "endpoint"])
+ERRORS = Counter("agent_errors_total", "错误总数", ["error_type"])
+LATENCY = Histogram(
+    "agent_latency_seconds",
+    "请求延迟分布",
+    buckets=[0.05, 0.1, 0.25, 0.5, 1, 2.5, 5],
+)
+ACTIVE_USERS = Gauge("agent_active_users", "当前活跃用户数")
+
+# 在业务代码中使用
+def handle_request(method: str, endpoint: str):
+    REQUESTS.labels(method=method, endpoint=endpoint).inc()
+    start = time.time()
+
+    try:
+        # 处理请求...
+        pass
+    except Exception as e:
+        ERRORS.labels(error_type=type(e).__name__).inc()
+    finally:
+        LATENCY.observe(time.time() - start)
+```
+
+### FastAPI 集成
+
+```python
+from fastapi import FastAPI, Response
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 import time
 
-REQUESTS = Counter("agent_requests_total", "总请求数")
-LATENCY = Histogram("agent_latency_seconds", "延迟分布", buckets=[0.1, 0.5, 1, 2, 5])
+app = FastAPI()
 
-# 在 FastAPI 中使用
-from prometheus_client import generate_latest
-
+# Prometheus 指标端点
 @app.get("/metrics")
 def metrics():
-    return Response(content=generate_latest(), media_type="text/plain")
+    return Response(
+        content=generate_latest(),
+        media_type=CONTENT_TYPE_LATEST,
+    )
+
+# 中间件自动记录指标
+@app.middleware("http")
+async def metrics_middleware(request, call_next):
+    start = time.time()
+    response = await call_next(request)
+    LATENCY.observe(time.time() - start)
+    REQUESTS.labels(
+        method=request.method,
+        endpoint=request.url.path,
+    ).inc()
+    return response
+```
+
+## 查询（PromQL 基础）
+
+PromQL 是 Prometheus 的查询语言，在 Web UI 的 Graph 页或 Grafana 中使用：
+
+```promql
+# 查看总请求数
+agent_requests_total
+
+# 按 endpoint 分组
+sum by(endpoint) (agent_requests_total)
+
+# 每秒增长率（1 分钟内）
+rate(agent_requests_total[1m])
+
+# p95 延迟（Histogram 需配合 le 标签）
+histogram_quantile(0.95, rate(agent_latency_seconds_bucket[5m]))
+
+# 错误率（百分比）
+sum(rate(agent_errors_total[5m])) / sum(rate(agent_requests_total[5m])) * 100
 ```
 
 ## 练习
 
-1. 下载 Prometheus 并启动，确认访问 localhost:9090
-2. 配置一个 scrape job 采集 FastAPI 的 /metrics 端点
+1. 使用 Docker 启动 Prometheus，确认访问 localhost:9090
+2. 在 FastAPI 应用中添加 /metrics 端点并配置 scrape job
+3. 在 Prometheus Web UI 的 Graph 页执行 PromQL 查询验证数据采集

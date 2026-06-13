@@ -7,7 +7,7 @@ import { stages, type Stage } from "@/data/stages";
 import { getStageProgress } from "@/lib/progress";
 import ExportProgress from "@/components/ExportProgress";
 import ProgressBar from "@/components/ProgressBar";
-import { ArrowLeft, BookOpen, Clock, CheckCircle2, ArrowRight, Zap } from "lucide-react";
+import { ArrowLeft, BookOpen, ArrowRight, Zap } from "lucide-react";
 import clsx from "clsx";
 
 function getStage(slug: string): Stage | undefined {
@@ -17,7 +17,7 @@ function getStage(slug: string): Stage | undefined {
 export default function StageContent({ slug: slugPromise }: { slug: Promise<string> }) {
   const [stage, setStage] = useState<Stage | null>(null);
   const pathname = usePathname();
-  const [slug, setSlug] = useState<string>("");
+  const [, setSlug] = useState<string>("");
   const [mounted, setMounted] = useState(false);
   const [topicCounts, setTopicCounts] = useState<Record<string, number>>({});
 
@@ -45,7 +45,7 @@ export default function StageContent({ slug: slugPromise }: { slug: Promise<stri
   return (
     <div className="max-w-4xl mx-auto">
       {/* Back link */}
-      <Link href="/" className="inline-flex items-center gap-1 text-sm text-[var(--text-muted)] hover:text-[var(--text-secondary)] mb-6">
+      <Link href="/" className="inline-flex items-center gap-1 text-sm text-[var(--text-muted, #94a3b8)] hover:text-[var(--text-secondary, #475569)] mb-6">
         <ArrowLeft className="w-4 h-4" />
         返回总览
       </Link>
@@ -54,18 +54,18 @@ export default function StageContent({ slug: slugPromise }: { slug: Promise<stri
       <div className="mb-8">
         <div className="flex items-center justify-between gap-4 mb-2">
           <div className="flex items-center gap-2">
-            <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-[var(--border-light)] text-[var(--text-secondary)]">
+            <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-[var(--border-light, #e2e8f0)] text-[var(--text-secondary, #475569)]">
               阶段 {stage.number}
             </span>
-            <span className="text-xs text-[var(--text-muted)]">{stage.subtitle}</span>
+            <span className="text-xs text-[var(--text-muted, #94a3b8)]">{stage.subtitle}</span>
           </div>
           {mounted && <ExportProgress />}
         </div>
-        <h1 className="text-2xl sm:text-3xl font-bold text-[var(--text-primary)] mb-2">
+        <h1 className="text-2xl sm:text-3xl font-bold text-[var(--text-primary, #0f172a)] mb-2">
           {stage.title}
         </h1>
-        <p className="text-[var(--text-secondary)] mb-4">{stage.description}</p>
-        <div className="flex items-center gap-4 text-sm text-[var(--text-muted)] mb-3">
+        <p className="text-[var(--text-secondary, #475569)] mb-4">{stage.description}</p>
+        <div className="flex items-center gap-4 text-sm text-[var(--text-muted, #94a3b8)] mb-3">
           <span className="flex items-center gap-1">
             <BookOpen className="w-4 h-4" />
             {stage.topics.length} 个模块
@@ -93,8 +93,8 @@ export default function StageContent({ slug: slugPromise }: { slug: Promise<stri
               className={clsx(
                 "block p-4 rounded-xl border transition-all",
                 isActive
-                  ? "border-[var(--color-accent)] bg-[var(--color-accent)]/5"
-                  : "border-[var(--border-light)] bg-[var(--bg-card)] hover:border-[var(--color-accent)] hover:shadow-sm"
+                  ? "border-[var(--color-accent, #3b82f6)] bg-[var(--color-accent, #3b82f6)]/5"
+                  : "border-[var(--border-light, #e2e8f0)] bg-[var(--bg-card, #ffffff)] hover:border-[var(--color-accent, #3b82f6)] hover:shadow-sm"
               )}
             >
               <div className="flex items-center justify-between">
@@ -102,21 +102,21 @@ export default function StageContent({ slug: slugPromise }: { slug: Promise<stri
                   <div className={clsx(
                     "w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold",
                     isActive
-                      ? "bg-[var(--color-accent)] text-white"
-                      : "bg-[var(--border-light)] text-[var(--text-secondary)]"
+                      ? "bg-[var(--color-accent, #3b82f6)] text-white"
+                      : "bg-[var(--border-light, #e2e8f0)] text-[var(--text-secondary, #475569)]"
                   )}>
                     {topic.order}
                   </div>
                   <div>
-                    <h3 className="font-medium text-[var(--text-primary)]">{topic.title}</h3>
+                    <h3 className="font-medium text-[var(--text-primary, #0f172a)]">{topic.title}</h3>
                     {mounted && topicCounts[`${stage.id}/${topic.id}`] !== undefined && (
-                      <p className="text-xs text-[var(--text-muted)] mt-0.5">
+                      <p className="text-xs text-[var(--text-muted, #94a3b8)] mt-0.5">
                         {topicCounts[`${stage.id}/${topic.id}`]} 个知识点
                       </p>
                     )}
                   </div>
                 </div>
-                <ArrowRight className="w-4 h-4 text-[var(--text-muted)]" />
+                <ArrowRight className="w-4 h-4 text-[var(--text-muted, #94a3b8)]" />
               </div>
             </Link>
           );

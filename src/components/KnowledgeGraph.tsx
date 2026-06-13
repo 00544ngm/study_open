@@ -122,7 +122,7 @@ export default function KnowledgeGraph({ showAll = false, height }: Props) {
 
   if (stages.length === 0) {
     return (
-      <div className="flex items-center justify-center h-48 text-[var(--text-muted)]">
+      <div className="flex items-center justify-center h-48 text-[var(--text-muted,#94a3b8)]">
         No stages available
       </div>
     );
@@ -152,7 +152,7 @@ export default function KnowledgeGraph({ showAll = false, height }: Props) {
             <path
               d="M 0 1 L 8 5 L 0 9"
               fill="none"
-              stroke="var(--text-muted)"
+              stroke="var(--text-muted, #94a3b8)"
               strokeWidth="1.5"
               strokeLinecap="round"
               strokeLinejoin="round"
@@ -191,7 +191,7 @@ export default function KnowledgeGraph({ showAll = false, height }: Props) {
               y1={y1}
               x2={x2}
               y2={y2}
-              stroke="var(--text-muted)"
+              stroke="var(--text-muted, #94a3b8)"
               strokeWidth={1.5}
               strokeDasharray="5 4"
               markerEnd="url(#arr)"
@@ -227,7 +227,7 @@ export default function KnowledgeGraph({ showAll = false, height }: Props) {
                   height={STAGE_H}
                   rx={12}
                   fill={`url(#grad-${stage.id})`}
-                  stroke={activeStageId === stage.id ? "var(--color-accent)" : "none"}
+                  stroke={activeStageId === stage.id ? "var(--color-accent, #3b82f6)" : "none"}
                   strokeWidth={activeStageId === stage.id ? 2 : 0}
                   style={{
                     transition: "stroke 0.2s, filter 0.2s",
@@ -328,7 +328,7 @@ export default function KnowledgeGraph({ showAll = false, height }: Props) {
                       width={TOPIC_W}
                       height={TOPIC_H}
                       rx={14}
-                      fill="var(--bg-card)"
+                      fill="var(--bg-card, #ffffff)"
                       stroke={color}
                       strokeWidth={1.5}
                       style={{

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { ArrowRight, Clock, ChevronRight } from "lucide-react";
+import { Clock, ChevronRight } from "lucide-react";
 import { getStageProgress } from "@/lib/progress";
 import type { Stage } from "@/data/stages";
 import clsx from "clsx";

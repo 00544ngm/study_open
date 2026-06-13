@@ -1,0 +1,109 @@
+---
+title: AI 协作中的冲突解决策略
+order: 2
+difficulty: advanced
+estimated_time: 30min
+tags: [Git, AI编程, 协作]
+---
+
+## 进阶
+
+### 细粒度分块暂存
+
+AI 修改文件时，经常一个文件包含多个不相关的改动：
+
+```bash
+# 逐个 hunk 审查 AI 的修改
+git add -p src/agent.py
+
+# 只接受需要的 hunk，跳过有问题的
+# y - 接受这个 hunk
+# n - 跳过这个 hunk
+# s - 拆分为更小的 hunk
+# e - 手动编辑 hunk
+```
+
+### AI 分支策略
+
+```bash
+# 每个 AI 任务一个分支
+git checkout -b ai/feature-auth-validation
+
+# AI 完成工作后，压缩提交
+git rebase -i HEAD~$(git rev-list --count HEAD)
+
+# AI 分支回退到特定文件版本
+git checkout ai/feature-auth-validation -- src/agent.py
+```
+
+### 冲突分析与解决
+
+AI 造成的冲突通常有固定模式：
+
+```python
+# 模式 1: AI 同时修改了同一个函数
+def process_request(data):
+    # <<<<<<< HEAD (人工修改)
+    # validate_input(data)
+    # =======
+    # sanitize_input(data)
+    # >>>>>>> ai-branch (AI 修改)
+
+    # 解决方案：判断哪种方式更合适，或合并两者
+    sanitize_input(data)
+    validate_input(data)
+```
+
+```python
+# 模式 2: AI 添加的导入与现有导入冲突
+# <<<<<<< HEAD
+# import json
+# =======
+# import json, yaml
+# >>>>>>> ai-branch
+
+# 解决方案：合并导入语句
+import json
+import yaml
+```
+
+### 自动冲突标记检测
+
+AI 合并后检查残留冲突标记：
+
+```bash
+#!/bin/bash
+# pre-commit hook: 检测冲突标记
+if grep -rn "^<<<<<<< \|^=======$\|^>>>>>>> " src/; then
+    echo "错误：发现未解决的冲突标记！"
+    exit 1
+fi
+```
+
+### 提交信息规范
+
+AI 的提交信息应该清晰标记 AI 参与度：
+
+```
+feat(agent): 添加输入验证逻辑
+
+AI 生成代码，人工审查后提交
+
+- 添加 Pydantic schema 校验
+- 添加空值和格式错误处理
+- 添加对应单元测试
+
+AI-generated: claude-opus-4
+Reviewed-by: [开发者名字]
+```
+
+### 工作流对比
+
+| 维度 | 手动开发 | AI 辅助 | AI 主导 |
+|------|---------|---------|--------|
+| 提交频率 | 按功能 | 按对话 | 按文件 |
+| 冲突概率 | 低 | 中 | 高 |
+| 审查重点 | 逻辑 | 正确性 | 全部 |
+| 回退粒度 | 按 commit | 按对话 | 按文件 |
+
+AI 主导模式下，建议每次 AI 修改后立即 `git commit`，方便逐文件回退。

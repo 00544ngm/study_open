@@ -1,0 +1,234 @@
+---
+title: MCP Server 开发练习
+order: 3
+difficulty: advanced
+estimated_time: 30min
+tags: [实践, MCP, Server]
+---
+
+## 练习
+
+### 目标
+
+通过动手练习掌握 MCP Server 的开发流程，包括工具注册、资源暴露和错误处理。
+
+### 练习 1：开发计算器 Server
+
+```python
+from mcp.server import Server, NotificationOptions
+from mcp.server.models import InitializationOptions
+import asyncio
+
+app = Server("calculator")
+
+
+# 1. 补全 list_tools 装饰器
+@app.list_tools()
+async def list_tools():
+    """返回可用工具列表。"""
+    return [
+        {
+            "name": "add",
+            "description": "两数相加",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "a": {"type": "number"},
+                    "b": {"type": "number"}
+                },
+                "required": ["a", "b"]
+            }
+        },
+        {
+            "name": "multiply",
+            "description": "两数相乘",
+            "inputSchema": {
+                # 你的代码：定义 multiply 的输入 schema
+                "type": "object",
+                "properties": {
+                    "a": {"type": "number"},
+                    "b": {"type": "number"}
+                },
+                "required": ["a", "b"]
+            }
+        },
+        # 你的代码：添加 "stats" 工具，接受一个 numbers 列表，返回总和、平均值、最大值、最小值
+    ]
+
+
+@app.call_tool()
+async def call_tool(name: str, arguments: dict) -> str:
+    """调用工具并返回结果。"""
+    # 你的代码：根据 name 分发到对应的处理逻辑
+    pass
+
+
+# 启动 Server
+async def main():
+    async with app.run_stdio():
+        print("Calculator MCP Server running on stdio")
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+### 练习 2：文件系统 Server
+
+```python
+import os
+from mcp.server import Server
+from mcp.server.models import InitializationOptions
+
+app = Server("file-server")
+
+
+# 1. 注册 Resources：暴露文件系统中的文件
+@app.list_resources()
+async def list_resources():
+    """列出可访问的文件资源。"""
+    resources = [
+        {
+            "uri": "file:///docs/readme.txt",
+            "name": "README",
+            "description": "项目说明文件",
+            "mimeType": "text/plain",
+        },
+        {
+            "uri": "file:///config/settings.json",
+            "name": "Settings",
+            "description": "配置文件",
+            "mimeType": "application/json",
+        },
+    ]
+    # 你的代码：添加一个 file:///logs/app.log 资源
+    return resources
+
+
+@app.read_resource()
+async def read_resource(uri: str) -> str:
+    """根据 URI 读取资源内容。"""
+    # 你的代码：根据不同的 URI 返回不同的模拟内容
+    # file:///docs/readme.txt → "欢迎使用项目"
+    # file:///config/settings.json → '{"debug": true, "port": 8080}'
+    pass
+
+
+# 2. 添加工具：文件搜索
+@app.list_tools()
+async def list_tools():
+    return [
+        {
+            "name": "search_files",
+            "description": "按文件名搜索",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string", "description": "搜索模式"}
+                },
+                "required": ["pattern"]
+            }
+        }
+    ]
+
+
+@app.call_tool()
+async def call_tool(name: str, arguments: dict) -> str:
+    if name == "search_files":
+        # 你的代码：模拟搜索，返回匹配的文件名列表
+        pass
+    return ""
+```
+
+### 练习 3：错误处理与验证
+
+```python
+class MCPError(Exception):
+    """MCP 错误基类"""
+    def __init__(self, code: int, message: str):
+        self.code = code
+        self.message = message
+
+
+class InvalidParamsError(MCPError):
+    def __init__(self, message: str = "Invalid parameters"):
+        super().__init__(-32602, message)
+
+
+class MethodNotFoundError(MCPError):
+    def __init__(self, method: str):
+        super().__init__(-32601, f"Method not found: {method}")
+
+
+class RobustServer:
+    """带错误处理的 MCP Server"""
+
+    def __init__(self):
+        self.tools = {}
+
+    def register_tool(self, name: str, handler, input_schema: dict):
+        """注册工具，包含输入验证 schema。"""
+        self.tools[name] = {"handler": handler, "schema": input_schema}
+
+    def validate_input(self, name: str, arguments: dict) -> list[str]:
+        """
+        验证输入参数。
+        检查必填字段是否存在、类型是否正确。
+        返回错误信息列表（空列表表示验证通过）。
+        """
+        # 你的代码：根据 schema 的 required 和 properties 验证
+        pass
+
+    async def call_tool(self, name: str, arguments: dict) -> dict:
+        """
+        调用工具，包含完整错误处理：
+        1. 检查工具是否存在 → MethodNotFoundError
+        2. 验证输入参数 → InvalidParamsError
+        3. 执行 handler
+        4. 捕获异常 → 返回错误码 -32603
+        """
+        # 你的代码：
+        pass
+
+
+# 测试
+async def test():
+    server = RobustServer()
+
+    def add_handler(args: dict) -> int:
+        return args["a"] + args["b"]
+
+    server.register_tool("add", add_handler, {
+        "type": "object",
+        "properties": {
+            "a": {"type": "number"},
+            "b": {"type": "number"}
+        },
+        "required": ["a", "b"]
+    })
+
+    # 正常调用
+    result = await server.call_tool("add", {"a": 1, "b": 2})
+    print(f"add(1,2) = {result}")
+
+    # 缺少参数
+    try:
+        await server.call_tool("add", {"a": 1})
+    except InvalidParamsError as e:
+        print(f"验证错误: {e.message}")
+
+    # 不存在的方法
+    try:
+        await server.call_tool("nonexistent", {})
+    except MethodNotFoundError as e:
+        print(f"方法错误: {e.message}")
+
+asyncio.run(test())
+```
+
+### 验收清单
+
+- [ ] 能用装饰器注册 Server 工具
+- [ ] 能定义工具输入 Schema
+- [ ] 能实现 Resources 的列表和读取
+- [ ] 能处理输入验证错误
+- [ ] 能实现完整的错误处理流程

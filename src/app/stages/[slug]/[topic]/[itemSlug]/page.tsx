@@ -1,4 +1,3 @@
-import { stages } from "@/data/stages";
 import KnowledgePage from "./KnowledgePage";
 
 export function generateStaticParams() {

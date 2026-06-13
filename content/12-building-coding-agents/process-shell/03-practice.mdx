@@ -1,0 +1,119 @@
+---
+title: 进程管理实战练习
+order: 3
+difficulty: advanced
+estimated_time: 35min
+tags: [实践, 进程管理, Shell]
+---
+
+## 练习
+
+### 目标
+
+实现一个进程管理器，能启动、监控、超时控制和终止子进程。
+
+### 练习 1：带超时的命令执行器
+
+```python
+import subprocess
+import threading
+
+class CommandRunner:
+    """安全的命令执行器。"""
+
+    def run(self, cmd: list[str], timeout: int = 30) -> dict:
+        """
+        执行命令并返回结果：
+        - 成功：返回 {"status": "success", "output": "..."}
+        - 超时：返回 {"status": "timeout", "output": "..."}
+        - 失败：返回 {"status": "error", "output": "..."}
+        """
+        # 你的实现
+        pass
+
+    def run_with_pty(self, cmd: list[str]) -> str:
+        """在伪终端中执行命令，返回完整输出。"""
+        # 你的实现
+        pass
+```
+
+**测试**：
+```python
+runner = CommandRunner()
+
+# 测试正常命令
+result = runner.run(["echo", "hello"])
+assert result["status"] == "success"
+assert "hello" in result["output"]
+
+# 测试超时
+result = runner.run(["sleep", "10"], timeout=1)
+assert result["status"] == "timeout"
+
+# 测试失败命令
+result = runner.run(["nonexistent_command"])
+assert result["status"] == "error"
+```
+
+### 练习 2：流式输出处理器
+
+```python
+class StreamProcessor:
+    """实时处理命令输出流。"""
+
+    def __init__(self):
+        self.matchers = []  # (pattern, callback) 列表
+
+    def on_line(self, pattern: str, callback):
+        """注册模式匹配器：当输出行匹配 pattern 时调用 callback。"""
+        pass
+
+    def execute(self, cmd: list[str]):
+        """执行命令并逐行处理输出。"""
+        pass
+```
+
+**使用示例**：
+```python
+sp = StreamProcessor()
+sp.on_line("FAIL", lambda line: print(f"⛔ 测试失败: {line}"))
+sp.on_line("PASS", lambda line: print(f"✅ 测试通过: {line}"))
+sp.on_line("Error:", lambda line: print(f"❌ 编译错误: {line}"))
+
+# 执行测试并实时监控输出
+sp.execute(["pytest", "-v"])
+```
+
+### 练习 3：进程管理器
+
+```python
+class ProcessManager:
+    """管理多个子进程的生命周期。"""
+
+    def __init__(self):
+        self.processes: dict[int, subprocess.Popen] = {}
+
+    def start(self, cmd: list[str], tag: str = "") -> int:
+        """启动进程，返回 PID。"""
+        pass
+
+    def stop(self, pid: int, force: bool = False):
+        """停止进程（先 SIGTERM，再 SIGKILL）。"""
+        pass
+
+    def stop_all(self):
+        """停止所有进程。"""
+        pass
+
+    def list(self) -> list[dict]:
+        """列出所有进程状态。"""
+        pass
+```
+
+### 验收清单
+
+- [ ] `CommandRunner` 正确处理正常/超时/失败三种情况
+- [ ] `StreamProcessor` 能实时匹配和处理输出
+- [ ] `ProcessManager` 能管理多进程生命周期
+- [ ] 超时后先 SIGTERM 再 SIGKILL
+- [ ] 所有函数包含完整类型注解

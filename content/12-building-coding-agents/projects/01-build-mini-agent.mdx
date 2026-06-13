@@ -1,0 +1,160 @@
+---
+title: 构建一个极简 AI 编程智能体
+order: 1
+difficulty: advanced
+estimated_time: 90min
+tags: [项目, 编程智能体, LLM]
+---
+
+## 项目：Mini Code Agent
+
+### 目标
+
+从零构建一个简化版的 Claude Code：通过 LLM API 调用，实现对文件的读取和编辑功能，并具备基本的命令执行能力和安全审批。
+
+### 架构
+
+```
+用户输入 → Agent Loop → LLM API
+                ↓
+          ┌─────┴──────┐
+          ↓             ↓
+    工具层          安全审批层
+   ├ FileOps       ├ Policy Engine
+   ├ ShellExec     ├ Approval Flow
+   ├ CodeSearch    └ Audit Log
+   └ LSP Client
+```
+
+### 阶段 1：Agent 循环
+
+```python
+class Agent:
+    def __init__(self, llm, tools: list[Tool], security: SecurityPolicy):
+        self.llm = llm
+        self.tools = {t.name: t for t in tools}
+        self.security = security
+        self.history = []
+
+    async def run(self, user_input: str):
+        self.history.append({"role": "user", "content": user_input})
+
+        while True:
+            response = await self.llm.chat(self.history)
+
+            if response.tool_call:
+                # 安全审批
+                approved = self.security.check(response.tool_call)
+                if approved:
+                    result = await self.tools[response.tool_call.name].execute(
+                        **response.tool_call.args
+                    )
+                    self.history.append({
+                        "role": "tool",
+                        "content": result
+                    })
+                else:
+                    self.history.append({
+                        "role": "tool",
+                        "content": "Operation rejected by security policy"
+                    })
+            else:
+                # LLM 返回最终回复
+                return response.content
+```
+
+**任务**: 实现上述 `Agent` 类的核心循环。
+
+### 阶段 2：文件操作工具
+
+```python
+class ReadFile(Tool):
+    name = "read_file"
+    description = "读取文件的指定行范围"
+
+    async def execute(self, path: str, start: int = 0, end: int | None = None):
+        with open(path) as f:
+            lines = f.readlines()
+        return "".join(lines[start:end])
+
+class EditFile(Tool):
+    name = "edit_file"
+    description = "行级文件编辑"
+
+    async def execute(self, path: str, edits: list[dict]):
+        # edits = [{line: 10, content: "new line"}, ...]
+        with open(path) as f:
+            lines = f.readlines()
+        for edit in edits:
+            lines[edit["line"]] = edit["content"] + "\n"
+        with open(path, "w") as f:
+            f.writelines(lines)
+        return f"Edited {len(edits)} lines"
+```
+
+**任务**: 实现 `ReadFile` 和 `EditFile` 工具，包含备份和回滚机制。
+
+### 阶段 3：命令执行工具
+
+```python
+class ShellExec(Tool):
+    name = "execute_command"
+    description = "执行 shell 命令"
+
+    async def execute(self, command: str, timeout: int = 30):
+        try:
+            proc = await asyncio.create_subprocess_shell(
+                command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(), timeout=timeout
+            )
+            return stdout.decode() or stderr.decode()
+        except asyncio.TimeoutError:
+            proc.kill()
+            return f"Command timed out after {timeout}s"
+```
+
+**任务**: 实现 `ShellExec` 工具，加入超时和输出截断。
+
+### 阶段 4：安全审批
+
+```python
+class SecurityPolicy:
+    def check(self, tool_call) -> bool:
+        if tool_call.name == "execute_command":
+            return self._check_command(tool_call.args["command"])
+        return True
+
+    def _check_command(self, cmd: str) -> bool:
+        dangerous = ["rm -rf /", "sudo", "> /dev/sda"]
+        return not any(d in cmd for d in dangerous)
+```
+
+**任务**: 实现安全审批层，加入确认流程。
+
+### 阶段 5：集成测试
+
+```python
+async def test_agent_reads_file():
+    agent = create_test_agent()
+    result = await agent.run("读取 main.py 的前 10 行")
+    assert "def main" in result
+
+async def test_agent_denies_dangerous():
+    agent = create_test_agent()
+    result = await agent.run("执行 rm -rf /")
+    assert "rejected" in result
+```
+
+**任务**: 编写集成测试，验证 Agent 的完整工作流。
+
+### 验收标准
+
+- [ ] Agent 能读取文件并返回内容
+- [ ] Agent 能编辑文件指定行
+- [ ] Agent 能执行 shell 命令并返回输出
+- [ ] 危险操作被安全策略拦截
+- [ ] 测试覆盖核心路径

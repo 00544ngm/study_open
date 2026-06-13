@@ -1,0 +1,241 @@
+---
+title: 工作流设计模式练习
+order: 3
+difficulty: advanced
+estimated_time: 25min
+tags: [实践, 企业级, 工作流]
+---
+
+## 练习
+
+### 目标
+
+通过动手练习掌握 Agent 工作流的四种设计模式：Chain、Router、Parallel、Orchestrator。
+
+### 练习 1：Chain 模式
+
+```python
+from typing import Any, Callable
+
+
+class ChainStep:
+    """工作流中的一个步骤"""
+    def __init__(self, name: str, handler: Callable[[Any], Any]):
+        self.name = name
+        self.handler = handler
+
+
+class ChainWorkflow:
+    """链式工作流：A → B → C → D"""
+
+    def __init__(self):
+        self.steps: list[ChainStep] = []
+
+    def add_step(self, step: ChainStep):
+        self.steps.append(step)
+
+    def execute(self, initial_input: Any) -> Any:
+        """
+        依次执行每个步骤，前一步的输出作为后一步的输入。
+        如果某一步抛出异常，整个工作流终止。
+        """
+        # 你的代码：
+        pass
+
+
+# 测试
+def validate_input(data: dict) -> dict:
+    print(f"验证输入: {data}")
+    if not data.get("text"):
+        raise ValueError("输入不能为空")
+    return data
+
+def translate_text(data: dict) -> dict:
+    print(f"翻译: {data['text']}")
+    data["translated"] = f"[EN] {data['text']}"
+    return data
+
+def summarize_text(data: dict) -> dict:
+    print(f"总结: {data['translated']}")
+    data["summary"] = f"摘要: {data['translated'][:20]}..."
+    return data
+
+chain = ChainWorkflow()
+chain.add_step(ChainStep("validate", validate_input))
+chain.add_step(ChainStep("translate", translate_text))
+chain.add_step(ChainStep("summarize", summarize_text))
+
+result = chain.execute({"text": "今天天气真好"})
+print(f"最终结果: {result}")
+```
+
+### 练习 2：Router 模式
+
+```python
+from typing import Any, Callable
+
+
+class RouterWorkflow:
+    """路由模式：根据输入分发到不同的处理分支"""
+
+    def __init__(self):
+        self.routes: dict[str, Callable] = {}
+        self.default_handler: Callable | None = None
+
+    def add_route(self, category: str, handler: Callable):
+        """注册路由。"""
+        self.routes[category] = handler
+
+    def set_default(self, handler: Callable):
+        """设置默认处理器。"""
+        self.default_handler = handler
+
+    def classify(self, input_text: str) -> str:
+        """
+        对输入进行分类，返回类别名称。
+        简单实现：关键词匹配
+        - 包含"投诉"、"退款" → "complaint"
+        - 包含"价格"、"购买" → "sales"
+        - 包含"密码"、"登录" → "tech_support"
+        - 其他 → 走默认
+        """
+        # 你的代码：
+        pass
+
+    def execute(self, input_text: str) -> Any:
+        """执行路由分发。"""
+        category = self.classify(input_text)
+        handler = self.routes.get(category, self.default_handler)
+        if handler:
+            return handler(input_text)
+        return "无法处理"
+
+
+# 测试
+def handle_complaint(text: str) -> str:
+    return f"投诉处理: 已记录您的投诉「{text}」，将在24小时内联系您"
+
+def handle_sales(text: str) -> str:
+    return f"销售咨询: 关于「{text}」，我们的报价是..."
+
+def handle_tech(text: str) -> str:
+    return f"技术支持: 针对「{text}」，请尝试以下步骤..."
+
+router = RouterWorkflow()
+router.add_route("complaint", handle_complaint)
+router.add_route("sales", handle_sales)
+router.add_route("tech_support", handle_tech)
+router.set_default(lambda x: f"转接人工: {x}")
+
+# 测试不同输入
+tests = [
+    "我想投诉产品质量问题",
+    "这个产品多少钱",
+    "我忘记密码了",
+    "今天天气怎么样",
+]
+for t in tests:
+    print(f"输入: {t}")
+    print(f"输出: {router.execute(t)}")
+    print("---")
+```
+
+### 练习 3：Parallel 模式
+
+```python
+import asyncio
+from typing import Any, Callable, List
+from dataclasses import dataclass, field
+
+
+@dataclass
+class ParallelTask:
+    name: str
+    handler: Callable
+    args: tuple = ()
+    result: Any = None
+    error: str | None = None
+
+
+class ParallelWorkflow:
+    """并行模式：多个任务同时执行，等待所有完成"""
+
+    def __init__(self, max_concurrency: int = 5):
+        self.max_concurrency = max_concurrency
+
+    async def run_task(self, task: ParallelTask) -> ParallelTask:
+        """执行单个任务，捕获异常。"""
+        try:
+            if asyncio.iscoroutinefunction(task.handler):
+                task.result = await task.handler(*task.args)
+            else:
+                task.result = task.handler(*task.args)
+        except Exception as e:
+            task.error = str(e)
+        return task
+
+    async def execute(self, tasks: List[ParallelTask]) -> List[ParallelTask]:
+        """
+        并行执行所有任务。
+        使用 asyncio.Semaphore 控制并发数。
+        返回所有任务的结果（包含错误信息）。
+        """
+        # 你的代码：
+        pass
+
+
+class AggregateWorkflow(ParallelWorkflow):
+    """并行 + 聚合模式"""
+
+    def __init__(self, aggregator: Callable[[List[Any]], Any], max_concurrency: int = 5):
+        super().__init__(max_concurrency)
+        self.aggregator = aggregator
+
+    async def execute_and_aggregate(self, tasks: List[ParallelTask]) -> Any:
+        """
+        并行执行任务，然后聚合结果。
+        过滤掉出错的任务，只聚合成功的。
+        """
+        results = await self.execute(tasks)
+        successful = [t.result for t in results if t.error is None]
+        if successful:
+            return self.aggregator(successful)
+        return "所有任务失败"
+
+
+# 测试
+async def search_web(query: str) -> str:
+    await asyncio.sleep(0.5)
+    return f"搜索 '{query}' 的结果"
+
+async def search_docs(query: str) -> str:
+    await asyncio.sleep(0.3)
+    return f"文档 '{query}' 的结果"
+
+async def search_kb(query: str) -> str:
+    await asyncio.sleep(0.4)
+    return f"知识库 '{query}' 的结果"
+
+def merge_results(results: list) -> str:
+    return "\n".join(f"- {r}" for r in results)
+
+workflow = AggregateWorkflow(merge_results, max_concurrency=3)
+
+tasks = [
+    ParallelTask("web", search_web, ("AI Agent",)),
+    ParallelTask("docs", search_docs, ("AI Agent",)),
+    ParallelTask("kb", search_kb, ("AI Agent",)),
+]
+
+result = await workflow.execute_and_aggregate(tasks)
+print("聚合结果:")
+print(result)
+```
+
+### 验收清单
+
+- [ ] 能实现 Chain 模式（顺序执行）
+- [ ] 能实现 Router 模式（条件分发）
+- [ ] 能实现 Parallel 模式（并发执行 + 聚合）
+- [ ] 能处理工作流中的错误
+- [ ] 理解四种模式的适用场景

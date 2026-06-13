@@ -1,0 +1,138 @@
+---
+title: 模型微调练习
+order: 3
+difficulty: advanced
+estimated_time: 35min
+tags: [实践, 微调, LoRA]
+---
+
+## 练习
+
+### 目标
+
+通过动手练习理解 LoRA 微调流程，掌握数据集准备、训练和评估。
+
+### 练习 1：准备微调数据集
+
+```python
+# 为 Agent 指令跟随任务准备微调数据
+
+import json
+
+# 数据格式：[{"instruction": "...", "input": "...", "output": "..."}]
+
+def prepare_agent_data():
+    """创建 Agent 行为微调数据集。"""
+    data = [
+        {
+            "instruction": "分析代码错误",
+            "input": "FileNotFoundError: [Errno 2] No such file or directory: 'config.json'",
+            "output": "错误原因：程序尝试读取 config.json 文件但文件不存在。\n"
+                      "解决方案：\n"
+                      "1. 检查当前工作目录是否正确\n"
+                      "2. 确认 config.json 是否在项目根目录\n"
+                      "3. 使用 os.path.abspath(__file__) 确定文件路径"
+        },
+        # 补全：添加以下场景的数据
+        # 1. "解释代码" - 让 AI 解释一段 Python 装饰器代码
+        # 你的代码：
+        # 2. "优化性能" - 让 AI 优化一个双重循环
+        # 你的代码：
+    ]
+    return data
+
+data = prepare_agent_data()
+with open("agent_data.jsonl", "w") as f:
+    for item in data:
+        f.write(json.dumps(item, ensure_ascii=False) + "\n")
+
+print(f"Created {len(data)} training examples")
+```
+
+### 练习 2：使用 Unsloth 进行 LoRA 微调
+
+```python
+# 安装: pip install unsloth
+from unsloth import FastLanguageModel
+import torch
+
+# 1. 加载基础模型
+model, tokenizer = FastLanguageModel.from_pretrained(
+    model_name="unsloth/llama-3.2-1b",
+    max_seq_length=2048,
+    dtype=None,
+    load_in_4bit=True,
+)
+
+# 2. 添加 LoRA 适配器
+model = FastLanguageModel.get_peft_model(
+    model,
+    r=16,  # LoRA 秩（rank）
+    # 补全参数：
+    # target_modules: 要应用 LoRA 的模块
+    # lora_alpha: LoRA 缩放参数（通常是 r 的 2 倍）
+    # 你的代码：
+)
+
+# 3. 加载数据集
+from datasets import load_dataset
+dataset = load_dataset("json", data_files="agent_data.jsonl", split="train")
+
+# 4. 配置训练参数
+from transformers import TrainingArguments
+
+training_args = TrainingArguments(
+    output_dir="./agent-lora",
+    per_device_train_batch_size=4,
+    gradient_accumulation_steps=4,
+    num_train_epochs=3,
+    # 补全：添加 learning_rate, warmup_steps, logging_steps
+    # 你的代码：
+)
+
+print("Training configuration ready")
+# 实际训练： trainer.train()
+```
+
+### 练习 3：评估微调效果
+
+```python
+# 微调前后对比
+
+def test_model_response(model, tokenizer, prompt: str) -> str:
+    """用微调后的模型生成回复。"""
+    inputs = tokenizer(prompt, return_tensors="pt").to("cuda")
+    outputs = model.generate(
+        **inputs,
+        max_new_tokens=128,
+        temperature=0.1,
+    )
+    return tokenizer.decode(outputs[0], skip_special_tokens=True)
+
+
+# 测试用例
+test_prompts = [
+    "分析代码错误：ZeroDivisionError: division by zero",
+    "解释什么是 Python 装饰器",
+    "优化这段代码：\nfor i in range(len(arr)):\n    for j in range(len(arr)):\n        if arr[i] < arr[j]:",
+]
+
+# 对比指标：
+# 1. 回复的相关性（1-5）
+# 2. 回复的准确率
+# 3. 回复长度是否合适
+
+for prompt in test_prompts:
+    response = test_model_response(model, tokenizer, prompt)
+    print(f"Prompt: {prompt}")
+    print(f"Response: {response}")
+    print("---")
+```
+
+### 验收清单
+
+- [ ] 能准备符合格式的微调数据集
+- [ ] 能使用 Unsloth 加载模型并添加 LoRA 适配器
+- [ ] 能配置训练参数
+- [ ] 能对比微调前后的模型输出质量
+- [ ] 理解 LoRA 的 rank、alpha、target_modules 参数的含义

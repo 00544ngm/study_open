@@ -8,31 +8,101 @@ tags: [架构, AI编程]
 
 ## 核心
 
-AI 生成的代码如果不加引导，容易违反 SOLID 原则。
+### 架构是人的职责
+
+AI 生成代码的速度很快，但架构决策必须由人来做。没有引导的 AI 倾向于写出"大泥球"——所有逻辑塞在一个类里。
 
 ### 单职责原则
 
 ```python
 # ❌ AI 倾向写"全能类"
 class AgentManager:
-    def run(self): ...
-    def save(self): ...
-    def send_email(self): ...
+    def run(self): ...          # 核心逻辑
+    def save(self): ...         # 持久化
+    def send_email(self): ...   # 通知
+    def log(self): ...          # 日志
+    # 修改任何一个功能都可能影响其他功能
 
 # ✅ 拆解为独立职责
-class AgentExecutor: ...
-class AgentRepository: ...
-class NotificationService: ...
+class AgentExecutor:
+    """只负责执行 agent 逻辑"""
+    def run(self): ...
+
+class AgentRepository:
+    """只负责数据持久化"""
+    def save(self, state): ...
+
+class NotificationService:
+    """只负责发送通知"""
+    def send(self, msg): ...
+
+class AgentLogger:
+    """只负责日志记录"""
+    def log(self, event): ...
+```
+
+### 开闭原则
+
+对扩展开放，对修改关闭：
+
+```python
+# ❌ 每次加新操作都要修改这个类
+class Validator:
+    def validate(self, data: dict, rules: str):
+        if rules == "email":
+            ...
+        elif rules == "phone":
+            ...
+        elif rules == "age":       # 新增 → 修改类
+            ...
+
+# ✅ 通过策略模式扩展
+from abc import ABC, abstractmethod
+
+class ValidationRule(ABC):
+    @abstractmethod
+    def validate(self, data: dict) -> bool: ...
+
+class EmailRule(ValidationRule):
+    def validate(self, data: dict) -> bool: ...
+
+class PhoneRule(ValidationRule):
+    def validate(self, data: dict) -> bool: ...
+
+class Validator:
+    def __init__(self, rules: list[ValidationRule]):
+        self.rules = rules  # 通过组合扩展，不需要修改类
+```
+
+### 依赖倒置
+
+```python
+# ❌ 直接依赖具体实现
+class OrderService:
+    def __init__(self):
+        self.db = MySQLDatabase()  # 紧耦合
+
+# ✅ 依赖抽象接口
+class OrderRepository(ABC):
+    @abstractmethod
+    def save(self, order): ...
+
+class OrderService:
+    def __init__(self, repo: OrderRepository):  # 松耦合
+        self.repo = repo
 ```
 
 ### 告诉 AI 架构约束
 
-在 prompt 中加入架构要求：
+在 prompt 中明确架构要求：
 
 ```
 遵循依赖倒置原则，通过接口注入依赖
 每个类不超过 200 行
 使用 Repository 模式封装数据访问
+不允许在 Service 层直接操作数据库
 ```
 
-AI 编程中，**架构决策是人做的，代码是 AI 写的**。
+AI 编程中，**架构决策是人做的，代码是 AI 写的**。不告诉 AI 架构约束，它就会用最省事的"大泥球"模式。
+
+> **知识关联**：架构设计离不开数据层的支撑，参见[数据库 Schema 设计](/02-backend/database-design/01-basics)；Agent 模式的架构实现详见[Agent 核心模式](/04-agent/agent-patterns/01-core-patterns)。

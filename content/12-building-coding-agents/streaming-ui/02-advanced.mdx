@@ -1,0 +1,164 @@
+---
+title: 终端多路复用与 UI 分区
+order: 2
+difficulty: advanced
+estimated_time: 35min
+tags: [UI, 多路复用, ANSI, 终端]
+---
+
+## 进阶
+
+### ANSI 转义码
+
+终端渲染的核心是 ANSI 转义序列：
+
+```python
+# 常用 ANSI 控制码
+CLEAR_LINE = "\033[2K"     # 清除当前行
+CR = "\r"                   # 回车到行首
+UP_ONE = "\033[A"           # 光标上移一行
+HIDE_CURSOR = "\033[?25l"   # 隐藏光标
+SHOW_CURSOR = "\033[?25h"   # 显示光标
+
+def render_progress_bar(current: int, total: int, label: str = ""):
+    """渲染进度条，原地刷新。"""
+    pct = current / total
+    bar_len = 30
+    filled = int(bar_len * pct)
+    bar = "█" * filled + "░" * (bar_len - filled)
+    print(f"\r{label} [{bar}] {current}/{total} ({pct:.0%})", end="")
+```
+
+### 多路复用架构
+
+```python
+import asyncio
+from dataclasses import dataclass, field
+
+@dataclass
+class Panel:
+    """终端 UI 中的一个面板。"""
+    name: str
+    lines: list[str] = field(default_factory=list)
+    max_lines: int = 50
+    position: int = 0  # 屏幕中的起始行
+
+class TerminalMultiplexer:
+    """类似 tmux 的终端多路复用器。"""
+
+    def __init__(self):
+        self.panels: dict[str, Panel] = {}
+        self.layout: list[str] = []  # 面板顺序
+
+    def add_panel(self, name: str, max_lines: int = 50):
+        panel = Panel(name=name, max_lines=max_lines)
+        self.panels[name] = panel
+        self.layout.append(name)
+        self._recalculate_positions()
+
+    def write(self, panel_name: str, line: str):
+        """向指定面板写入一行。"""
+        panel = self.panels.get(panel_name)
+        if not panel:
+            return
+
+        panel.lines.append(line)
+        if len(panel.lines) > panel.max_lines:
+            panel.lines.pop(0)
+
+        self._render()
+
+    def _recalculate_positions(self):
+        y = 0
+        for name in self.layout:
+            self.panels[name].position = y
+            y += self.panels[name].max_lines + 1
+
+    def _render(self):
+        """渲染所有面板到终端。"""
+        output = []
+        for name in self.layout:
+            panel = self.panels[name]
+            output.append(f"\033[1m── {name} ──\033[0m")
+            for line in panel.lines[-panel.max_lines:]:
+                output.append(line)
+            output.append("")
+        print("\033[H" + "\n".join(output))  # 回到顶部渲染
+
+    async def stream_to_panel(self, panel_name: str, reader: asyncio.StreamReader):
+        """将异步流输出到指定面板。"""
+        while True:
+            line = await reader.readline()
+            if not line:
+                break
+            self.write(panel_name, line.decode().rstrip())
+```
+
+### 用户中断处理
+
+```python
+import signal
+import sys
+
+class InterruptHandler:
+    """处理用户的中断信号，清理终端状态。"""
+
+    def __init__(self):
+        self.interrupted = False
+        self._original_handler = signal.getsignal(signal.SIGINT)
+
+    def __enter__(self):
+        signal.signal(signal.SIGINT, self._handler)
+        return self
+
+    def __exit__(self, *args):
+        signal.signal(signal.SIGINT, self._original_handler)
+        # 恢复光标
+        sys.stdout.write("\033[?25h")
+        sys.stdout.flush()
+
+    def _handler(self, sig, frame):
+        self.interrupted = True
+        print("\n\n⚠ 用户中断，正在停止...")
+```
+
+### 输出优先级策略
+
+多种输出同时产生时的处理策略：
+
+```python
+from enum import IntEnum
+
+class OutputPriority(IntEnum):
+    ERROR = 0      # 最高优先级：错误
+    USER = 1       # 用户确认请求
+    RESULT = 2     # 执行结果
+    PROGRESS = 3   # 进度
+    LOG = 4        # 日志
+    DEBUG = 5      # 调试
+
+class PrioritizedOutput:
+    def __init__(self):
+        self.queues = {p: [] for p in OutputPriority}
+
+    def enqueue(self, priority: OutputPriority, message: str):
+        self.queues[priority].append(message)
+
+    def flush(self):
+        """按优先级输出，高优先级先显示。"""
+        for priority in sorted(OutputPriority):
+            while self.queues[priority]:
+                msg = self.queues[priority].pop(0)
+                self._render_message(priority, msg)
+
+    def _render_message(self, priority: OutputPriority, msg: str):
+        prefix = {
+            OutputPriority.ERROR: "✖",
+            OutputPriority.USER: "?",
+            OutputPriority.RESULT: "✔",
+            OutputPriority.PROGRESS: "…",
+            OutputPriority.LOG: " ",
+            OutputPriority.DEBUG: "·",
+        }[priority]
+        print(f"{prefix} {msg}")
+```

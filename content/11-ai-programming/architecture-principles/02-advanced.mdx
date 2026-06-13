@@ -1,0 +1,121 @@
+---
+title: AI 时代的架构演进
+order: 2
+difficulty: advanced
+estimated_time: 30min
+tags: [架构, AI编程, 设计模式]
+---
+
+## 进阶
+
+### 架构棱镜
+
+AI 生成代码对架构的影响：
+
+```
+传统开发:   需求 → 架构设计 → 编码 → 测试 → 部署
+              ↑________ 人类主导 _______↓
+
+AI 辅助:    需求 → 架构决策(人) → AI 生成(代码) → 审查 → 测试
+                      ↑__ 人做决策，AI 写实现 __↓
+
+AI 主导:    需求 → AI 架构 → AI 编码 → 人工验收
+              ↑___ 需要更强的人工程序 __↓
+```
+
+架构决策仍然是人的核心职责。AI 生成代码的速度反而要求架构更清晰——混乱的架构被 AI 放大后更难维护。
+
+### 策略模式（AI 热切换）
+
+```python
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+
+class LLMProvider(ABC):
+    @abstractmethod
+    def generate(self, prompt: str) -> str: ...
+
+@dataclass
+class ClaudeProvider(LLMProvider):
+    model: str = "claude-opus-4"
+    def generate(self, prompt: str) -> str:
+        return f"[Claude({self.model}): {prompt}]"
+
+@dataclass
+class OpenAIProvider(LLMProvider):
+    model: str = "gpt-4o"
+    def generate(self, prompt: str) -> str:
+        return f"[OpenAI({self.model}): {prompt}]"
+
+# AI 可以生成新的 provider 实现
+# 只要遵循这个接口，AI 代码就不会破坏系统
+```
+
+### 仓促的抽象是万恶之源
+
+AI 容易生成不必要的抽象层：
+
+```python
+# ❌ AI 生成的过度工程
+class AbstractUserFactory:
+    pass
+class UserCreationStrategy:
+    pass
+class UserDTOMapper:
+    pass
+class UserValidator:
+    pass
+
+# ✅ 够用即可
+class UserService:
+    def create_user(self, data: CreateUserRequest) -> User:
+        ...
+```
+
+### 适配器模式（隔离外部依赖）
+
+```python
+# 定义端口（接口）
+class SearchPort(ABC):
+    @abstractmethod
+    def search(self, query: str) -> list[str]: ...
+
+# AI 可以自由实现适配器
+class ElasticsearchAdapter(SearchPort):
+    def search(self, query: str) -> list[str]:
+        ...
+
+class QdrantAdapter(SearchPort):
+    def search(self, query: str) -> list[str]:
+        ...
+
+# 业务逻辑只依赖端口，不依赖具体实现
+class AgentService:
+    def __init__(self, search: SearchPort):
+        self._search = search
+```
+
+### 模块化边界
+
+AI 编程时，模块边界的清晰度决定了代码质量：
+
+```
+好边界: 模块间通过接口通信，可以独立修改
+坏边界: 模块间直接依赖内部实现，改一处全崩
+
+好边界标准:
+- 改一个模块不需要改调用方
+- 可以单独测试每个模块
+- 模块可以整体被替换
+```
+
+### 架构迁移策略
+
+AI 重构代码的理想路径：
+
+1. **先加接口** — 在现有类上提取接口，不改实现
+2. **逐步迁移** — 每次 AI 改一个模块的内部实现
+3. **持续验证** — 每次修改后运行完整的集成测试
+4. **清理旧代码** — AI 在确认新实现正确后删除旧代码
+
+> **知识关联**：架构迁移与[Git 协作工作流](/11-ai-programming/git-advanced/01-basics)紧密配合；架构审查是[AI 代码审查清单](/11-ai-programming/code-review-ai/01-basics)的重要环节。

@@ -8,6 +8,10 @@ tags: [进程管理, Shell, 编程智能体]
 
 ## 核心
 
+### 为什么智能体需要进程管理
+
+智能体不只是写代码——它还要执行命令、启动服务、运行测试、安装依赖。这需要完整的子进程管理能力。
+
 ### 子进程创建
 
 ```python
@@ -21,10 +25,12 @@ process = subprocess.Popen(
     text=True
 )
 
-# 流式读取
+# 流式读取（逐行处理，不阻塞 UI）
 for line in process.stdout:
     print(f"[test] {line}", end="")
     # 可以在这里检测特定输出并作出反应
+    if "FAIL" in line:
+        notify_user("测试失败了")
 
 process.wait(timeout=30)
 ```
@@ -33,6 +39,7 @@ process.wait(timeout=30)
 
 ```python
 import signal
+import subprocess
 
 class TimeoutError(Exception): pass
 
@@ -41,8 +48,66 @@ def run_with_timeout(cmd: list[str], timeout: int = 10):
     try:
         proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
-        proc.kill()  # 或 proc.send_signal(signal.SIGTERM)
+        # 先 SIGTERM 优雅终止
+        proc.terminate()
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            proc.kill()  # SIGKILL 强制终止
         raise TimeoutError(f"Command timed out after {timeout}s")
 ```
 
-PTY（伪终端）用于需要交互式输入的命令，是编程智能体执行复杂命令的关键技术。
+### 输出捕获的三种方式
+
+```python
+# 方式 1：阻塞等待（简单但会阻塞）
+result = subprocess.run(["ls", "-la"], capture_output=True, text=True)
+print(result.stdout)
+
+# 方式 2：流式读取（推荐）
+proc = subprocess.Popen(["ping", "8.8.8.8"], stdout=subprocess.PIPE, text=True)
+for line in proc.stdout:
+    print(line.strip())
+
+# 方式 3：异步捕获（不阻塞主循环）
+import asyncio
+
+async def async_run(cmd: list[str]):
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
+    stdout, stderr = await proc.communicate()
+    return stdout.decode(), stderr.decode()
+```
+
+### 环境隔离
+
+```python
+def run_in_venv(cmd: list[str]):
+    """在虚拟环境中执行命令。"""
+    env = os.environ.copy()
+    env["PATH"] = f".venv/bin:{env['PATH']}"
+    env["VIRTUAL_ENV"] = os.path.abspath(".venv")
+
+    proc = subprocess.Popen(cmd, env=env)
+    proc.wait()
+```
+
+### PTY 伪终端
+
+某些程序（如交互式 CLI）需要 PTY（伪终端）才能正常运行：
+
+```python
+import pty
+
+# PTY 让程序以为自己在真实终端中
+# 常用于: ssh、docker exec、npm init 等交互式命令
+master_fd, slave_fd = pty.openpty()
+# 子进程连接到 slave，父进程从 master 读取
+```
+
+PTY 是编程智能体执行交互式命令的关键技术。
+
+> **知识关联**：危险命令的检测和拦截参见[权限分级与审批流](/12-building-coding-agents/security-approval/01-basics)；命令执行的实时输出展示参见[流式渲染](/12-building-coding-agents/streaming-ui/01-basics)。

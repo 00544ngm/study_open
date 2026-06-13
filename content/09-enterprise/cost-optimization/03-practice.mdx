@@ -1,0 +1,272 @@
+---
+title: Token 成本管理练习
+order: 3
+difficulty: intermediate
+estimated_time: 20min
+tags: [实践, 成本, Token, API]
+---
+
+## 练习
+
+### 目标
+
+通过动手练习掌握 Token 计数、成本估算和缓存优化策略。
+
+### 练习 1：Token 计数与成本估算
+
+```python
+import tiktoken
+
+
+def count_tokens(text: str, model: str = "gpt-4o") -> int:
+    """统计文本的 Token 数。"""
+    try:
+        encoding = tiktoken.encoding_for_model(model)
+    except:
+        encoding = tiktoken.get_encoding("cl100k_base")
+    return len(encoding.encode(text))
+
+
+# 定价表
+PRICING = {
+    "gpt-4o": {"input": 2.50 / 1_000_000, "output": 10.00 / 1_000_000},
+    "gpt-4o-mini": {"input": 0.15 / 1_000_000, "output": 0.60 / 1_000_000},
+    "claude-sonnet-4-20250514": {"input": 3.00 / 1_000_000, "output": 15.00 / 1_000_000},
+    "claude-haiku-3-5": {"input": 0.80 / 1_000_000, "output": 4.00 / 1_000_000},
+}
+
+
+def estimate_session_cost(messages: list[dict], model: str = "gpt-4o") -> dict:
+    """
+    估算一次对话的成本。
+    messages: [{"role": "user"/"assistant", "content": "..."}, ...]
+
+    返回:
+    {
+        "input_tokens": int,
+        "output_tokens": int,
+        "input_cost": float,
+        "output_cost": float,
+        "total_cost": float,
+    }
+    """
+    input_tokens = 0
+    output_tokens = 0
+
+    for msg in messages:
+        tokens = count_tokens(msg["content"], model)
+        if msg["role"] == "assistant":
+            output_tokens += tokens
+        else:
+            input_tokens += tokens
+
+    # 你的代码：根据 PRICING 计算成本
+    pass
+
+
+# 测试
+messages = [
+    {"role": "user", "content": "用 Python 写一个快速排序算法，并解释时间复杂度和空间复杂度"},
+    {"role": "assistant", "content": """
+以下是快速排序的 Python 实现：
+
+```python
+def quicksort(arr):
+    if len(arr) <= 1:
+        return arr
+    pivot = arr[len(arr) // 2]
+    left = [x for x in arr if x < pivot]
+    middle = [x for x in arr if x == pivot]
+    right = [x for x in arr if x > pivot]
+    return quicksort(left) + middle + quicksort(right)
+```
+
+时间复杂度：平均 O(n log n)，最坏 O(n²)
+空间复杂度：O(log n)（递归栈空间）
+"""},
+]
+
+cost = estimate_session_cost(messages, "gpt-4o")
+print(f"成本: ${cost['total_cost']:.6f}")
+```
+
+### 练习 2：缓存优化
+
+```python
+import hashlib
+import json
+from typing import Any
+from datetime import datetime, timedelta
+
+
+class SemanticCache:
+    """
+    语义缓存：缓存 LLM 响应，减少重复调用。
+    精确匹配缓存，适合完全相同的请求。
+    """
+
+    def __init__(self, ttl_minutes: int = 60):
+        self.cache: dict[str, dict] = {}
+        self.ttl = timedelta(minutes=ttl_minutes)
+        self.hits = 0
+        self.misses = 0
+
+    def _make_key(self, prompt: str, model: str, temperature: float) -> str:
+        """生成缓存键。"""
+        data = json.dumps({"prompt": prompt, "model": model, "temperature": temperature}, sort_keys=True)
+        return hashlib.md5(data.encode()).hexdigest()
+
+    def get(self, prompt: str, model: str = "gpt-4o", temperature: float = 0.0) -> str | None:
+        """
+        从缓存获取响应。
+        检查是否过期，过期则删除并返回 None。
+        """
+        key = self._make_key(prompt, model, temperature)
+        # 你的代码：
+        pass
+
+    def set(self, prompt: str, response: str, model: str = "gpt-4o", temperature: float = 0.0):
+        """写入缓存。"""
+        key = self._make_key(prompt, model, temperature)
+        # 你的代码：
+        pass
+
+    def hit_rate(self) -> float:
+        """计算缓存命中率。"""
+        total = self.hits + self.misses
+        return self.hits / total if total > 0 else 0
+
+    def clear_expired(self):
+        """清理过期的缓存条目。"""
+        # 你的代码：
+        pass
+
+
+class CostOptimizer:
+    """成本优化器"""
+
+    def __init__(self):
+        self.cache = SemanticCache(ttl_minutes=30)
+        self.calls: list[dict] = []
+
+    def call_with_cache(self, prompt: str, model: str = "gpt-4o", temperature: float = 0.0) -> tuple[str, bool]:
+        """
+        带缓存的 LLM 调用：
+        1. 先查缓存
+        2. 缓存命中直接返回
+        3. 缓存未命中才调用 LLM 并存入缓存
+        返回 (response, from_cache)
+        """
+        # 你的代码：
+        pass
+
+    def optimize_model_selection(self, prompt: str, complexity: str = "simple") -> str:
+        """
+        根据复杂度选择最经济的模型：
+        - "simple": gpt-4o-mini（便宜）
+        - "medium": gpt-4o（平衡）
+        - "complex": claude-sonnet-4（能力强）
+        """
+        # 你的代码：
+        pass
+
+    def get_savings_report(self) -> dict:
+        """
+        生成成本节省报告：
+        - 总调用次数
+        - 缓存命中次数/率
+        - 预估节省金额
+        """
+        # 你的代码：
+        pass
+
+
+# 测试
+optimizer = CostOptimizer()
+
+# 相同的请求应该命中缓存
+for _ in range(5):
+    response, cached = optimizer.call_with_cache("什么是快速排序？")
+    print(f"{'缓存' if cached else '调用'}")
+
+print(f"命中率: {optimizer.cache.hit_rate():.0%}")
+```
+
+### 练习 3：成本预算控制
+
+```python
+from datetime import datetime, date
+from typing import Dict
+from collections import defaultdict
+
+
+class BudgetController:
+    """预算控制器"""
+
+    def __init__(self, monthly_budget: float):
+        self.monthly_budget = monthly_budget
+        self.daily_costs: Dict[str, float] = defaultdict(float)
+        self.total_cost = 0.0
+
+    def record_cost(self, model: str, tokens: int, cost: float):
+        """记录一次调用的成本。"""
+        today = date.today().isoformat()
+        self.daily_costs[today] += cost
+        self.total_cost += cost
+
+    def get_daily_cost(self, day: str | None = None) -> float:
+        """获取指定日期的成本。"""
+        # 你的代码：
+        pass
+
+    def get_monthly_cost(self) -> float:
+        """获取本月总成本。"""
+        current_month = date.today().month
+        # 你的代码：只统计本月的每日成本
+        pass
+
+    def get_remaining_budget(self) -> float:
+        """获取剩余预算。"""
+        return self.monthly_budget - self.total_cost
+
+    def would_exceed_budget(self, estimated_cost: float) -> bool:
+        """检查是否会超出预算。"""
+        return self.total_cost + estimated_cost > self.monthly_budget
+
+    def get_daily_average(self) -> float:
+        """获取日均成本。"""
+        # 你的代码：
+        pass
+
+    def project_end_of_month(self) -> float:
+        """
+        预测月底总成本。
+        用过去 7 天的日均成本 × 当月剩余天数。
+        """
+        # 你的代码：
+        pass
+
+
+# 测试
+budget = BudgetController(monthly_budget=100.0)
+
+# 模拟每日调用
+import random
+for day in range(1, 29):
+    daily_cost = random.uniform(2.0, 5.0)
+    budget.record_cost("gpt-4o", 5000, daily_cost)
+
+print(f"月总成本: ${budget.get_monthly_cost():.2f}")
+print(f"剩余预算: ${budget.get_remaining_budget():.2f}")
+print(f"日均成本: ${budget.get_daily_average():.2f}")
+print(f"预测月底: ${budget.project_end_of_month():.2f}")
+print(f"超出预算: {budget.would_exceed_budget(10.0)}")
+```
+
+### 验收清单
+
+- [ ] 能统计 Token 数并估算 API 调用成本
+- [ ] 能实现语义缓存减少重复调用
+- [ ] 能根据任务复杂度选择经济模型
+- [ ] 能实现预算控制和成本预测
+- [ ] 理解缓存命中率对成本的影响

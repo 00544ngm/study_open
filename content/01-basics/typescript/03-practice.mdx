@@ -1,0 +1,93 @@
+---
+title: TypeScript 动手练习
+order: 3
+difficulty: intermediate
+estimated_time: 30min
+tags: [实践, TypeScript]
+---
+
+## 练习
+
+### 目标
+
+通过动手练习巩固 TypeScript 类型系统，体验类型对 AI 代码生成质量的影响。
+
+### 练习 1：定义 Agent 类型体系
+
+```typescript
+// 补全类型定义
+
+// 1. 定义 Agent 的状态类型
+type AgentStatus = /* 你的代码 */;  // "idle" | "running" | "paused" | "error"
+
+// 2. 定义配置接口
+interface AgentConfig {
+  name: string;
+  model: string;
+  maxTokens: number;
+  temperature: number;
+  tools: string[];
+  onError?: /* 错误回调类型 */;
+}
+
+// 3. 定义带泛型的执行结果
+interface ExecutionResult<T> {
+  success: boolean;
+  data: T | null;
+  error: string | null;
+  durationMs: number;
+}
+```
+
+### 练习 2：让 AI 基于类型生成代码
+
+```
+先定义好类型接口，然后让 AI 生成实现：
+
+"基于以下类型定义，实现 AgentRunner 类：
+- 包含 execute() 方法
+- 包含 getStatus() 方法
+- 包含 config() getter
+- 所有方法使用完整类型注解"
+
+对比：
+1. 有类型的版本（上传类型定义让 AI 参考）
+2. 无类型的版本（只说"实现一个 Agent 运行器"）
+看哪个版本的代码质量更高。
+```
+
+### 练习 3：类型安全的事件系统
+
+```typescript
+// 实现一个类型安全的事件发射器
+class TypedEventEmitter<Events extends Record<string, unknown>> {
+  // 实现 on 方法：监听事件
+  on<K extends keyof Events>(event: K, handler: (data: Events[K]) => void): void {
+    // 你的实现
+  }
+
+  // 实现 emit 方法：触发事件
+  emit<K extends keyof Events>(event: K, data: Events[K]): void {
+    // 你的实现
+  }
+}
+
+// 使用测试
+type AgentEvents = {
+  "agent:start": { timestamp: Date };
+  "agent:stop": { reason: string };
+  "agent:error": { message: string; code: number };
+};
+
+const emitter = new TypedEventEmitter<AgentEvents>();
+emitter.on("agent:start", (data) => {
+  console.log(data.timestamp);  // TS 知道类型
+});
+```
+
+### 验收清单
+
+- [ ] 能用接口和类型别名定义复杂对象结构
+- [ ] 能用泛型实现类型安全的工具函数
+- [ ] 体验了类型对 AI 代码生成质量的提升
+- [ ] 能使用 keyof、Pick、Omit 等类型工具

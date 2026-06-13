@@ -1,0 +1,88 @@
+---
+title: 架构重构练习
+order: 3
+difficulty: advanced
+estimated_time: 35min
+tags: [实践, 架构, 重构]
+---
+
+## 练习
+
+### 目标
+
+用 AI 重构一段"大泥球"代码，实践架构原则。
+
+### 练习 1：识别坏味道
+
+```python
+# 这段代码是典型的"大泥球"，你能找出几个架构问题？
+class App:
+    def run(self):
+        data = self.load()
+        processed = self.process(data)
+        self.save(processed)
+        self.report(processed)
+
+    def load(self):
+        import sqlite3
+        conn = sqlite3.connect("app.db")
+        rows = conn.execute("SELECT * FROM items").fetchall()
+        conn.close()
+        return rows
+
+    def process(self, data):
+        result = []
+        for item in data:
+            if item[2] > 100:  # 价格过滤
+                item = list(item)
+                item[3] = item[2] * 0.9  # 折扣
+                result.append(tuple(item))
+        return result
+
+    def save(self, data):
+        import json
+        with open("/tmp/output.json", "w") as f:
+            json.dump(data, f)
+
+    def report(self, data):
+        print(f"Processed {len(data)} items")
+```
+
+**找出**：
+- 职责混在一起
+- 硬编码路径和配置
+- 数据库操作裸写 SQL
+- 不可测试（函数内部直接读写文件和数据库）
+
+### 练习 2：AI 重构
+
+用 AI 重构上面的代码：
+
+```
+"重构 App 类，将其拆分为：
+1. DataLoader：负责数据加载
+2. ItemProcessor：负责业务逻辑（价格过滤、折扣计算）
+3. DataExporter：负责数据导出
+4. ReportGenerator：负责报告
+
+每个类通过接口依赖，可单独测试。
+
+重构后不改变功能逻辑。"
+```
+
+### 练习 3：验证重构
+
+重构后，检查是否满足：
+
+- [ ] 每个类有明确的单一职责
+- [ ] 数据库操作被封装
+- [ ] 配置（路径、折扣率）可配置
+- [ ] 每个类可以单独写单元测试
+- [ ] 重构前后功能一致
+
+### 验收清单
+
+- [ ] 能识别"大泥球"代码的架构问题
+- [ ] 能通过 AI 将大泥球拆分为模块化代码
+- [ ] 重构后的代码遵循单一职责原则
+- [ ] 重构后的代码可测试

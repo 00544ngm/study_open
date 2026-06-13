@@ -1,0 +1,176 @@
+---
+title: 高级策略引擎与审计
+order: 2
+difficulty: advanced
+estimated_time: 35min
+tags: [安全, 策略引擎, 审计]
+---
+
+## 进阶
+
+### 策略引擎架构
+
+```python
+from enum import Enum
+from dataclasses import dataclass
+from typing import Callable
+
+class Action(Enum):
+    READ_FILE = "read_file"
+    WRITE_FILE = "write_file"
+    EXEC_COMMAND = "exec_command"
+    NETWORK = "network"
+    INSTALL_PKG = "install_pkg"
+
+@dataclass
+class Context:
+    action: Action
+    target: str
+    user_approval: bool | None = None
+    previous_actions: list[str] | None = None
+
+class PolicyResult(Enum):
+    ALLOW = "allow"
+    CONFIRM = "confirm"
+    DENY = "deny"
+
+class PolicyEngine:
+    """可扩展的策略引擎，支持自定义规则。"""
+
+    def __init__(self):
+        self.rules: list[Callable[[Context], PolicyResult | None]] = []
+
+    def add_rule(self, rule: Callable):
+        self.rules.append(rule)
+
+    def evaluate(self, ctx: Context) -> PolicyResult:
+        # 按优先级评估规则
+        for rule in self.rules:
+            result = rule(ctx)
+            if result is not None:
+                return result
+        return PolicyResult.CONFIRM  # 默认需要确认
+
+
+# 内置规则
+def deny_rm_rf(ctx: Context) -> PolicyResult | None:
+    if ctx.action == Action.EXEC_COMMAND and "rm -rf" in ctx.target:
+        return PolicyResult.DENY
+    return None
+
+def deny_dot_env_write(ctx: Context) -> PolicyResult | None:
+    if ctx.action == Action.WRITE_FILE and ctx.target.endswith(".env"):
+        return PolicyResult.DENY
+    return None
+
+def allow_read_only(ctx: Context) -> PolicyResult | None:
+    if ctx.action == Action.READ_FILE:
+        return PolicyResult.ALLOW
+    return None
+```
+
+### 审批超时
+
+```python
+import asyncio
+
+class ApprovalManager:
+    def __init__(self, timeout: int = 30):
+        self.timeout = timeout
+        self.pending: dict[str, asyncio.Event] = {}
+
+    async def request_approval(self, command: str) -> bool:
+        """请求用户批准，带超时。"""
+        event = asyncio.Event()
+        self.pending[command] = event
+
+        # 展示给用户并等待
+        try:
+            await asyncio.wait_for(event.wait(), timeout=self.timeout)
+            return True
+        except asyncio.TimeoutError:
+            return False  # 超时 = 拒绝
+        finally:
+            self.pending.pop(command, None)
+```
+
+### 审计日志
+
+```python
+import json
+from datetime import datetime
+
+class AuditLogger:
+    """记录所有操作的安全审计日志。"""
+
+    def __init__(self, log_path: str = ".agent/audit.log"):
+        self.log_path = log_path
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+
+    def log(self, action: str, target: str,
+            result: str, user: str = "system"):
+        """记录操作。"""
+        entry = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "action": action,
+            "target": target,
+            "result": result,
+            "user": user,
+        }
+        with open(self.log_path, "a") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+    def query(self, action: str | None = None,
+              user: str | None = None,
+              limit: int = 100) -> list[dict]:
+        """查询审计日志。"""
+        results = []
+        with open(self.log_path) as f:
+            for line in f:
+                entry = json.loads(line)
+                if action and entry["action"] != action:
+                    continue
+                if user and entry["user"] != user:
+                    continue
+                results.append(entry)
+        return results[-limit:]
+
+    def summarize(self) -> dict:
+        """生成操作摘要统计。"""
+        stats = {}
+        with open(self.log_path) as f:
+            for line in f:
+                entry = json.loads(line)
+                key = f"{entry['action']}:{entry['result']}"
+                stats[key] = stats.get(key, 0) + 1
+        return stats
+```
+
+### 危险命令模式库
+
+```python
+DANGER_PATTERNS = [
+    # 文件系统破坏
+    (r"rm\s+-[rf]+\s+/", "递归删除根目录"),
+    (r"mkfs\.\w+\s+/dev/", "格式化磁盘"),
+    (r">\s*/dev/sda", "直接写入块设备"),
+
+    # 安全
+    (r"chmod\s+777", "开放所有权限"),
+    (r"chown\s+-R", "递归修改所有者"),
+
+    # 网络
+    (r"iptables\s+-F", "清空防火墙规则"),
+    (r"systemctl\s+stop\s+", "停止系统服务"),
+
+    # 注入
+    (r"eval\s*\(\s*request", "代码注入风险"),
+    (r"exec\s*\(\s*(input|request)", "命令注入风险"),
+
+    # 隐私
+    (r"git\s+config\s+--global", "修改全局 git 配置"),
+    (r"curl.*\|\s*bash", "管道到 shell 执行"),
+]
+```
+
+> **知识关联**：策略引擎可与[子进程管理](/12-building-coding-agents/process-shell/01-basics)集成，在执行前拦截危险命令；审计日志参考[数据库 Schema 设计](/02-backend/database-design/01-basics)可实现结构化存储和查询。

@@ -1,0 +1,165 @@
+---
+title: 语义搜索与代码索引
+order: 2
+difficulty: advanced
+estimated_time: 40min
+tags: [代码搜索, Embedding, 语义理解]
+---
+
+## 进阶
+
+### 代码嵌入向量搜索
+
+基于 embedding 的语义代码搜索可以找到关键词不匹配但语义相关的结果：
+
+```python
+from openai import OpenAI
+
+class SemanticCodeSearch:
+    def __init__(self, model: str = "text-embedding-3-small"):
+        self.client = OpenAI()
+        self.model = model
+        self.index: dict[str, list[float]] = {}
+
+    def index_file(self, path: str):
+        """为代码文件建立向量索引。"""
+        with open(path) as f:
+            code = f.read()
+
+        # 先拆分为函数/类粒度
+        chunks = self._chunk_by_function(code)
+
+        for chunk in chunks:
+            embedding = self.client.embeddings.create(
+                model=self.model,
+                input=chunk["text"]
+            ).data[0].embedding
+
+            self.index[f"{path}:{chunk['name']}"] = embedding
+
+    def search(self, query: str, top_k: int = 5) -> list[dict]:
+        query_emb = self.client.embeddings.create(
+            model=self.model, input=query
+        ).data[0].embedding
+
+        # 余弦相似度排序
+        scored = []
+        for key, emb in self.index.items():
+            score = cosine_similarity(query_emb, emb)
+            scored.append((score, key))
+
+        scored.sort(reverse=True)
+        return scored[:top_k]
+
+    def _chunk_by_function(self, code: str) -> list[dict]:
+        """将代码按函数拆分为独立的块。"""
+        # 使用 tree-sitter 精确解析
+        ...
+```
+
+### 代码关系图构建
+
+```python
+import ast
+
+class DependencyGraph:
+    """构建文件的 import/export 依赖关系图。"""
+
+    def __init__(self):
+        self.graph: dict[str, set[str]] = {}
+
+    def analyze_file(self, path: str):
+        tree = ast.parse(open(path).read())
+        imports = set()
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    imports.add(alias.name)
+            elif isinstance(node, ast.ImportFrom):
+                if node.module:
+                    imports.add(node.module)
+
+        rel_path = path.replace("\\", "/")
+        self.graph[rel_path] = imports
+
+    def find_affected_files(self, changed_file: str) -> list[str]:
+        """找到受该文件变更影响的所有文件。"""
+        affected = []
+        for file_path, imports in self.graph.items():
+            if changed_file in imports:
+                affected.append(file_path)
+        return affected
+
+    def topological_sort(self) -> list[str]:
+        """按依赖关系拓扑排序。"""
+        visited = set()
+        result = []
+
+        def dfs(node: str):
+            if node in visited:
+                return
+            visited.add(node)
+            for dep in self.graph.get(node, set()):
+                dfs(dep)
+            result.append(node)
+
+        for node in self.graph:
+            dfs(node)
+
+        return result
+```
+
+### 增量索引
+
+大型项目不可能每次都全量重建索引：
+
+```python
+class IncrementalIndex:
+    def __init__(self, cache_path: str = ".code_index.json"):
+        self.cache_path = cache_path
+        self.index = self._load_cache()
+
+    def update_file(self, path: str):
+        """只更新单个文件的索引。"""
+        new_hash = file_hash(path)
+        if self.index.get(path, {}).get("hash") == new_hash:
+            return  # 文件未变化，跳过
+
+        self.index[path] = {
+            "hash": new_hash,
+            "functions": extract_functions(path),
+            "classes": extract_classes(path),
+            "imports": extract_imports(path),
+            "updated_at": time.time()
+        }
+        self._save_cache()
+
+    def _load_cache(self) -> dict:
+        if os.path.exists(self.cache_path):
+            with open(self.cache_path) as f:
+                return json.load(f)
+        return {}
+```
+
+### 搜索策略路由
+
+```python
+def smart_search(query: str, project: str) -> list[str]:
+    """根据查询类型自动选择搜索策略。"""
+
+    # 1. 精确符号查找 → AST 解析
+    if looks_like_symbol(query):
+        return search_ast(query, project)
+
+    # 2. 文件名查找 → 模糊匹配
+    if looks_like_path(query):
+        return search_filename(query, project)
+
+    # 3. 关键词查找 → ripgrep
+    if len(query.split()) <= 3:
+        return search_rg(query, project)
+
+    # 4. 自然语言描述 → 语义搜索
+    return search_semantic(query, project)
+```

@@ -1,0 +1,154 @@
+---
+title: LangSmith 监控练习
+order: 3
+difficulty: intermediate
+estimated_time: 25min
+tags: [实践, LangSmith, 监控, 追踪]
+---
+
+## 练习
+
+### 目标
+
+通过动手练习掌握 LangSmith 的 Trace 追踪、评估和数据集管理。
+
+### 练习 1：Trace 追踪
+
+```python
+from langsmith import Client
+from langsmith.run_trees import RunTree
+import time
+
+client = Client()
+
+# 1. 创建一个追踪树
+# 模拟一个 Agent 执行的完整流程
+def simulate_agent_run(input_text: str):
+    # 创建根 run（整个 Agent 执行）
+    root_run = RunTree(
+        name="Agent Execution",
+        run_type="chain",
+        inputs={"input": input_text},
+    )
+
+    # 添加子 run：LLM 调用
+    llm_run = root_run.create_child(
+        name="LLM Call",
+        run_type="llm",
+        inputs={"prompt": input_text},
+    )
+    llm_run.end(outputs={"response": "模拟回复"}, end_time=time.time())
+    client.create_run(llm_run)
+
+    # 添加子 run：工具调用
+    tool_run = root_run.create_child(
+        name="Tool Call",
+        run_type="tool",
+        inputs={"tool": "search", "args": {"query": input_text}},
+    )
+    # 你的代码：模拟工具执行，耗时 0.5 秒
+    tool_run.end(outputs={"result": "搜索结果"})
+    client.create_run(tool_run)
+
+    # 完成根 run
+    root_run.end(outputs={"result": "执行完成"})
+    # 你的代码：提交根 run
+
+    return "执行完成"
+
+
+# 2. 查询追踪记录
+def query_recent_runs():
+    """查询最近 10 条运行记录。"""
+    # 你的代码：使用 client.list_runs 查询
+    pass
+
+
+print(simulate_agent_run("测试输入"))
+```
+
+### 练习 2：自定义评估指标
+
+```python
+from langsmith.evaluation import evaluate
+from langsmith.schemas import Run, Example
+
+
+# 定义自定义评估函数
+def evaluate_response_length(run: Run, example: Example | None = None) -> dict:
+    """评估回复长度是否适中（100-500 字符）。"""
+    outputs = run.outputs or {}
+    response = str(outputs.get("response", ""))
+    length = len(response)
+
+    score = 1.0 if 100 <= length <= 500 else 0.0
+    return {
+        "key": "response_length",
+        "score": score,
+        "comment": f"Response length: {length} chars",
+    }
+
+
+def evaluate_contains_code(run: Run, example: Example | None = None) -> dict:
+    """评估回复是否包含代码块。"""
+    outputs = run.outputs or {}
+    response = str(outputs.get("response", ""))
+    contains_code = "```" in response
+
+    return {
+        "key": "contains_code",
+        "score": 1.0 if contains_code else 0.0,
+        "comment": "Contains code block" if contains_code else "No code block",
+    }
+
+
+# 使用评估函数
+def run_evaluation():
+    """
+    创建一个评估任务：
+    1. 使用 evaluate() 函数
+    2. 传入上面定义的两个评估函数
+    3. 输出评估结果
+    """
+    # 你的代码：
+    pass
+```
+
+### 练习 3：数据集管理
+
+```python
+# 1. 创建测试数据集
+def create_test_dataset():
+    """创建一个包含多个测试用例的数据集。"""
+    dataset = client.create_dataset(
+        dataset_name="Agent Test Cases",
+        description="Agent 功能测试数据集",
+    )
+
+    examples = [
+        ("写一个快速排序", "需要包含递归和列表解析"),
+        ("解释 HTTP 和 HTTPS 的区别", "需要说明 SSL/TLS 的作用"),
+        ("优化这段 SQL", "需要分析查询计划"),
+    ]
+
+    for input_text, expected in examples:
+        # 你的代码：添加数据到数据集
+        pass
+
+    return dataset
+
+
+# 2. 基于数据集运行评估
+def evaluate_on_dataset(dataset_name: str):
+    """对数据集中的每个用例运行评估。"""
+    # 你的代码：
+    pass
+```
+
+### 验收清单
+
+- [ ] 能创建 RunTree 追踪 Agent 执行链路
+- [ ] 能添加父子关系的追踪树
+- [ ] 能定义自定义评估函数
+- [ ] 能创建和管理数据集
+- [ ] 能基于数据集运行批量评估

@@ -1,0 +1,285 @@
+---
+title: 多 Agent 系统练习
+order: 3
+difficulty: advanced
+estimated_time: 30min
+tags: [实践, 企业级, Agent]
+---
+
+## 练习
+
+### 目标
+
+通过动手练习掌握多 Agent 系统的架构模式，包括编排器模式、路由分发和结果聚合。
+
+### 练习 1：编排器模式
+
+```python
+from typing import TypedDict, Literal, List, Dict, Any
+from dataclasses import dataclass, field
+
+
+@dataclass
+class AgentTask:
+    """Agent 任务定义"""
+    id: str
+    description: str
+    assigned_to: str = ""
+    status: str = "pending"  # pending | running | completed | failed
+    result: Any = None
+
+
+class OrchestratorState(TypedDict):
+    task: str
+    plan: List[str]
+    results: Dict[str, Any]
+    final: str
+
+
+# 补全编排器逻辑
+class Orchestrator:
+    """多 Agent 编排器"""
+
+    def __init__(self):
+        self.agents = {}  # name → callable
+
+    def register_agent(self, name: str, handler):
+        """注册子 Agent。"""
+        self.agents[name] = handler
+
+    def decompose(self, task: str) -> List[AgentTask]:
+        """将复杂任务分解为多个子任务。"""
+        # 你的代码：根据任务内容拆分子任务
+        # 例如 "搜索并分析 AI 的最新新闻，然后生成报告"
+        # 分解为 ["search_news", "analyze_data", "generate_report"]
+        pass
+
+    def dispatch(self, subtasks: List[AgentTask]) -> Dict[str, Any]:
+        """
+        分配子任务给对应的 Agent 并执行。
+        使用简单的关键词匹配决定分配哪个 Agent。
+        """
+        # 你的代码：
+        pass
+
+    def aggregate(self, results: Dict[str, Any]) -> str:
+        """汇总所有 Agent 的结果为最终输出。"""
+        # 你的代码：
+        pass
+
+    def run(self, task: str) -> str:
+        """执行完整编排流程：分解 → 分配 → 汇总。"""
+        subtasks = self.decompose(task)
+        results = self.dispatch(subtasks)
+        final = self.aggregate(results)
+        return final
+
+
+# 测试
+def search_agent(task: AgentTask) -> str:
+    return f"搜索到关于 '{task.description}' 的 5 条结果"
+
+def analyze_agent(task: AgentTask) -> str:
+    return f"分析完成: {task.description} 的核心发现是..."
+
+def report_agent(task: AgentTask) -> str:
+    return f"报告生成: 基于分析结果，建议..."
+
+orchestrator = Orchestrator()
+orchestrator.register_agent("search", search_agent)
+orchestrator.register_agent("analyze", analyze_agent)
+orchestrator.register_agent("report", report_agent)
+
+result = orchestrator.run("搜索并分析 AI Agent 的最新进展，生成一份报告")
+print(result)
+```
+
+### 练习 2：Agent 通信机制
+
+```python
+import asyncio
+from typing import List, Dict, Any
+from datetime import datetime
+
+
+class Message:
+    """Agent 间消息"""
+    def __init__(self, sender: str, receiver: str, content: str, msg_type: str = "request"):
+        self.sender = sender
+        self.receiver = receiver
+        self.content = content
+        self.msg_type = msg_type
+        self.timestamp = datetime.now()
+        self.id = f"{sender}-{receiver}-{self.timestamp.timestamp()}"
+
+
+class MessageBus:
+    """消息总线 - Agent 间通信中介"""
+
+    def __init__(self):
+        self.queues: Dict[str, asyncio.Queue] = {}
+        self.handlers: Dict[str, callable] = {}
+
+    def register_agent(self, name: str, handler: callable):
+        """注册 Agent 到消息总线。"""
+        self.queues[name] = asyncio.Queue()
+        self.handlers[name] = handler
+
+    async def send(self, message: Message):
+        """发送消息到目标 Agent 的队列。"""
+        if message.receiver in self.queues:
+            await self.queues[message.receiver].put(message)
+        else:
+            print(f"Unknown receiver: {message.receiver}")
+
+    async def process_messages(self, agent_name: str):
+        """处理 Agent 的消息队列。"""
+        while True:
+            try:
+                # 你的代码：从队列获取消息，调用 handler 处理
+                pass
+            except asyncio.TimeoutError:
+                break
+
+
+# 测试
+async def test():
+    bus = MessageBus()
+
+    async def agent_a_handler(msg: Message) -> str:
+        print(f"Agent A 收到: {msg.content}")
+        # 回复
+        reply = Message("agent_a", msg.sender, f"已收到: {msg.content}", "response")
+        await bus.send(reply)
+        return "processed"
+
+    async def agent_b_handler(msg: Message) -> str:
+        print(f"Agent B 收到: {msg.content}")
+        return "processed"
+
+    bus.register_agent("agent_a", agent_a_handler)
+    bus.register_agent("agent_b", agent_b_handler)
+
+    # 发送消息
+    msg = Message("user", "agent_a", "请分析数据")
+    await bus.send(msg)
+
+asyncio.run(test())
+```
+
+### 练习 3：故障隔离与重试
+
+```python
+import asyncio
+import random
+from typing import Callable, Any
+
+
+class AgentTimeoutError(Exception):
+    pass
+
+
+class AgentExecutionError(Exception):
+    pass
+
+
+class FaultTolerantOrchestrator:
+    """带故障隔离的多 Agent 编排器"""
+
+    def __init__(self, max_retries: int = 3, timeout: float = 5.0):
+        self.max_retries = max_retries
+        self.timeout = timeout
+        self.agents = {}
+        self.failed_agents = set()
+
+    def register_agent(self, name: str, handler: Callable, timeout: float | None = None):
+        self.agents[name] = {
+            "handler": handler,
+            "timeout": timeout or self.timeout,
+        }
+
+    async def execute_with_retry(self, agent_name: str, task: str) -> Any:
+        """
+        带重试和超时地执行 Agent。
+        1. 如果 Agent 在失败名单中，跳过
+        2. 尝试执行（最多 max_retries 次）
+        3. 超时抛出 AgentTimeoutError
+        4. 连续失败加入失败名单
+        """
+        if agent_name in self.failed_agents:
+            raise AgentExecutionError(f"Agent {agent_name} 已被隔离")
+
+        # 你的代码：实现重试逻辑
+        for attempt in range(self.max_retries):
+            try:
+                # 带超时执行
+                pass
+            except asyncio.TimeoutError:
+                print(f"Agent {agent_name} 超时 (尝试 {attempt + 1}/{self.max_retries})")
+                if attempt == self.max_retries - 1:
+                    self.failed_agents.add(agent_name)
+                    raise AgentTimeoutError(f"Agent {agent_name} 超时")
+            except Exception as e:
+                print(f"Agent {agent_name} 错误: {e}")
+                if attempt == self.max_retries - 1:
+                    self.failed_agents.add(agent_name)
+                    raise AgentExecutionError(f"Agent {agent_name} 执行失败")
+
+    def get_healthy_agents(self) -> list[str]:
+        """获取健康 Agent 列表。"""
+        return [name for name in self.agents if name not in self.failed_agents]
+
+    async def orchestrate(self, task_map: dict[str, str]) -> dict[str, Any]:
+        """
+        执行多 Agent 任务，部分失败不影响其他 Agent。
+        task_map: {agent_name: task_description}
+        返回 {agent_name: result | error_info}
+        """
+        # 你的代码：
+        pass
+
+
+# 测试
+async def test():
+    async def reliable_agent(task: str) -> str:
+        await asyncio.sleep(0.1)
+        return f"结果: {task}"
+
+    async def flaky_agent(task: str) -> str:
+        """有时失败有时成功的 Agent。"""
+        await asyncio.sleep(0.1)
+        if random.random() < 0.6:
+            raise Exception("随机失败")
+        return f"结果: {task}"
+
+    async def slow_agent(task: str) -> str:
+        await asyncio.sleep(10)  # 太慢
+        return f"结果: {task}"
+
+    orch = FaultTolerantOrchestrator(max_retries=2, timeout=1.0)
+    orch.register_agent("reliable", reliable_agent)
+    orch.register_agent("flaky", flaky_agent)
+    orch.register_agent("slow", slow_agent)
+
+    results = await orch.orchestrate({
+        "reliable": "分析数据",
+        "flaky": "搜索信息",
+        "slow": "生成报告",
+    })
+
+    for agent, result in results.items():
+        status = "✓" if "result" in str(result) else "✗"
+        print(f"[{status}] {agent}: {result}")
+
+    print(f"健康 Agent: {orch.get_healthy_agents()}")
+
+asyncio.run(test())
+```
+
+### 验收清单
+
+- [ ] 能实现编排器模式（分解-分配-汇总）
+- [ ] 能实现 Agent 间消息通信
+- [ ] 能处理 Agent 超时和重试
+- [ ] 能隔离故障 Agent
+- [ ] 理解编排器和路由模式的区别

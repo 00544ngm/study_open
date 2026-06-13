@@ -8,16 +8,22 @@ tags: [上下文管理, LLM, 编程智能体]
 
 ## 核心
 
+### 上下文窗口的挑战
+
+LLM 的上下文窗口有限（Claude 200K tokens ≈ 15 万英文单词）。一个编程智能体的对话可能涉及数十个文件、多轮修改，很快就会撑爆窗口。必须主动管理。
+
 ### Token 计数
 
 ```python
 def estimate_tokens(text: str) -> int:
-    return len(text) // 3  # 粗略估算
+    return len(text) // 3  # 粗略估算，中文约 1.5-2 tokens/字
 ```
+
+实际使用中应该用 tokenizer 精确计数，但开发阶段可以先用估算。
 
 ### 滑动窗口
 
-每次对话只保留最近的 N 条消息，将早期的历史摘要化：
+只保留最近的 N 条消息，将早期的历史摘要化：
 
 ```python
 class ContextWindow:
@@ -30,13 +36,68 @@ class ContextWindow:
         self._trim()
 
     def _trim(self):
-        # 超过限制时，丢弃最早的消息
+        # 超过限制时，将早期的消息压缩为摘要
         while estimate_tokens(str(self.messages)) > self.max_tokens:
-            self.messages.pop(0)
+            # 取出最早的消息进行压缩
+            early = self.messages.pop(0)
+            summary = self._summarize(early)
+            # 将摘要插入到最前面
+            self.messages.insert(0, {
+                "role": "system",
+                "content": f"[压缩摘要]: {summary}"
+            })
+            break  # 每次只压缩一条
+
+    def _summarize(self, msg: dict) -> str:
+        content = msg.get("content", "")
+        if len(content) > 200:
+            return content[:200] + "..."
+        return content
+```
+
+### 内容优先级
+
+不是所有历史信息都同等重要：
+
+```python
+class PriorityMemory:
+    """按优先级管理上下文内容。"""
+
+    HIGH = ["error", "security", "user_request", "file_path"]
+    MEDIUM = ["code_block", "command_output", "test_result"]
+    LOW = ["chat_history", "debug_log"]
+
+    def add(self, item: dict, category: str):
+        priority = self._get_priority(category)
+        # 高优先级内容优先保留
+        # 低优先级内容先被丢弃
+        self._store(item, priority)
+
+    def _get_priority(self, category: str) -> int:
+        if category in self.HIGH: return 0
+        if category in self.MEDIUM: return 1
+        return 2
 ```
 
 ### Prompt Caching
 
-利用 Claude API 的 Prompt Caching 功能，将系统提示和常用上下文缓存起来，降低延迟和成本。
+利用 Claude API 的 Prompt Caching 功能，将系统提示和常用上下文缓存起来：
 
-每次交互都重新评估：这个信息这次对话还需要吗？
+```python
+# Claude API 支持 Prompt Caching
+# 将系统提示和常用上下文标记为可缓存
+response = client.messages.create(
+    model="claude-sonnet-4-20250514",
+    system=[
+        {"text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}},
+        {"text": CUSTOM_INSTRUCTIONS},
+    ],
+    messages=conversation,
+)
+```
+
+### 关键原则
+
+每次交互都重新评估：**这个信息这次对话还需要吗？**如果不是，就不要塞进上下文窗口。
+
+> **知识关联**：理解 Transformer 的注意力机制有助于优化上下文策略，参见[LLM 原理](/03-llm/architecture/01-basics)；Prompt Caching 的使用详见[Claude API](/03-llm/prompt-engineering/01-basics)。

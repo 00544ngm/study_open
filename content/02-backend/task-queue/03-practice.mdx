@@ -1,0 +1,120 @@
+---
+title: 异步任务队列练习
+order: 3
+difficulty: intermediate
+estimated_time: 30min
+tags: [实践, Celery, 任务队列]
+---
+
+## 练习
+
+### 目标
+
+通过动手练习掌握 Celery 任务定义、异步执行和结果处理。
+
+### 练习 1：定义并执行任务
+
+```python
+# tasks.py
+from celery import Celery
+
+app = Celery("agent_tasks", broker="redis://localhost:6379/0")
+
+
+# 1. 补全任务：处理 Agent 生成的文本
+@app.task
+def analyze_sentiment(text: str):
+    """
+    模拟情感分析任务。
+    返回一个字典：{"sentiment": "positive"|"negative"|"neutral", "score": float}
+    """
+    # 你的实现
+    pass
+
+
+@app.task
+def summarize_text(text: str, max_length: int = 100):
+    """
+    模拟文本摘要任务。
+    返回摘要字符串。
+    """
+    # 你的实现
+    pass
+
+
+# 2. 启动 worker（命令行）
+# celery -A tasks worker --loglevel=info
+```
+
+### 练习 2：异步调用与结果获取
+
+```python
+# 在另一个文件中调用任务
+from tasks import analyze_sentiment, summarize_text
+
+# 1. 异步调用任务（不阻塞）
+result = analyze_sentiment.delay("This product is amazing!")
+
+# 2. 检查任务状态
+print(f"Task ID: {result.id}")
+print(f"Status: {result.status}")
+
+# 3. 等待结果（带超时）
+# 你的代码：等待最多 10 秒获取结果
+
+# 4. 批量提交任务并收集结果
+texts = ["Good", "Bad", "Okay"]
+tasks = []
+for text in texts:
+    # 你的代码：批量提交
+
+# 等待所有任务完成
+results = [t.get(timeout=10) for t in tasks]
+print(results)
+```
+
+### 练习 3：任务编排
+
+```python
+from celery import chord, group
+
+# 1. 使用 group 并行执行多个任务
+# 对多个文本同时做情感分析
+texts = ["text1", "text2", "text3"]
+# 你的代码：
+
+
+# 2. 使用 chord 在所有任务完成后执行回调
+def aggregate_results(results):
+    """汇总所有情感分析结果。"""
+    positive = sum(1 for r in results if r["sentiment"] == "positive")
+    negative = sum(1 for r in results if r["sentiment"] == "negative")
+    return {"positive": positive, "negative": negative, "total": len(results)}
+
+
+# 创建一个 chord：先并行分析，再汇总
+# 你的代码：
+
+
+# 3. 设置任务超时和重试
+@app.task(bind=True, max_retries=3, default_retry_delay=5)
+def unstable_task(self):
+    """模拟可能失败的任务，带自动重试。"""
+    import random
+    try:
+        if random.random() < 0.5:
+            raise ValueError("Random failure")
+        return "success"
+    except Exception as exc:
+        # 你的代码：重试任务
+        pass
+```
+
+### 验收清单
+
+- [ ] 能使用 `@app.task` 定义 Celery 任务
+- [ ] 能使用 `.delay()` 异步调用任务
+- [ ] 能获取任务状态和结果
+- [ ] 能使用 `group` 和 `chord` 编排任务
+- [ ] 能配置任务重试和超时
+- [ ] 理解 broker（Redis）和 result backend 的作用

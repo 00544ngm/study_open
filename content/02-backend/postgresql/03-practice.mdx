@@ -1,0 +1,78 @@
+---
+title: PostgreSQL 基础练习
+order: 3
+difficulty: beginner
+estimated_time: 25min
+tags: [实践, PostgreSQL, SQL]
+---
+
+## 练习
+
+### 目标
+
+通过动手练习掌握 PostgreSQL 基本操作：建表、CRUD、关联查询。
+
+### 练习 1：创建 Agent 数据表
+
+```sql
+-- 1. 创建 agents 表（id, name, model, status, created_at）
+-- 你的代码：
+
+-- 2. 创建 conversations 表（id, agent_id 外键, messages, created_at）
+-- 你的代码：
+
+-- 3. 插入测试数据
+INSERT INTO agents (name, model, status) VALUES
+  ('code-assistant', 'gpt-4', 'active'),
+  ('data-analyzer', 'gpt-3.5-turbo', 'active');
+
+-- 4. 插入关联的对话记录
+-- 你的代码：
+
+-- 5. 查询：找出所有 active 状态的 agent 及其对话数量
+-- 你的代码：
+```
+
+### 练习 2：数据查询与聚合
+
+```sql
+-- 基于练习 1 的表，完成以下查询
+
+-- 1. 按模型分组统计 agent 数量
+-- 你的代码：
+
+-- 2. 查询最近 7 天的对话（按时间倒序）
+-- 你的代码：
+
+-- 3. 统计每个 agent 的消息总数
+-- 你的代码：
+
+-- 4. 查找对话最多的 top 3 agent
+-- 你的代码：
+```
+
+### 练习 3：索引与性能
+
+```sql
+-- 1. 查看查询计划（不使用索引）
+EXPLAIN ANALYZE SELECT * FROM conversations
+WHERE created_at > '2025-01-01';
+
+-- 2. 添加合适的索引
+-- 你的代码：
+
+-- 3. 再次查看查询计划，对比差异
+EXPLAIN ANALYZE SELECT * FROM conversations
+WHERE created_at > '2025-01-01';
+
+-- 4. 创建复合索引（agent_id + created_at）
+-- 你的代码：
+```
+
+### 验收清单
+
+- [ ] 能使用 `CREATE TABLE` 建表并设置主键和外键
+- [ ] 能使用 `INSERT` 插入数据
+- [ ] 能使用 `SELECT ... JOIN ... GROUP BY` 做关联聚合查询
+- [ ] 能使用 `EXPLAIN ANALYZE` 分析查询性能
+- [ ] 能创建索引优化查询

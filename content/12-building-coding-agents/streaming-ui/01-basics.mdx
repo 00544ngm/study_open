@@ -8,7 +8,13 @@ tags: [UI, 终端, 编程智能体]
 
 ## 核心
 
+### 为什么终端 UI 很重要
+
+AI 编程智能体的输出是流式的——文字一个字一个字出现，同时还要处理用户的中断和确认、命令执行日志、文件修改 diff。这不是普通的聊天 UI，而是**多路复用终端**。
+
 ### SSE 流式传输
+
+服务端通过 Server-Sent Events 将 AI 输出逐块推送到客户端：
 
 ```python
 from fastapi import StreamingResponse
@@ -38,6 +44,48 @@ async function streamToTerminal(reader: ReadableStreamDefaultReader) {
 }
 ```
 
+### ANSI 转义码
+
+终端通过 ANSI 转义序列控制颜色、光标位置、清屏等：
+
+```python
+# 基本颜色
+RED = "\033[31m"
+GREEN = "\033[32m"
+YELLOW = "\033[33m"
+BLUE = "\033[34m"
+RESET = "\033[0m"
+
+# 光标控制
+UP = "\033[A"       # 光标上移一行
+HIDE = "\033[?25l"  # 隐藏光标
+SHOW = "\033[?25h"  # 显示光标
+CLEAR = "\033[2J"   # 清屏
+
+# 在终端显示绿色成功消息
+print(f"{GREEN}✓ 操作成功{RESET}")
+
+# 原地更新进度条
+print(f"\r进度: 50%", end="", flush=True)
+```
+
 ### 多路复用
 
-同时显示 LLM 输出 + 命令执行日志 + 文件修改 diff，互不干扰。这需要设计合理的 UI 分区和输出优先级策略。
+同时显示 LLM 输出 + 命令执行日志 + 文件修改 diff，互不干扰：
+
+```
+┌── LLM ──────────────────────────────┐
+│ 正在分析...                          │
+│ 发现 3 个需要修改的位置               │
+├── 日志 ──────────────────────────────┤
+│ $ npm test                           │
+│ PASS src/agent.test.ts               │
+├── Diff ──────────────────────────────┤
+│ + function validate() {              │
+│ - function old_validate() {          │
+└───────────────────────────────────────┘
+```
+
+这需要设计合理的 UI 分区和输出优先级策略。
+
+> **知识关联**：流式输出常与[子进程管理](/12-building-coding-agents/process-shell/01-basics)结合，实时展示命令执行结果；输出内容的上下文管理参考[上下文窗口策略](/12-building-coding-agents/context-management/01-basics)。

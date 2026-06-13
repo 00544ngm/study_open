@@ -1,0 +1,77 @@
+---
+title: 动手配置 AI 编程环境
+order: 3
+difficulty: beginner
+estimated_time: 30min
+tags: [实践, AI编程, Claude Code]
+---
+
+## 练习
+
+### 目标
+
+安装并配置至少一个 AI 编程工具，完成第一个 AI 辅助编程任务。
+
+### 练习 1：安装和初始化
+
+**Claude Code（推荐）**
+
+```bash
+# 全局安装
+npm install -g @anthropic-ai/claude-code
+
+# 在项目目录初始化
+cd your-project
+claude
+
+# 如果首次使用，会提示登录 Anthropic 账号
+# 按照终端提示完成认证
+```
+
+**Cursor（备选）**
+
+从 cursor.com 下载安装，打开你的项目文件夹。
+
+### 练习 2：你的第一个 AI 编程任务
+
+在你的项目里，尝试以下三个场景：
+
+**场景 A：代码解释**
+```
+"解释 src/main.py 的核心逻辑，用流程图描述"
+```
+→ 观察 AI 如何读取文件、理解代码、组织输出
+
+**场景 B：代码生成**
+```
+"在 src/utils/helpers.py 中，添加一个函数：
+输入是字符串列表，返回去重后的列表，保持原有顺序"
+```
+→ 观察 AI 生成的代码质量
+
+**场景 C：代码修改**
+```
+"给 src/api/handler.py 的 process 函数添加输入校验：
+- 参数 name 不能为空
+- 参数 age 必须在 0-150 之间
+- 参数 email 必须是合法邮箱格式"
+```
+→ 观察 AI 如何精确定位和修改
+
+### 练习 3：对比体验
+
+分别用两种工具（如 Claude Code + Cursor）做同一个任务：
+
+```
+任务: "将 console.log('debug') 全部替换为 logger.info()"
+```
+
+对比它们的速度、准确度、交互体验。
+
+### 验收清单
+
+- [ ] 至少一个 AI 编程工具能正常工作
+- [ ] 成功完成代码解释任务
+- [ ] 成功完成代码生成任务
+- [ ] 成功完成代码修改任务
+- [ ] 理解 AI 输出 diff 的格式

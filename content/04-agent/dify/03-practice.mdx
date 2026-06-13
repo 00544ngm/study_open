@@ -1,0 +1,117 @@
+---
+title: Dify 工作流练习
+order: 3
+difficulty: intermediate
+estimated_time: 25min
+tags: [实践, Dify, 工作流]
+---
+
+## 练习
+
+### 目标
+
+通过动手练习掌握 Dify 的应用构建、Prompt 编排和工作流配置。
+
+### 练习 1：设计聊天助手
+
+```yaml
+# Dify 聊天助手配置（YAML 格式）
+
+name: code-reviewer
+description: 代码审查助手，审查 AI 生成的代码
+
+# 1. 补全系统提示词
+system_prompt: |
+  你是一个代码审查专家。
+  ________________________________
+  ________________________________
+
+# 2. 配置模型参数
+model:
+  provider: openai
+  name: gpt-4o
+  parameters:
+    temperature: 0.1  # 代码审查需要低温度
+    # 补全：max_tokens 设置为 4096
+    # 你的代码：
+
+# 3. 添加上下文变量
+variables:
+  - name: language
+    type: select
+    options: [Python, TypeScript, Go, Rust]
+    # 设置默认值为 Python
+    # 你的代码：
+```
+
+### 练习 2：设计工作流
+
+```text
+设计一个 RAG 问答工作流，包含以下节点：
+
+1. 问题分类器（LLM 节点）
+   - 输入：用户问题
+   - 输出：问题类别（技术/概念/操作）
+
+2. 知识库检索（知识检索节点）
+   - 根据问题类别选择不同知识库
+   - 返回相关文档片段
+
+3. 答案生成（LLM 节点）
+   - 输入：原始问题 + 检索到的文档
+   - 约束：基于检索内容回答，不要编造
+
+4. 答案格式化（Code 节点）
+   - 将答案格式化为 markdown
+
+请画出节点连接关系（用文本描述）：
+________________________________
+________________________________
+________________________________
+```
+
+### 练习 3：Prompt 变量与编排
+
+```python
+# Dify Prompt 编排中的变量使用
+
+# 场景：Agent 配置生成器
+# 用户输入：Agent 名称、用途、模型
+
+# 补全 Prompt 模板，使用 {{变量名}} 引用用户输入
+prompt_template = """
+你是一个 AI Agent 配置专家。
+
+Agent 名称：{{agent_name}}
+Agent 用途：{{purpose}}
+使用的模型：{{model}}
+
+请生成以下配置：
+1. 系统提示词（System Prompt）— 基于用途设计
+2. 工具列表 — 推荐适合该 Agent 的工具
+3. 参数建议 — temperature、max_tokens 等
+
+约束：
+- 系统提示词不超过 {{ max_length }} 字
+- 温度参数根据用途调整（创意类高，精确类低）
+"""
+
+# 假设用户输入：
+user_input = {
+    "agent_name": "code-reviewer",
+    "purpose": "审查 AI 生成的 Python 代码，检查安全问题和性能问题",
+    "model": "gpt-4o",
+    "max_length": 200,
+}
+
+# 渲染 Prompt
+# 你的代码：用 Python 的 string.Template 或 f-string 渲染
+```
+
+### 验收清单
+
+- [ ] 能设计 Dify 聊天助手的系统提示词和参数
+- [ ] 能设计包含多个节点的 RAG 工作流
+- [ ] 能使用 Prompt 变量进行动态编排
+- [ ] 理解 Dify 中 LLM 节点、知识检索节点、Code 节点的作用
+- [ ] 理解变量在不同节点间的传递方式

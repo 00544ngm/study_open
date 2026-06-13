@@ -1,0 +1,179 @@
+---
+title: Agent UI 构建练习
+order: 3
+difficulty: intermediate
+estimated_time: 30min
+tags: [实践, UI, Chat, 流式]
+---
+
+## 练习
+
+### 目标
+
+通过动手练习掌握 Agent 聊天界面的构建和流式响应展示。
+
+### 练习 1：聊天消息组件
+
+```python
+# 设计一个聊天消息的数据结构和渲染逻辑
+
+from dataclasses import dataclass
+from datetime import datetime
+
+
+@dataclass
+class ChatMessage:
+    """聊天消息的数据模型。"""
+    role: str          # "user" | "assistant" | "system"
+    content: str
+    timestamp: datetime = None
+    tokens: int = 0
+
+    def __post_init__(self):
+        if self.timestamp is None:
+            self.timestamp = datetime.now()
+
+
+class ChatHistory:
+    """管理聊天历史。"""
+
+    def __init__(self, max_messages: int = 100):
+        self.messages: list[ChatMessage] = []
+        self.max_messages = max_messages
+
+    def add_message(self, role: str, content: str, tokens: int = 0):
+        """添加消息，超过限制时删除最早的消息。"""
+        # 你的实现：
+        pass
+
+    def get_context(self, limit: int = 10) -> list[dict]:
+        """返回最近的 limit 条消息（用于 LLM 调用）。"""
+        # 你的实现：返回 [{"role": ..., "content": ...}] 格式
+        pass
+
+    def count_tokens(self) -> int:
+        """计算所有消息的 token 总数。"""
+        return sum(m.tokens for m in self.messages)
+
+
+# 测试
+chat = ChatHistory(max_messages=3)
+chat.add_message("user", "你好", 5)
+chat.add_message("assistant", "你好！有什么可以帮助你的？", 10)
+chat.add_message("user", "帮我写个排序", 8)
+chat.add_message("assistant", "好的，以下是快速排序实现...", 15)
+
+print(len(chat.messages))  # 应输出 3（最多 3 条）
+print(chat.get_context(2))  # 应返回最近 2 条
+```
+
+### 练习 2：流式输出处理
+
+```python
+import asyncio
+
+
+class StreamBuffer:
+    """
+    处理流式输出，支持逐字符/逐块追加。
+    支持中断信号，让 UI 能停止流式渲染。
+    """
+
+    def __init__(self):
+        self.buffer = ""
+        self._stopped = False
+
+    def append(self, chunk: str):
+        """追加一个数据块。"""
+        if not self._stopped:
+            self.buffer += chunk
+
+    def stop(self):
+        """停止接收数据。"""
+        self._stopped = True
+
+    @property
+    def is_stopped(self) -> bool:
+        return self._stopped
+
+    def clear(self):
+        """清空缓冲区。"""
+        self.buffer = ""
+        self._stopped = False
+
+
+async def simulate_stream(output: str, buffer: StreamBuffer, delay: float = 0.02):
+    """模拟流式输出，逐字符写入 buffer。"""
+    for char in output:
+        if buffer.is_stopped:
+            break
+        buffer.append(char)
+        await asyncio.sleep(delay)
+
+
+# 测试
+async def test_stream():
+    buffer = StreamBuffer()
+    task = asyncio.create_task(simulate_stream("Hello, World!", buffer))
+
+    await asyncio.sleep(0.1)  # 等待一部分输出
+    print(f"当前: {buffer.buffer}")  # 部分输出
+
+    await task
+    print(f"完成: {buffer.buffer}")  # 完整输出
+
+    # 测试中断
+    buffer2 = StreamBuffer()
+    task2 = asyncio.create_task(simulate_stream("这是一段很长的文本...", buffer2))
+    await asyncio.sleep(0.05)
+    buffer2.stop()  # 中断
+    await task2
+    print(f"中断后: {buffer2.buffer}")  # 应只有部分内容
+
+asyncio.run(test_stream())
+```
+
+### 练习 3：消息格式化
+
+```python
+def format_message_for_display(msg: ChatMessage) -> str:
+    """
+    格式化消息用于终端或 UI 展示。
+
+    格式要求：
+    - user 消息: "👤 {content}"
+    - assistant 消息: "🤖 {content}"
+    - 代码块用 ``` 包裹
+    - 超过 500 字符的消息截断并显示 "...（剩余 N 字）"
+    """
+    prefix = {"user": "👤", "assistant": "🤖", "system": "⚙️"}.get(msg.role, "?")
+
+    content = msg.content
+    # 你的代码：截断逻辑
+
+    return f"{prefix} {content}"
+
+
+def extract_code_blocks(text: str) -> list[dict]:
+    """
+    从消息中提取所有代码块。
+    返回: [{"language": "python", "code": "..."}, ...]
+    """
+    import re
+    # 你的实现：用正则提取 ```language\ncode\n``` 块
+    pass
+
+
+# 测试
+msg = ChatMessage("assistant", "以下是代码：\n```python\ndef hello():\n    print('hi')\n```")
+print(format_message_for_display(msg))
+print(extract_code_blocks(msg.content))
+```
+
+### 验收清单
+
+- [ ] 能设计聊天消息的数据模型
+- [ ] 能管理聊天历史（限制长度、滑动窗口）
+- [ ] 能实现流式输出的缓冲区
+- [ ] 支持中断流式输出
+- [ ] 能格式化消息和提取代码块

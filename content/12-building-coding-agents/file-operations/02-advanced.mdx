@@ -1,0 +1,142 @@
+---
+title: Diff/Patch 与回退策略
+order: 2
+difficulty: advanced
+estimated_time: 35min
+tags: [文件系统, diff, patch, 编程智能体]
+---
+
+## 进阶
+
+### 标准化 Diff 格式
+
+编程智能体应该理解两种主要的 diff 格式：
+
+```python
+# Unified diff 格式
+diff = """
+--- a/src/agent.py
++++ b/src/agent.py
+@@ -10,6 +10,7 @@
+ def run_agent():
++    logger.info("Agent started")
+     result = process()
++    logger.info("Agent finished")
+     return result
+"""
+```
+
+### 精确的行级编辑
+
+```python
+from difflib import unified_diff
+
+def apply_edit(path: str, old_str: str, new_str: str) -> bool:
+    """基于字符串匹配的精确替换。"""
+    with open(path, "r") as f:
+        content = f.read()
+
+    if old_str not in content:
+        return False  # 匹配失败，不做修改
+
+    content = content.replace(old_str, new_str, 1)
+
+    with open(path, "w") as f:
+        f.write(content)
+
+    return True
+
+
+def search_replace_edit(path: str, search: str, replace: str):
+    """带搜索上下文的精确替换，减少误匹配。"""
+    with open(path, "r") as f:
+        lines = f.readlines()
+
+    search_lines = search.split("\n")
+    replace_lines = replace.split("\n")
+
+    for i in range(len(lines) - len(search_lines) + 1):
+        if lines[i:i + len(search_lines)] == [l + "\n" for l in search_lines]:
+            lines[i:i + len(search_lines)] = [l + "\n" for l in replace_lines]
+            break
+
+    with open(path, "w") as f:
+        f.writelines(lines)
+```
+
+### 备份与回滚
+
+```python
+import shutil
+from datetime import datetime
+
+class FileBackup:
+    def __init__(self, base_dir: str):
+        self.base_dir = base_dir
+        self.backup_dir = f"{base_dir}/.agent_backups"
+
+    def backup(self, path: str) -> str:
+        """编辑前创建备份，返回备份路径。"""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        rel_path = path.replace(self.base_dir, "").strip("/")
+        backup_path = f"{self.backup_dir}/{timestamp}/{rel_path}"
+
+        os.makedirs(os.path.dirname(backup_path), exist_ok=True)
+        shutil.copy2(path, backup_path)
+        return backup_path
+
+    def rollback(self, backup_path: str, original_path: str):
+        """从备份恢复文件。"""
+        shutil.copy2(backup_path, original_path)
+
+    def rollback_all_before(self, timestamp: str):
+        """回滚指定时间戳之前的所有修改。"""
+        backup_root = f"{self.backup_dir}/{timestamp}"
+        if os.path.exists(backup_root):
+            for root, _, files in os.walk(backup_root):
+                for f in files:
+                    rel = os.path.relpath(root, backup_root)
+                    original = f"{self.base_dir}/{rel}/{f}"
+                    shutil.copy2(os.path.join(root, f), original)
+```
+
+### LSP 集成
+
+真正的编程智能体通过 LSP 获取精确的编辑位置：
+
+```python
+# 通过 LSP 获取符号位置
+def get_symbol_location(file_path: str, symbol: str) -> dict:
+    """使用 Language Server Protocol 定位符号。"""
+    request = {
+        "jsonrpc": "2.0",
+        "method": "textDocument/definition",
+        "params": {
+            "textDocument": {"uri": f"file://{file_path}"},
+            "position": find_symbol_position(file_path, symbol)
+        }
+    }
+    return send_lsp_request(request)
+```
+
+### 操作验证
+
+每次编辑后自动验证：
+
+```python
+def validate_edit(path: str, check_list: list[callable]) -> bool:
+    """编辑后运行验证检查。"""
+    for check in check_list:
+        if not check(path):
+            return False     # 验证失败，触发回滚
+    return True
+
+# 使用
+checks = [
+    lambda p: subprocess.run(["python", "-m", "py_compile", p]).returncode == 0,
+    lambda p: "TODO" not in open(p).read(),
+    lambda p: len(open(p).readlines()) < 500,
+]
+```
+
+> **知识关联**：编辑验证与[测试金字塔](/11-ai-programming/testing-strategy/01-basics)结合形成完整质量保障；备份回滚机制是[安全审批系统](/12-building-coding-agents/security-approval/01-basics)中"可撤销"原则的具体实现。

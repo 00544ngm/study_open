@@ -8,21 +8,28 @@ tags: [文件系统, 编程智能体]
 
 ## 核心
 
-AI 编程智能体需要能够精确地读取和修改文件。核心操作包括：
+### 为什么文件操作是智能体的核心
+
+AI 编程智能体区别于聊天机器人的关键：它能精确地读写文件。不是"建议你改什么"，而是直接定位、修改、验证。
 
 ### 文件读取策略
 
 ```python
-# 大文件分段读取
+# 大文件不能一次全读进内存
 def read_file_lines(path: str, start: int, end: int) -> list[str]:
     with open(path, "r") as f:
         return f.readlines()[start:end]
 
-# 智能上下文：只读取相关区域
+# 智能上下文：只读取相关区域（节省 token）
 def read_context(file: str, target_line: int, context: int = 10):
-    lines = read_file_lines(file, max(0, target_line - context),
-                            target_line + context)
+    start = max(0, target_line - context)
+    lines = read_file_lines(file, start, target_line + context)
     return "".join(lines)
+
+# 读取整个文件（用于小文件）
+def read_entire_file(path: str) -> str:
+    with open(path, "r") as f:
+        return f.read()
 ```
 
 ### 精确编辑
@@ -33,10 +40,62 @@ def edit_lines(path: str, edits: list[tuple[int, str]]):
     """edits: [(行号, 新内容), ...]"""
     lines = read_file_lines(path, 0, -1)
     for lineno, new_content in edits:
-        lines[lineno] = new_content
-    write_file(path, "".join(lines))
+        if 0 <= lineno < len(lines):
+            lines[lineno] = new_content + "\n"
+        else:
+            raise ValueError(f"Line {lineno} out of range")
+    with open(path, "w") as f:
+        f.writelines(lines)
+
+# 基于上下文的替换（比行号更稳定）
+def edit_by_context(path: str, old_text: str, new_text: str) -> bool:
+    with open(path, "r") as f:
+        content = f.read()
+
+    if old_text not in content:
+        return False  # 匹配失败，不做修改
+
+    content = content.replace(old_text, new_text, 1)
+    with open(path, "w") as f:
+        f.write(content)
+    return True
+```
+
+### 文件新建
+
+```python
+def create_file(path: str, content: str, force: bool = False):
+    """新建文件。如果文件已存在且 force=False 则不覆盖。"""
+    if os.path.exists(path) and not force:
+        raise FileExistsError(f"{path} already exists")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        f.write(content)
 ```
 
 ### 回退机制
 
+```python
+def safe_edit(path: str, edits: list[tuple[int, str]]) -> bool:
+    """带备份的安全编辑。"""
+    backup = path + ".bak"
+    shutil.copy2(path, backup)
+
+    try:
+        edit_lines(path, edits)
+        # 编辑后自动验证（语法检查）
+        if not validate_syntax(path):
+            shutil.copy2(backup, path)  # 回滚
+            return False
+        return True
+    except Exception:
+        shutil.copy2(backup, path)  # 回滚
+        return False
+    finally:
+        if os.path.exists(backup):
+            os.remove(backup)
+```
+
 每次编辑前备份文件，编辑失败自动回滚。这是编程智能体安全性的基础。
+
+> **知识关联**：文件操作的安全控制策略参见[权限分级与审批流](/12-building-coding-agents/security-approval/01-basics)；良好的架构设计可参考[SOLID 原则](/11-ai-programming/architecture-principles/01-basics)。

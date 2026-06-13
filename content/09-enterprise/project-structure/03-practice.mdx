@@ -1,0 +1,319 @@
+---
+title: 项目结构实践练习
+order: 3
+difficulty: intermediate
+estimated_time: 20min
+tags: [实践, 架构, 项目结构]
+---
+
+## 练习
+
+### 目标
+
+通过动手练习掌握生产级 AI Agent 项目的目录结构设计、配置管理和模块化组织。
+
+### 练习 1：项目结构设计
+
+```python
+# 根据需求设计项目目录结构
+
+class ProjectStructure:
+    """项目结构定义"""
+
+    def __init__(self, name: str):
+        self.name = name
+        self.directories: list[str] = []
+        self.files: list[str] = []
+
+    def add_directory(self, path: str):
+        self.directories.append(path)
+
+    def add_file(self, path: str, content: str = ""):
+        self.files.append((path, content))
+
+    def generate_tree(self) -> str:
+        """生成目录树文本表示。"""
+        # 你的代码：将 directories 和 files 渲染为树形结构
+        # 例如：
+        # agent-project/
+        # ├── app/
+        # │   ├── __init__.py
+        # │   └── main.py
+        # ├── requirements.txt
+        # └── README.md
+        pass
+
+
+# 为以下场景设计项目结构：
+
+# 场景 A：简单的 CLI Agent（单个文件即可）
+def design_cli_agent() -> ProjectStructure:
+    """
+    一个简单的命令行 Agent，包含：
+    - main.py（入口）
+    - agent.py（Agent 逻辑）
+    - tools.py（工具函数）
+    - requirements.txt
+    """
+    # 你的代码：
+    pass
+
+
+# 场景 B：FastAPI + Agent 平台
+def design_api_platform() -> ProjectStructure:
+    """
+    一个 FastAPI 驱动的 Agent 平台，包含：
+    - app/api/（路由）
+    - app/agents/（Agent 定义）
+    - app/tools/（工具）
+    - app/llm/（LLM 客户端）
+    - app/memory/（记忆管理）
+    - app/models/（数据模型）
+    - tests/（测试）
+    - 配置文件
+    """
+    # 你的代码：
+    pass
+
+
+# 场景 C：企业级多 Agent 系统
+def design_enterprise_system() -> ProjectStructure:
+    """
+    企业级多 Agent 系统，包含：
+    - services/（各微服务）
+    - shared/（共享库）
+    - deployment/（部署配置）
+    - docs/（文档）
+    - scripts/（运维脚本）
+    """
+    # 你的代码：
+    pass
+
+
+# 输出比较
+for designer in [design_cli_agent, design_api_platform, design_enterprise_system]:
+    proj = designer()
+    print(f"\n=== {proj.name} ===")
+    print(proj.generate_tree())
+```
+
+### 练习 2：配置管理
+
+```python
+from typing import Any, Dict
+import os
+import json
+
+
+class ConfigManager:
+    """分层配置管理器"""
+
+    def __init__(self, config_dir: str = "config"):
+        self.config_dir = config_dir
+        self.config: Dict[str, Any] = {}
+        self._loaded = False
+
+    def load_defaults(self):
+        """加载默认配置。"""
+        self.config = {
+            "app": {
+                "name": "agent-platform",
+                "version": "0.1.0",
+                "debug": False,
+            },
+            "server": {
+                "host": "0.0.0.0",
+                "port": 8000,
+                "workers": 4,
+            },
+            "llm": {
+                "model": "gpt-4o",
+                "temperature": 0.7,
+                "max_tokens": 4096,
+            },
+            "database": {
+                "url": "sqlite:///agent.db",
+                "pool_size": 5,
+            },
+        }
+        self._loaded = True
+
+    def load_from_file(self, filepath: str):
+        """从 JSON/YAML 文件加载配置。"""
+        if not os.path.exists(filepath):
+            print(f"Config file not found: {filepath}")
+            return
+        # 你的代码：读取 JSON 文件并 merge 到现有配置
+        pass
+
+    def load_from_env(self, prefix: str = "AGENT_"):
+        """
+        从环境变量加载配置覆盖。
+        约定：AGENT_DATABASE_URL → config["database"]["url"]
+        """
+        # 你的代码：遍历环境变量，按前缀匹配并更新配置
+        pass
+
+    def get(self, key: str, default: Any = None) -> Any:
+        """获取配置值，支持点号分隔的路径。"""
+        keys = key.split(".")
+        value = self.config
+        # 你的代码：逐层查找
+        pass
+
+    def set(self, key: str, value: Any):
+        """设置配置值，支持点号分隔的路径。"""
+        keys = key.split(".")
+        # 你的代码：逐层创建并设置
+        pass
+
+    def validate(self) -> list[str]:
+        """验证配置的完整性，返回缺失的必填项。"""
+        required = [
+            "app.name",
+            "server.host",
+            "server.port",
+            "llm.model",
+        ]
+        # 你的代码：检查所有必填项是否存在
+        pass
+
+
+# 测试
+config = ConfigManager()
+config.load_defaults()
+
+print(f"Server port: {config.get('server.port')}")
+print(f"LLM model: {config.get('llm.model')}")
+
+# 模拟环境变量覆盖
+os.environ["AGENT_LLM_MODEL"] = "claude-sonnet-4-20250514"
+os.environ["AGENT_SERVER_DEBUG"] = "true"
+config.load_from_env("AGENT_")
+
+print(f"After env override - LLM model: {config.get('llm.model')}")
+print(f"Validation errors: {config.validate()}")
+```
+
+### 练习 3：模块化组织
+
+```python
+from typing import Any, Callable
+from dataclasses import dataclass, field
+from abc import ABC, abstractmethod
+
+
+# 1. 定义 Agent 基类
+class BaseAgent(ABC):
+    """Agent 基类 - 所有 Agent 的公共接口"""
+
+    def __init__(self, name: str, config: dict | None = None):
+        self.name = name
+        self.config = config or {}
+
+    @abstractmethod
+    async def run(self, task: str) -> str:
+        """执行任务。"""
+        pass
+
+    def __repr__(self) -> str:
+        return f"{self.__class__.__name__}(name='{self.name}')"
+
+
+# 2. 实现具体 Agent
+class CustomerServiceAgent(BaseAgent):
+    """客服 Agent"""
+
+    def __init__(self, config: dict | None = None):
+        super().__init__("customer_service", config)
+        self.knowledge_base = config.get("knowledge_base", []) if config else []
+
+    async def run(self, task: str) -> str:
+        # 你的代码：检索知识库，生成客服回复
+        return f"[客服] 关于「{task}」的回复"
+
+
+class CodeReviewAgent(BaseAgent):
+    """代码审查 Agent"""
+
+    def __init__(self, config: dict | None = None):
+        super().__init__("code_review", config)
+        self.language = config.get("language", "python") if config else "python"
+
+    async def run(self, task: str) -> str:
+        # 你的代码：检查代码质量，返回审查意见
+        return f"[代码审查] 审查 {self.language} 代码"
+
+
+# 3. Agent 工厂
+class AgentFactory:
+    """Agent 工厂 - 根据配置创建 Agent"""
+
+    _agents: dict[str, type[BaseAgent]] = {
+        "customer_service": CustomerServiceAgent,
+        "code_review": CodeReviewAgent,
+    }
+
+    @classmethod
+    def create(cls, agent_type: str, config: dict | None = None) -> BaseAgent:
+        """
+        创建指定类型的 Agent。
+        如果类型不存在，抛出 ValueError。
+        """
+        # 你的代码：
+        pass
+
+    @classmethod
+    def register(cls, name: str, agent_class: type[BaseAgent]):
+        """注册新的 Agent 类型。"""
+        cls._agents[name] = agent_class
+
+
+# 4. 完整应用
+class AgentApplication:
+    """Agent 应用 - 组合所有模块"""
+
+    def __init__(self, config: dict):
+        self.config = config
+        self.agents: dict[str, BaseAgent] = {}
+
+    def initialize(self):
+        """根据配置初始化所有 Agent。"""
+        agent_configs = self.config.get("agents", {})
+        # 你的代码：遍历配置，使用工厂创建 Agent
+        pass
+
+    async def handle_request(self, agent_type: str, task: str) -> str:
+        """处理请求，路由到对应 Agent。"""
+        if agent_type not in self.agents:
+            return f"未知 Agent 类型: {agent_type}"
+        return await self.agents[agent_type].run(task)
+
+
+# 测试
+async def test():
+    app_config = {
+        "agents": {
+            "customer_service": {"knowledge_base": ["FAQ1", "FAQ2"]},
+            "code_review": {"language": "python"},
+        }
+    }
+
+    app = AgentApplication(app_config)
+    app.initialize()
+    print(f"可用 Agent: {list(app.agents.keys())}")
+
+    result = await app.handle_request("customer_service", "如何退款？")
+    print(result)
+
+import asyncio
+asyncio.run(test())
+```
+
+### 验收清单
+
+- [ ] 能根据场景设计合理的项目结构
+- [ ] 能实现分层配置管理（默认值 → 文件 → 环境变量）
+- [ ] 能使用工厂模式创建不同类型的 Agent
+- [ ] 能组织模块化的 Agent 应用
+- [ ] 理解分层解耦的设计原则

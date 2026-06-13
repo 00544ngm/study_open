@@ -1,0 +1,117 @@
+---
+title: 上下文窗口管理练习
+order: 3
+difficulty: advanced
+estimated_time: 35min
+tags: [实践, 上下文管理, LLM]
+---
+
+## 练习
+
+### 目标
+
+实现一个上下文窗口管理器，模拟 LLM 的上下文限制，并实现压缩和优先级策略。
+
+### 练习 1：实现 Token 计数器和窗口
+
+```python
+class SimpleTokenizer:
+    """简化的 token 估算器。"""
+
+    @staticmethod
+    def count(text: str) -> int:
+        """估算文本的 token 数量。"""
+        pass
+
+    @staticmethod
+    def truncate(text: str, max_tokens: int) -> str:
+        """截断文本到指定 token 数，保留完整句子。"""
+        pass
+
+
+class ContextWindow:
+    """模拟 LLM 的上下文窗口。"""
+
+    def __init__(self, max_tokens: int = 32000):
+        self.max_tokens = max_tokens
+        self.messages: list[dict] = []
+
+    def add_message(self, role: str, content: str):
+        """添加消息，超过限制时自动压缩早期消息。"""
+        pass
+
+    def get_summary(self) -> str:
+        """返回当前上下文的状态摘要。"""
+        pass
+```
+
+**测试**：
+```python
+cw = ContextWindow(max_tokens=1000)
+
+# 添加多条消息
+for i in range(20):
+    cw.add_message("user", f"这是第{i+1}条消息，包含一些示例文本。")
+
+# 验证窗口没有超过限制
+assert cw.estimate_tokens() <= cw.max_tokens
+```
+
+### 练习 2：实现消息压缩器
+
+```python
+class MessageCompressor:
+    """将对话历史压缩为结构化摘要。"""
+
+    def compress(self, messages: list[dict]) -> dict:
+        """
+        将消息列表压缩为结构化摘要：
+        {
+            "goals": ["用户的目标列表"],
+            "decisions": ["已做的决定"],
+            "file_changes": {"file.py": "modified"},
+            "pending_tasks": ["待办"]
+        }
+        """
+        pass
+
+    def decompress(self, summary: dict) -> str:
+        """将摘要还原为可读文本。"""
+        pass
+```
+
+### 练习 3：实现优先级分配器
+
+```python
+class PriorityAllocator:
+    """
+    为上下文的不同部分分配 token 预算。
+    确保高优先级内容（用户请求、安全策略）不被裁剪。
+    """
+
+    BUDGET = {
+        "system_prompt": 2000,
+        "user_request": 2000,
+        "file_content": 4000,
+        "conversation_history": 4000,
+        "tool_output": 3000,
+    }
+
+    def allocate(self, items: list[dict]) -> list[dict]:
+        """
+        根据优先级分配 token，返回值列表（已裁剪到预算内）。
+        """
+        pass
+
+    def get_usage_report(self) -> dict:
+        """返回 token 使用统计。"""
+        pass
+```
+
+### 验收清单
+
+- [ ] `ContextWindow` 能自动管理 token 限制
+- [ ] `MessageCompressor` 能有效压缩对话历史
+- [ ] `PriorityAllocator` 保证高优先级内容不被裁剪
+- [ ] 压缩后的摘要保留关键信息（目标、决策、文件变更）
+- [ ] 所有函数包含完整类型注解

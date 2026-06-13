@@ -1,0 +1,118 @@
+---
+title: Claude API 调用练习
+order: 3
+difficulty: beginner
+estimated_time: 20min
+tags: [实践, Claude, API]
+---
+
+## 练习
+
+### 目标
+
+通过动手练习掌握 Claude API 的调用、流式输出和工具使用。
+
+### 练习 1：基础 API 调用
+
+```python
+from anthropic import AsyncAnthropic
+
+client = AsyncAnthropic(api_key="your-api-key")
+
+async def basic_chat():
+    """发送消息并获取回复。"""
+    response = await client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=1024,
+        system="你是一个 AI Agent 开发助手。请用中文回答。",
+        messages=[
+            # 补全：用户消息 "用 Python 实现一个简单的 Agent 类"
+        ]
+    )
+    # 打印回复内容
+    # 你的代码：
+
+
+async def chat_with_history():
+    """带历史记录的对话。"""
+    messages = [
+        {"role": "user", "content": "我的名字是 Alice"},
+        # 补全：assistant 回复 "你好 Alice！有什么可以帮助你的？"
+        # 补全：user 继续问 "你还记得我的名字吗？"
+    ]
+    response = await client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=1024,
+        messages=messages,
+    )
+    print(response.content[0].text)
+```
+
+### 练习 2：流式输出
+
+```python
+async def stream_response():
+    """实现逐块流式输出。"""
+    async with client.messages.stream(
+        model="claude-sonnet-4-20250514",
+        max_tokens=1024,
+        messages=[
+            {"role": "user", "content": "用 markdown 写一篇关于 AI Agent 的短文"}
+        ]
+    ) as stream:
+        # 逐块接收并打印（end="" 实现同一行追加）
+        # 你的代码：
+        pass
+```
+
+### 练习 3：工具/函数调用
+
+```python
+import json
+
+# 定义一个工具
+tools = [
+    {
+        "name": "get_weather",
+        "description": "获取指定城市的天气信息",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "city": {"type": "string", "description": "城市名称"},
+                "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]}
+            },
+            "required": ["city"]
+        }
+    }
+]
+
+async def tool_use_example():
+    """让 Claude 调用工具获取天气。"""
+    response = await client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=1024,
+        tools=tools,
+        messages=[
+            {"role": "user", "content": "北京今天天气怎么样？"}
+        ]
+    )
+
+    # 检查是否有工具调用
+    for block in response.content:
+        if block.type == "tool_use":
+            print(f"调用工具: {block.name}")
+            print(f"参数: {json.dumps(block.input, ensure_ascii=False)}")
+
+            # 模拟工具返回结果
+            tool_result = {"temperature": 22, "condition": "晴天"}
+            # 将结果返回给 Claude
+            # 你的代码：构造包含 tool_result 的消息并继续对话
+```
+
+### 验收清单
+
+- [ ] 能使用 `client.messages.create()` 发送对话请求
+- [ ] 能处理多轮对话历史
+- [ ] 能实现流式输出（SSE）
+- [ ] 能定义和调用工具/函数
+- [ ] 能处理 tool_use 响应并将结果返回

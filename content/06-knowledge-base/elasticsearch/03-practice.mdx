@@ -1,0 +1,111 @@
+---
+title: Elasticsearch 基础练习
+order: 3
+difficulty: intermediate
+estimated_time: 30min
+tags: [实践, Elasticsearch, 搜索]
+---
+
+## 练习
+
+### 目标
+
+通过动手练习掌握 Elasticsearch 的索引管理、文档搜索和聚合分析。
+
+### 练习 1：索引与文档 CRUD
+
+```python
+from elasticsearch import Elasticsearch
+
+es = Elasticsearch("http://localhost:9200")
+
+# 1. 创建索引（带 mapping）
+# 创建一个 agent_logs 索引，包含以下字段：
+# - agent_name (keyword)
+# - level (keyword): info, warn, error
+# - message (text)
+# - timestamp (date)
+# - tokens_used (integer)
+
+index_body = {
+    "mappings": {
+        "properties": {
+            "agent_name": {"type": "keyword"},
+            "level": {"type": "keyword"},
+            # 你的代码：补充 message 和 timestamp 和 tokens_used 字段
+        }
+    }
+}
+es.indices.create(index="agent_logs", body=index_body, ignore=400)
+
+# 2. 批量写入文档
+from datetime import datetime
+
+logs = [
+    {"agent_name": "code-reviewer", "level": "info", "message": "开始审查代码", "timestamp": datetime.now(), "tokens_used": 150},
+    {"agent_name": "code-reviewer", "level": "warn", "message": "发现潜在安全问题", "timestamp": datetime.now(), "tokens_used": 200},
+    {"agent_name": "data-analyzer", "level": "error", "message": "API 调用超时", "timestamp": datetime.now(), "tokens_used": 50},
+]
+
+for i, log in enumerate(logs):
+    es.index(index="agent_logs", id=i+1, body=log)
+
+# 3. 验证：查询索引中的文档数
+# 你的代码：
+```
+
+### 练习 2：搜索与过滤
+
+```python
+# 1. 搜索所有 error 级别的日志
+query = {
+    "query": {
+        "term": {"level": "error"}
+    }
+}
+result = es.search(index="agent_logs", body=query)
+print(f"Error logs: {result['hits']['total']['value']}")
+
+# 2. 全文搜索：搜索包含 "安全" 的日志
+# 你的代码：
+
+# 3. 范围查询：tokens_used > 100 的日志
+# 你的代码：
+
+# 4. 组合查询：error 级别且 tokens_used > 100
+# 你的代码：
+```
+
+### 练习 3：聚合分析
+
+```python
+# 1. 按 level 分组统计日志数量
+agg_query = {
+    "size": 0,
+    "aggs": {
+        "by_level": {
+            "terms": {"field": "level"}
+        }
+    }
+}
+result = es.search(index="agent_logs", body=agg_query)
+for bucket in result["aggregations"]["by_level"]["buckets"]:
+    print(f"{bucket['key']}: {bucket['doc_count']}")
+
+# 2. 统计每个 agent 的 tokens_used 总和
+# 你的代码：
+
+# 3. 按时间直方图统计（每小时日志数）
+# 你的代码：
+
+# 4. 清理：删除测试索引
+es.indices.delete(index="agent_logs", ignore=[400, 404])
+```
+
+### 验收清单
+
+- [ ] 能创建带 mapping 的索引
+- [ ] 能写入和查询文档
+- [ ] 能使用 term、match、range 查询
+- [ ] 能使用 terms 聚合分组统计
+- [ ] 能删除索引进行清理

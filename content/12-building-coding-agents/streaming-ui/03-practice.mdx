@@ -1,0 +1,126 @@
+---
+title: 终端 UI 实现练习
+order: 3
+difficulty: advanced
+estimated_time: 40min
+tags: [实践, 终端UI, ANSI]
+---
+
+## 练习
+
+### 目标
+
+实现一个终端多路复用器，将 LLM 输出、日志和 diff 分区显示。
+
+### 练习 1：ANSI 渲染器
+
+```python
+class AnsiRenderer:
+    """ANSI 转义码渲染器。"""
+
+    COLORS = {
+        "red": "\033[31m",
+        "green": "\033[32m",
+        "yellow": "\033[33m",
+        "blue": "\033[34m",
+        "reset": "\033[0m",
+    }
+
+    def colorize(self, text: str, color: str) -> str:
+        """用 ANSI 颜色包裹文本。"""
+        pass
+
+    def progress_bar(self, current: int, total: int, width: int = 30) -> str:
+        """渲染进度条，使用 ANSI 在同一行更新。"""
+        pass
+
+    def clear_line(self) -> str:
+        """返回清空当前行的 ANSI 序列。"""
+        pass
+```
+
+**测试**：
+```python
+r = AnsiRenderer()
+print(r.colorize("成功!", "green"))  # 应显示绿色
+print(f"\r{r.progress_bar(5, 10)}", end="")  # 应显示 50% 进度条
+```
+
+### 练习 2：分屏多路复用器
+
+```python
+class ScreenSplitter:
+    """
+    将终端屏幕分为多个面板，各自独立更新。
+
+    用法：
+    screen = ScreenSplitter(terminal_height=24)
+    screen.add_panel("llm", height_ratio=0.5)
+    screen.add_panel("log", height_ratio=0.25)
+    screen.add_panel("diff", height_ratio=0.25)
+
+    screen.write("llm", "正在分析代码...")
+    screen.write("log", "$ npm test")
+    screen.write("diff", "+ new_function()")
+    screen.render()
+    """
+
+    def __init__(self, terminal_height: int = 24):
+        self.terminal_height = terminal_height
+        self.panels = {}
+
+    def add_panel(self, name: str, height_ratio: float):
+        """添加面板。"""
+        pass
+
+    def write(self, panel_name: str, line: str):
+        """向面板写入一行。"""
+        pass
+
+    def render(self):
+        """渲染所有面板到终端。"""
+        pass
+
+    def clear_panel(self, panel_name: str):
+        """清空指定面板。"""
+        pass
+```
+
+### 练习 3：流式文本显示
+
+```python
+import asyncio
+
+class StreamingDisplay:
+    """
+    逐字符流式显示文本，支持中断。
+
+    用法：
+    display = StreamingDisplay()
+    await display.stream("这是一段很长的文本...")  # 逐字显示
+    display.stop()  # 用户中断
+    """
+
+    def __init__(self):
+        self._running = False
+
+    async def stream(self, text: str, delay: float = 0.02):
+        """逐字符显示文本，每字间隔 delay 秒。"""
+        pass
+
+    async def stream_lines(self, lines: list[str], delay: float = 0.5):
+        """逐行显示，每行间隔 delay 秒。"""
+        pass
+
+    def stop(self):
+        """停止流式输出。"""
+        pass
+```
+
+### 验收清单
+
+- [ ] `AnsiRenderer` 能输出颜色和进度条
+- [ ] `ScreenSplitter` 能分区显示内容
+- [ ] `StreamingDisplay` 支持逐字符流式输出
+- [ ] 支持 Ctrl+C 中断流式输出
+- [ ] 不同面板的内容互不干扰

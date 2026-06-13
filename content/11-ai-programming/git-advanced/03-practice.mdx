@@ -1,0 +1,112 @@
+---
+title: Git 实战练习
+order: 3
+difficulty: intermediate
+estimated_time: 30min
+tags: [实践, Git, AI编程]
+---
+
+## 练习
+
+### 目标
+
+通过实操掌握 AI 协作中的 Git 工作流。
+
+### 练习 1：AI 分支管理
+
+```bash
+# 1. 创建一个测试项目
+mkdir git-ai-practice && cd git-ai-practice
+git init
+echo "# Test" > README.md
+git add README.md && git commit -m "init"
+
+# 2. 创建 AI 工作分支
+git checkout -b ai/feature-test
+
+# 3. 让 AI 做些修改（用 echo 模拟）
+echo "def hello(): pass" > main.py
+git add main.py
+git commit -m "feat: AI 生成的 hello 函数"
+
+# 4. 查看 AI 的修改
+git log --oneline
+git diff main...HEAD
+
+# 5. 合并回主分支
+git checkout main
+git merge ai/feature-test
+```
+
+### 练习 2：分块暂存
+
+```bash
+# 1. 创建一个包含多个改动的文件
+cat > app.py << 'EOF'
+import os
+import sys
+
+def old_function():
+    pass
+
+# TODO: 删除这个
+def debug():
+    print("debug")
+
+def main():
+    old_function()
+    debug()
+
+if __name__ == "__main__":
+    main()
+EOF
+
+git add app.py && git commit -m "初始版本"
+
+# 2. 让 AI 修改多个地方
+# 3. 用 git add -p 只接受部分修改
+git add -p app.py
+```
+
+### 练习 3：冲突模拟
+
+```bash
+# 1. 从 main 分支创建两个 AI 分支
+git checkout main
+git checkout -b ai/feature-a
+# AI 修改 app.py 的第一部分
+git add . && git commit -m "feature A"
+
+git checkout main
+git checkout -b ai/feature-b
+# AI 修改 app.py 的同一部分
+git add . && git commit -m "feature B"
+
+# 2. 模拟合并冲突
+git checkout main
+git merge ai/feature-a
+git merge ai/feature-b  # 会有冲突
+
+# 3. 解决冲突
+# 手动编辑解决冲突后
+git add app.py
+git commit --no-edit
+```
+
+### 练习 4：回退 AI 修改
+
+```bash
+# 回退最近一次 AI 提交
+git revert HEAD --no-edit
+
+# 回退到特定版本
+git revert <commit-hash> --no-edit
+```
+
+### 验收清单
+
+- [ ] 能为 AI 任务创建独立分支
+- [ ] 会用 `git add -p` 分块审查暂存
+- [ ] 能解决简单的合并冲突
+- [ ] 能用 `git revert` 回退 AI 提交
+- [ ] 理解 squash merge 的作用

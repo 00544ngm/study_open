@@ -9,7 +9,7 @@ import MDXContent from "@/components/MDXContent";
 import RelatedContent from "@/components/RelatedContent";
 import TableOfContents from "@/components/TableOfContents";
 import LearningPath from "@/components/LearningPath";
-import { ArrowLeft, Clock, CheckCircle2, Circle, ChevronLeft, ChevronRight } from "lucide-react";
+import { Clock, CheckCircle2, Circle, ChevronLeft, ChevronRight } from "lucide-react";
 import clsx from "clsx";
 
 async function loadItems(stageId: string, topicId: string): Promise<KnowledgeItem[]> {
@@ -56,14 +56,14 @@ export default function KnowledgePage({
   }, [params]);
 
   if (!loaded) {
-    return <div className="max-w-3xl mx-auto py-12 text-center text-[var(--text-muted)]">加载中...</div>;
+    return <div className="max-w-3xl mx-auto py-12 text-center text-[var(--text-muted, #94a3b8)]">加载中...</div>;
   }
 
   if (items.length === 0) {
     return (
       <div className="max-w-3xl mx-auto py-12 text-center">
-        <p className="text-[var(--text-muted)] mb-4">该知识点暂未添加内容</p>
-        <Link href="/" className="text-[var(--color-accent)] hover:underline">返回首页</Link>
+        <p className="text-[var(--text-muted, #94a3b8)] mb-4">该知识点暂未添加内容</p>
+        <Link href="/" className="text-[var(--color-accent, #3b82f6)] hover:underline">返回首页</Link>
       </div>
     );
   }
@@ -86,20 +86,20 @@ export default function KnowledgePage({
   return (
     <div className="max-w-3xl mx-auto">
       {/* Breadcrumb */}
-      <div className="flex items-center gap-2 text-sm text-[var(--text-muted)] mb-6">
-        <Link href="/" className="hover:text-[var(--text-secondary)]">首页</Link>
+      <div className="flex items-center gap-2 text-sm text-[var(--text-muted, #94a3b8)] mb-6">
+        <Link href="/" className="hover:text-[var(--text-secondary, #475569)]">首页</Link>
         <span>/</span>
-        <Link href={`/stages/${stageSlug}`} className="hover:text-[var(--text-secondary)]">{stageTitle}</Link>
+        <Link href={`/stages/${stageSlug}`} className="hover:text-[var(--text-secondary, #475569)]">{stageTitle}</Link>
         <span>/</span>
-        <Link href={`/stages/${stageSlug}/${topicSlug}`} className="hover:text-[var(--text-secondary)]">{topicTitle}</Link>
+        <Link href={`/stages/${stageSlug}/${topicSlug}`} className="hover:text-[var(--text-secondary, #475569)]">{topicTitle}</Link>
         <span>/</span>
-        <span className="text-[var(--text-primary)] truncate">{item?.title}</span>
+        <span className="text-[var(--text-primary, #0f172a)] truncate">{item?.title}</span>
       </div>
 
       {/* Nav bar */}
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-2">
-          <span className="text-sm text-[var(--text-muted)]">
+          <span className="text-sm text-[var(--text-muted, #94a3b8)]">
             {currentIdx + 1} / {items.length}
           </span>
         </div>
@@ -110,13 +110,13 @@ export default function KnowledgePage({
         <div className="flex items-center gap-2 mb-3">
           <span className={clsx("text-xs font-medium px-2 py-0.5 rounded-full", diffColor)}>{diffLabel}</span>
           {item?.estimatedTime && (
-            <span className="flex items-center gap-1 text-xs text-[var(--text-muted)]">
+            <span className="flex items-center gap-1 text-xs text-[var(--text-muted, #94a3b8)]">
               <Clock className="w-3 h-3" />
               {item.estimatedTime}
             </span>
           )}
         </div>
-        <h1 className="text-2xl sm:text-3xl font-bold text-[var(--text-primary)]">{item?.title}</h1>
+        <h1 className="text-2xl sm:text-3xl font-bold text-[var(--text-primary, #0f172a)]">{item?.title}</h1>
       </div>
 
       {/* Content with TOC */}
@@ -131,8 +131,8 @@ export default function KnowledgePage({
               className={clsx(
                 "flex items-center gap-2 px-4 py-2 rounded-lg border text-sm transition-all",
                 completed
-                  ? "border-[var(--color-success)] text-[var(--color-success)] bg-[var(--color-success)]/5"
-                  : "border-[var(--border-light)] text-[var(--text-muted)] hover:border-[var(--color-accent)]"
+                  ? "border-[var(--color-success, #10b981)] text-[var(--color-success, #10b981)] bg-[var(--color-success, #10b981)]/5"
+                  : "border-[var(--border-light, #e2e8f0)] text-[var(--text-muted, #94a3b8)] hover:border-[var(--color-accent, #3b82f6)]"
               )}
             >
               {completed ? <CheckCircle2 className="w-4 h-4" /> : <Circle className="w-4 h-4" />}
@@ -146,11 +146,11 @@ export default function KnowledgePage({
           )}
 
           {/* Prev/Next */}
-          <div className="mt-8 flex items-center justify-between border-t border-[var(--border-light)] pt-6">
+          <div className="mt-8 flex items-center justify-between border-t border-[var(--border-light, #e2e8f0)] pt-6">
             {prevItem ? (
               <Link
                 href={`/stages/${stageSlug}/${topicSlug}/${prevItem.slug}`}
-                className="flex items-center gap-2 text-sm text-[var(--text-secondary)] hover:text-[var(--color-accent)]"
+                className="flex items-center gap-2 text-sm text-[var(--text-secondary, #475569)] hover:text-[var(--color-accent, #3b82f6)]"
               >
                 <ChevronLeft className="w-4 h-4" />
                 {prevItem.title}
@@ -159,7 +159,7 @@ export default function KnowledgePage({
             {nextItem ? (
               <Link
                 href={`/stages/${stageSlug}/${topicSlug}/${nextItem.slug}`}
-                className="flex items-center gap-2 text-sm text-[var(--text-secondary)] hover:text-[var(--color-accent)]"
+                className="flex items-center gap-2 text-sm text-[var(--text-secondary, #475569)] hover:text-[var(--color-accent, #3b82f6)]"
               >
                 {nextItem.title}
                 <ChevronRight className="w-4 h-4" />

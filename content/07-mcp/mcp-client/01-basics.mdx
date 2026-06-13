@@ -6,9 +6,21 @@ estimated_time: 20min
 tags: [MCP, Client]
 ---
 
-## 入门
+## 概述
 
-MCP Client 连接 Server 并调用其工具。
+MCP Client 是连接 Host 和 Server 的桥梁。它在应用内部与 MCP Server 建立一对一连接，负责收发 JSON-RPC 消息、维护会话状态、管理工具列表。
+
+## 架构位置
+
+```
+Host (Claude Desktop / 你的应用)
+  │
+  ├── MCP Client ←→ Transport (stdio/SSE) ←→ MCP Server
+  │
+  └── Client 负责: 初始化、工具发现、调用、错误处理
+```
+
+## 基本用法
 
 ```python
 # 官方 MCP Client 示例
@@ -16,23 +28,26 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 async def main():
-    # 连接 Server
+    # 1. 定义 Server 连接参数
     server_params = StdioServerParameters(
         command="python",
-        args=["server.py"]
+        args=["server.py"],
+        env={},  # 可选：传递环境变量
     )
 
+    # 2. 建立连接（创建子进程 + stdin/stdout 管道）
     async with stdio_client(server_params) as (read, write):
+        # 3. 创建会话
         async with ClientSession(read, write) as session:
-            # 初始化
+            # 4. 初始化握手（协议版本协商）
             await session.initialize()
 
-            # 列出可用工具
+            # 5. 列出可用工具
             tools = await session.list_tools()
             for tool in tools:
                 print(f"工具: {tool.name} - {tool.description}")
 
-            # 调用工具
+            # 6. 调用工具
             result = await session.call_tool(
                 "add",
                 arguments={"a": 1, "b": 2}
@@ -40,9 +55,29 @@ async def main():
             print(f"结果: {result.content[0].text}")
 ```
 
-## 核心
+### 常用方法
 
-### 与 LLM 集成
+| 方法 | 说明 | 对应 Server 能力 |
+|------|------|------------------|
+| `session.initialize()` | 初始化握手，协商协议版本 | — |
+| `session.list_tools()` | 获取工具列表 | `tools/list` |
+| `session.call_tool(name, args)` | 调用工具 | `tools/call` |
+| `session.list_resources()` | 获取资源列表 | `resources/list` |
+| `session.read_resource(uri)` | 读取资源内容 | `resources/read` |
+| `session.list_prompts()` | 获取提示模板列表 | `prompts/list` |
+| `session.get_prompt(name, args)` | 获取提示模板内容 | `prompts/get` |
+
+## 生命周期
+
+完整的 Client Session 生命周期：
+
+```
+创建连接 → initialize (版本协商) → 列出能力 → 调用工具/读取资源 → 关闭
+```
+
+## 与 LLM 集成
+
+MCP Client 最典型的用法是作为 Agent 的工具调用层：
 
 ```python
 import json
@@ -68,16 +103,17 @@ async def agent_with_mcp(session, user_input: str):
 
     # 3. LLM 决定调用哪个工具
     response = client.chat.completions.create(
-        model="gpt-4",
+        model="gpt-4o",
         messages=[{"role": "user", "content": user_input}],
         tools=openai_tools
     )
 
-    # 4. 执行工具调用
+    # 4. 处理工具调用
     for choice in response.choices:
         if choice.finish_reason == "tool_calls":
             for tc in choice.message.tool_calls:
                 args = json.loads(tc.function.arguments)
+                # 通过 MCP Client 调用工具
                 result = await session.call_tool(
                     tc.function.name,
                     arguments=args
@@ -85,7 +121,65 @@ async def agent_with_mcp(session, user_input: str):
                 print(f"工具结果: {result.content[0].text}")
 ```
 
+## 多 Server 管理
+
+实际应用中通常会连接多个 MCP Server：
+
+```python
+class MCPManager:
+    """管理多个 MCP Server 连接"""
+
+    def __init__(self):
+        self.sessions: dict[str, ClientSession] = {}
+
+    async def connect_server(self, name: str, command: str, args: list[str]):
+        """连接一个新的 MCP Server。"""
+        params = StdioServerParameters(command=command, args=args)
+        read, write = await stdio_client(params).__aenter__()
+        session = await ClientSession(read, write).__aenter__()
+        await session.initialize()
+        self.sessions[name] = session
+        print(f"已连接 MCP Server: {name}")
+
+    async def get_all_tools(self) -> list[dict]:
+        """收集所有 Server 的工具。"""
+        all_tools = []
+        for name, session in self.sessions.items():
+            tools = await session.list_tools()
+            for t in tools:
+                all_tools.append({"server": name, "tool": t})
+        return all_tools
+
+    async def call_tool(self, server: str, tool: str, args: dict):
+        """在指定 Server 上调用工具。"""
+        if server not in self.sessions:
+            raise ValueError(f"Unknown server: {server}")
+        return await self.sessions[server].call_tool(tool, arguments=args)
+```
+
+## 错误处理
+
+```python
+from mcp.types import ErrorData, INTERNAL_ERROR, INVALID_PARAMS
+
+class RobustClient:
+    def __init__(self, session: ClientSession):
+        self.session = session
+
+    async def safe_call_tool(self, name: str, args: dict) -> dict:
+        try:
+            result = await self.session.call_tool(name, arguments=args)
+            return {"success": True, "result": result.content}
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e),
+                "error_type": type(e).__name__,
+            }
+```
+
 ## 练习
 
 1. 用 Python 编写 MCP Client，连接自己的 Server 并调用工具
 2. 将 MCP Client 集成到 LLM 调用链中，实现 Agent 自动选择工具
+3. 实现 MCPManager 管理至少 2 个 Server 连接并实现工具路由

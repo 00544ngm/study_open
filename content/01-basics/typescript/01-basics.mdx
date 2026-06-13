@@ -2,43 +2,101 @@
 title: TypeScript 基础类型
 order: 1
 difficulty: beginner
-estimated_time: 20min
+estimated_time: 25min
 tags: [TypeScript, 基础]
 ---
 
 ## 入门
 
-TypeScript 是 JavaScript 的超集，添加了类型系统。AI 编程工具在 TS 下的代码生成质量远高于纯 JS。
+### 为什么 AI 编程首选 TypeScript
+
+TypeScript 是 JavaScript 的超集，添加了类型系统。AI 编程工具在 TS 下的代码生成质量远高于纯 JS——**类型本身就是一份给 AI 看的文档**。
+
+### 基础类型
 
 ```typescript
-// 基础类型
+// 基本类型
 let name: string = "Agent";
 let version: number = 1.0;
 let isActive: boolean = true;
-```
+let config: any = {};       // 避免使用，失去类型保护
+let unknown: unknown = null; // 安全替代 any
 
-## 核心
+// 数组和元组
+let tools: string[] = ["read", "write"];
+let pair: [string, number] = ["error", 404];
+
+// 联合类型
+type Status = "idle" | "running" | "error" | "completed";
+let currentStatus: Status = "idle";  // 只能赋这 4 个值
+
+// 可选与只读
+interface AgentConfig {
+  readonly id: string;       // 不可修改
+  model: string;
+  temperature?: number;      // 可选属性
+}
+```
 
 ### 接口与类型别名
 
 ```typescript
-interface AgentConfig {
-  model: string;
-  temperature: number;
-  tools?: string[];
+// 接口定义对象结构
+interface ToolResult {
+  success: boolean;
+  data: unknown;
+  error?: string;
+  timestamp: Date;
 }
 
-type Status = "idle" | "running" | "error";
-```
+// 类型别名可用于联合类型
+type AsyncState<T> = 
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "success"; data: T }
+  | { status: "error"; error: string };
 
-## 进阶
+// 使用：所有状态都被类型系统覆盖
+function handleState(state: AsyncState<string>) {
+  if (state.status === "success") {
+    console.log(state.data.toUpperCase()); // TS 知道 data 是 string
+  }
+}
+```
 
 ### 泛型在 Agent 开发中的应用
 
 ```typescript
+// 泛型函数：输入输出类型关联
 interface ToolResult<T> {
   success: boolean;
   data: T;
   error?: string;
 }
+
+async function executeTool<T>(name: string, input: unknown): Promise<ToolResult<T>> {
+  try {
+    const data = await callTool(name, input);
+    return { success: true, data: data as T };
+  } catch (e) {
+    return { success: false, data: null as T, error: String(e) };
+  }
+}
+
+// 使用：类型自动推断
+const result = await executeTool<AgentConfig>("read_config", {});
+result.data.model;  // TS 知道这是 AgentConfig 类型
+```
+
+### 类型工具
+
+```typescript
+// Pick：从接口中选取部分属性
+type AgentSummary = Pick<AgentConfig, "model" | "temperature">;
+
+// Omit：排除某些属性
+type CreateAgentInput = Omit<AgentConfig, "id" | "createdAt">;
+
+// Partial：所有属性变为可选
+type UpdateInput = Partial<AgentConfig>;
 ```

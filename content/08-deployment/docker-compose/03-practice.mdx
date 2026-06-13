@@ -1,0 +1,166 @@
+---
+title: Docker Compose 练习
+order: 3
+difficulty: intermediate
+estimated_time: 25min
+tags: [实践, Docker, 部署]
+---
+
+## 练习
+
+### 目标
+
+通过动手练习掌握 Docker Compose 编排多服务应用，包括服务依赖、环境配置和数据持久化。
+
+### 练习 1：编写 Compose 文件
+
+```yaml
+# 为 AI Agent 平台编写 docker-compose.yml
+# 包含以下服务：
+# 1. api: Agent API 服务
+#    - 构建当前目录 ./backend
+#    - 映射 8000:8000 端口
+#    - 依赖 postgres 和 redis
+#    - 环境变量：DATABASE_URL, REDIS_URL
+#    - 挂载 ./app 到 /app（开发模式热重载）
+#
+# 2. postgres: 数据库
+#    - 使用 postgres:16-alpine 镜像
+#    - 设置环境变量 POSTGRES_DB=agent, POSTGRES_USER=agent, POSTGRES_PASSWORD=agent_pass
+#    - 持久化数据卷 pgdata
+#    - 暴露 5432 端口
+#
+# 3. redis: 缓存和任务队列
+#    - 使用 redis:7-alpine 镜像
+#    - 暴露 6379 端口
+
+version: "3.8"
+
+services:
+  api:
+    # 你的代码
+    build: ./backend
+    ports:
+      # 你的代码：映射 8000:8000
+    environment:
+      DATABASE_URL: postgresql://agent:agent_pass@postgres:5432/agent
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      # 你的代码：依赖 postgres 和 redis
+    volumes:
+      # 你的代码：挂载 ./app 到 /app
+
+  postgres:
+    image: postgres:16-alpine
+    # 你的代码：设置环境变量
+    # 你的代码：持久化数据卷 pgdata 到 /var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  redis:
+    # 你的代码：定义 redis 服务
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+volumes:
+  pgdata:
+```
+
+### 练习 2：服务健康检查
+
+```yaml
+# 为 postgres 和 api 服务添加健康检查
+
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: agent
+      POSTGRES_USER: agent
+      POSTGRES_PASSWORD: agent_pass
+    # 你的代码：添加 healthcheck
+    # 使用 pg_isready -U agent 检查
+    # 间隔 10s，超时 5s，重试 5 次
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agent"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: ./backend
+    ports: ["8000:8000"]
+    environment:
+      DATABASE_URL: postgresql://agent:agent_pass@postgres:5432/agent
+    # 你的代码：添加 healthcheck
+    # 使用 curl http://localhost:8000/health 检查
+    # 添加 condition: service_healthy 到 depends_on
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+```
+
+### 练习 3：Compose 命令操作
+
+```python
+# 补全以下 docker compose 命令和场景
+
+# 1. 启动所有服务（后台模式）
+# 你的代码：
+docker compose ________
+
+# 2. 查看服务日志（跟踪模式）
+# 你的代码：
+docker compose ________
+
+# 3. 查看服务状态
+# 你的代码：
+docker compose ________
+
+# 4. 只重启 api 服务
+# 你的代码：
+docker compose ________ api
+
+# 5. 查看 api 服务的日志
+# 你的代码：
+docker compose ________ api
+
+# 6. 在 api 容器中执行命令（如数据库迁移）
+# 你的代码：
+docker compose ________ api alembic upgrade head
+
+# 7. 停止所有服务但不删除容器
+# 你的代码：
+docker compose ________
+
+# 8. 停止并删除所有容器、网络和卷
+# 你的代码：
+docker compose ________
+
+# 场景题：
+# 开发环境下，你修改了 backend 目录的代码，
+# 但 api 服务没有更新，如何重新构建并启动？
+# 你的命令：
+# ____________________
+
+# 生产环境下，如何不中断服务地更新配置并重启？
+# 你的命令：
+# ____________________
+```
+
+### 验收清单
+
+- [ ] 能编写多服务 docker-compose.yml
+- [ ] 能配置服务依赖和环境变量
+- [ ] 能添加健康检查
+- [ ] 能使用 docker compose 命令管理服务
+- [ ] 理解数据卷持久化

@@ -1,0 +1,82 @@
+---
+title: AI 代码审查实战
+order: 3
+difficulty: intermediate
+estimated_time: 30min
+tags: [实践, Code Review, AI编程]
+---
+
+## 练习
+
+### 目标
+
+通过审查 AI 生成的代码，培养发现 AI 代码常见问题的能力。
+
+### 练习 1：找 Bug
+
+下面的代码是 AI 生成的。你能找出几个问题？
+
+```python
+from flask import Flask, request
+
+app = Flask(__name__)
+
+@app.route("/api/search")
+def search():
+    query = request.args.get("q")
+    sql = f"SELECT * FROM products WHERE name LIKE '%{query}%'"
+    result = db.execute(sql)
+    return {"results": result.fetchall()}
+
+def process_user(data: dict):
+    user = {"name": data["name"], "email": data["email"]}
+    save_to_db(user)
+    return user
+
+def save_to_db(user):
+    conn = sqlite3.connect("app.db")
+    conn.execute("INSERT INTO users VALUES (?, ?)", user)
+    conn.close()
+```
+
+**找出以下问题**：
+1. SQL 注入风险
+2. 缺少错误处理
+3. 缺少输入校验
+4. 资源未正确释放
+5. 缺少类型注解
+
+### 练习 2：审查清单实操
+
+用你学到的 AI 审查清单，审查以下 AI 生成的代码：
+
+```python
+def upload_file(file):
+    file.save(f"/tmp/{file.filename}")
+    return {"path": f"/tmp/{file.filename}"}
+
+def delete_user(user_id):
+    db.execute(f"DELETE FROM users WHERE id = {user_id}")
+    return {"deleted": True}
+
+def send_welcome(email):
+    import subprocess
+    subprocess.run(f"echo 'Welcome!' | mail -s 'Welcome' {email}", shell=True)
+```
+
+**逐项检查**：
+- 安全性：有没有路径穿越？命令注入？
+- 正确性：逻辑对不对？
+- 健壮性：异常进来了会怎样？
+
+### 练习 3：修复审查发现的问题
+
+把上面练习 1 的代码修改为安全版本。可以自己手写或让 AI 修复。
+
+### 验收清单
+
+- [ ] 能识别 SQL 注入风险
+- [ ] 能识别命令注入风险
+- [ ] 能识别路径穿越漏洞
+- [ ] 能识别缺少的错误处理
+- [ ] 能按审查清单逐项检查 AI 代码

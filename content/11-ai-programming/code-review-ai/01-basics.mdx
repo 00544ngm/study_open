@@ -8,27 +8,88 @@ tags: [AI编程, Code Review]
 
 ## 核心
 
-AI 生成的代码常见问题：
+### 为什么 AI 代码需要审查
 
-### 1. 幻象 API
+AI 生成代码的速度快，但质量不稳定。常见问题包括：
+- **幻象 API**：调用不存在的库或方法
+- **边缘遗漏**：只覆盖 happy path
+- **过度工程**：预判未来需求导致不必要的抽象
+- **幻觉数据**：捏造配置值或测试数据
+
+审查不是不信任 AI——而是信任但要验证。
+
+### 常见问题详解
+
+#### 1. 幻象 API
 
 ```python
 # AI 可能生成不存在的库或方法
 from magic_library import auto_solve  # 这个库不存在！
+result = some_function()  # 这个函数可能是 AI 编的
+
+# 应对策略：审查时先过一遍 import 和调用链
 ```
 
-审查：每次使用前确认包名和 API 签名真实存在。
+#### 2. 边缘条件遗漏
 
-### 2. 边缘条件遗漏
+AI 倾向于只覆盖 happy path。需要额外检查：
+- 输入为空（`None`、`[]`、`""`）时会不会崩
+- 网络超时/服务不可用时有没有降级
+- 并发调用时会不会有竞态条件
+- 权限不足时是否给用户清晰的错误信息
 
-AI 倾向于只覆盖 happy path。检查：空值、超时、并发、权限不足的情况。
+#### 3. 过度工程
 
-### 3. 过度工程
+```python
+# ❌ AI 喜欢"预判未来"
+class AbstractUserFactory:
+    pass
+class UserCreationStrategy:
+    pass
+class UserDTOMapper:
+    pass
 
-AI 喜欢"预判未来需求"而增加不必要的抽象。保持 YAGNI 原则。
+# ✅ YAGNI：现在只需要一个函数
+def create_user(data: dict) -> User:
+    ...
+```
 
 ### 审查流程
 
 ```
-AI 输出 → 类型检查 (tsc/mypy) → 单元测试 → 人工审查清单 → 集成测试
+AI 输出 → 类型检查 → 单元测试 → 人工审查 → 集成测试
+          (tsc/mypy)  (pytest)     (清单)     (e2e)
 ```
+
+每一层拦截不同维度的问题：
+- 类型检查拦截 ~30%：类型错误、签名不匹配
+- 单元测试拦截 ~50%：逻辑错误、边界遗漏
+- 人工审查拦截 ~15%：架构问题、安全隐患
+- 集成测试拦截 ~5%：系统层面的交互问题
+
+### 审查清单
+
+每次审查 AI 生成代码时，逐项检查：
+
+1. **安全性**：有没有密钥硬编码？SQL 注入？路径穿越？
+2. **正确性**：逻辑对不对？边界情况呢？返回值和文档一致吗？
+3. **可维护性**：命名清晰吗？注释必要吗？耦合度高吗？
+4. **性能**：有没有不必要的循环？重复数据库查询？
+5. **一致性**：符合项目现有的代码风格和[架构原则](/11-ai-programming/architecture-principles/01-basics)吗？
+6. **完整性**：错误处理了吗？日志打了吗？测试写了吗？
+
+### 实用技巧
+
+```bash
+# 查看 AI 的完整修改
+git diff --cached
+
+# 按文件审查
+git diff --stat  # 先看改了哪些文件
+git diff src/agent.py  # 再看具体内容
+
+# 接受部分修改
+git add -p  # 逐个 hunk 确认
+```
+
+> **知识关联**：审查前确保测试通过，参见[测试金字塔与 AI 代码](/11-ai-programming/testing-strategy/01-basics)；安全审查细节参考[权限分级](/12-building-coding-agents/security-approval/01-basics)。

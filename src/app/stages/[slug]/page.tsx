@@ -1,4 +1,3 @@
-import { notFound } from "next/navigation";
 import { stages } from "@/data/stages";
 import StageContent from "./StageContent";
 

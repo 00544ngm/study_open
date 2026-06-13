@@ -1,0 +1,134 @@
+---
+title: 安全审批系统构建练习
+order: 3
+difficulty: advanced
+estimated_time: 35min
+tags: [实践, 安全, 审计]
+---
+
+## 练习
+
+### 目标
+
+实现一个安全审批系统，包含策略引擎、审批流和审计日志。
+
+### 练习 1：策略引擎
+
+```python
+from enum import Enum
+from dataclasses import dataclass
+
+class Action(Enum):
+    READ_FILE = "read_file"
+    WRITE_FILE = "write_file"
+    EXEC_COMMAND = "exec_command"
+    INSTALL_PKG = "install_pkg"
+    NETWORK = "network"
+
+class Decision(Enum):
+    ALLOW = "allow"
+    CONFIRM = "confirm"
+    DENY = "deny"
+
+@dataclass
+class Context:
+    action: Action
+    target: str
+    user: str = "agent"
+
+
+class PolicyEngine:
+    """
+    可扩展的策略引擎。
+
+    用法：
+    engine = PolicyEngine()
+    engine.add_rule(deny_rm_rf)
+    engine.add_rule(allow_read_only)
+    result = engine.evaluate(Context(Action.EXEC_COMMAND, "rm -rf /"))
+    assert result == Decision.DENY
+    """
+
+    def __init__(self):
+        self.rules = []
+
+    def add_rule(self, rule):
+        """添加规则函数。规则返回 Decision 或 None（继续评估）。"""
+        self.rules.append(rule)
+
+    def evaluate(self, ctx: Context) -> Decision:
+        """按优先级评估所有规则，返回最终决策。"""
+        pass
+```
+
+**实现以下内建规则**：
+```python
+# 1. 拒绝 rm -rf
+# 2. 拒绝修改 .env 文件
+# 3. 允许读文件
+# 4. 拒绝 curl | bash 模式
+# 5. 拒绝直接修改 /etc/ 下的文件
+```
+
+### 练习 2：审计日志
+
+```python
+import json
+from datetime import datetime
+
+class AuditLog:
+    """
+    记录所有操作的安全审计日志，支持查询和统计。
+
+    用法：
+    log = AuditLog()
+    log.record("exec_command", "npm test", Decision.ALLOW)
+    log.record("write_file", "/etc/passwd", Decision.DENY)
+    assert len(log.query(action="write_file")) == 1
+    """
+
+    def __init__(self, storage_path: str = ".audit.log"):
+        self.storage_path = storage_path
+
+    def record(self, action: str, target: str, decision: Decision, reason: str = ""):
+        """记录一条审计日志。"""
+        pass
+
+    def query(self, action: str = None, user: str = None, limit: int = 100) -> list[dict]:
+        """查询审计日志。"""
+        pass
+
+    def stats(self) -> dict:
+        """返回统计摘要。"""
+        pass
+```
+
+### 练习 3：审批流
+
+```python
+import asyncio
+
+class ApprovalFlow:
+    """
+    审批流管理，带超时自动拒绝。
+
+    用法：
+    af = ApprovalFlow(timeout=10)
+    approved = await af.request("删除文件", "删除 src/temp.py")
+    """
+
+    def __init__(self, timeout: int = 30):
+        self.timeout = timeout
+
+    async def request(self, action: str, detail: str) -> bool:
+        """请求批准。超时未响应 = 拒绝。"""
+        pass
+```
+
+### 验收清单
+
+- [ ] `PolicyEngine` 内置至少 5 条安全规则
+- [ ] `AuditLog` 能记录和查询所有操作
+- [ ] `ApprovalFlow` 支持超时自动拒绝
+- [ ] `PolicyEngine.evaluate()` 的默认行为是 confirm（不确定时让用户决定）
+- [ ] 审计日志包含时间戳、操作类型、目标、决策和理由

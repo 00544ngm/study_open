@@ -8,28 +8,83 @@ tags: [AI编程, Prompt]
 
 ## 核心
 
-好的代码 Prompt = 上下文 + 精确指令 + 约束条件
+### 为什么代码 Prompt 需要结构化
 
-### 模板
+AI 理解自然语言，但代码需要精确。好的代码 Prompt = 上下文 + 精确指令 + 约束条件。缺任何一个，AI 就会"猜"你要什么，猜错就是垃圾代码。
+
+### Prompt 模板
 
 ```
-在 [文件路径] 中，[做什么改动]。
+## 上下文
+文件: [路径]
+当前代码: [粘贴相关代码]
 
-要求：
+## 任务
+[做什么改动]
+
+## 约束
 - 使用 [具体模式/库]
 - 输入/输出签名：[接口定义]
 - 处理边界情况：[列举]
 - 添加单元测试
+- 不要修改 [不应该动的部分]
 ```
 
 ### 反例 vs 正例
 
 ```
-❌ "给这个函数加错误处理"
-✅ "在 src/api/handler.ts 的 processRequest 函数中，
-    添加 try-catch 包裹 HTTP 调用，
-    捕获 NetworkError 和 TimeoutError，
-    返回 { success: false, error: message } 格式"
+❌ 模糊指令
+"给这个函数加错误处理"
+→ AI 不确定加什么类型的错误处理，可能过度设计
+
+✅ 精确指令
+"在 src/api/handler.ts 的 processRequest 函数中，
+添加 try-catch 包裹 HTTP 调用，
+捕获 NetworkError 和 TimeoutError，
+返回 { success: false, error: message } 格式"
+→ AI 精确知道要做什么、在哪里做、做成什么样
 ```
 
-AI 编程中，**prompt 越精确，生成质量越高**。
+### 五要素框架
+
+每个代码 Prompt 都应该包含：
+
+1. **定位**：哪个文件、哪个函数、哪一行
+2. **动作**：新增、修改、删除、重构
+3. **规格**：输入参数、返回值、类型签名
+4. **约束**：用什么库、遵守什么规则、不碰哪些代码
+5. **验证**：如何确认修改正确（测试、lint、类型检查）
+
+### 上下文提供技巧
+
+```markdown
+# 好的上下文提供方式
+相关内容 src/utils/helpers.ts:
+```typescript
+export function formatDate(date: Date): string { ... }
+export function parseDate(str: string): Date { ... }
+```
+
+# 不好的方式
+"参考那个工具函数，就是处理日期的那个"
+→ AI 需要猜测，大概率猜错
+```
+
+### 迭代式 Prompt
+
+复杂任务不要一步到位：
+
+```
+Round 1: "分析当前代码结构"
+  输出分析报告
+
+Round 2: "基于分析，设计方案"
+  输出方案 + 你审查
+
+Round 3: "按方案实现"
+  输出代码 + 你审查
+```
+
+每轮都可以纠正方向，避免 AI 在错误路径上越走越远。
+
+> **知识关联**：结构化 Prompt 与[Claude Code 实战](/11-ai-programming/ai-coding-tools/01-basics)结合使用效果最佳；Prompt 中的架构约束参考[SOLID 原则](/11-ai-programming/architecture-principles/01-basics)。

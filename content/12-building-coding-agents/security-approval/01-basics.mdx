@@ -8,31 +8,41 @@ tags: [安全, 编程智能体]
 
 ## 核心
 
+### 为什么需要安全体系
+
+AI 编程智能体能执行命令、修改文件、推送代码。如果没有安全控制，一次幻觉可能造成不可逆的破坏。安全体系不是为了限制智能体，而是为了**可控地释放能力**。
+
 ### 危险操作分级
 
-```
-安全等级  | 操作示例              | 策略
-auto      | 读文件、搜索代码      | 自动执行
-confirm   | 写文件、安装包        | 需要用户确认
-reject    | rm -rf /、修改 .env   | 直接拒绝
-```
+| 安全等级 | 操作示例 | 策略 |
+|---------|---------|------|
+| auto | 读文件、搜索代码、查看状态 | 自动执行 |
+| confirm | 写文件、安装依赖、执行测试 | 需用户确认 |
+| reject | `rm -rf /`、改 `.env`、推送到生产分支 | 直接拒绝 |
 
 ### 权限检查实现
 
 ```python
+import re
+
 class SecurityPolicy:
     SAFE_PATTERNS = [
         r"^git (status|diff|log)",
         r"^npm (test|run build)",
         r"^cat\s",
+        r"^ls\s",
+        r"^pwd",
     ]
     DANGEROUS_PATTERNS = [
-        r"rm -rf",
-        r">\s*/dev/",
-        r"DROP TABLE",
+        r"rm\s+-[rf]+\s+/",      # 递归删除根目录
+        r">\s*/dev/",              # 直接写入设备
+        r"DROP TABLE",             # 删表
+        r"chmod\s+777",            # 开放所有权限
+        r"curl.*\|\s*bash",        # 管道到 shell
     ]
 
     def check(self, command: str) -> str:
+        """返回 'auto'、'confirm' 或 'reject'。"""
         for pat in self.DANGEROUS_PATTERNS:
             if re.search(pat, command):
                 return "reject"
@@ -42,4 +52,37 @@ class SecurityPolicy:
         return "confirm"
 ```
 
-每次执行前展示 diff 或命令预览，让用户有机会中断，是安全体系的核心体验。
+### 确认流核心体验
+
+```python
+class ApprovalFlow:
+    def __init__(self):
+        self.pending_approvals = []
+
+    async def request_approval(self, action: str, details: str) -> bool:
+        """请求用户批准操作。"""
+        self.pending_approvals.append({
+            "action": action,
+            "details": details,
+            "status": "pending"
+        })
+
+        # 展示给用户
+        print(f"\n⚠ 需要确认：{action}")
+        print(f"  {details}")
+
+        # 等待用户响应（带超时，超时自动拒绝）
+        response = await self.wait_for_user(timeout=30)
+        return response == "approve"
+```
+
+### 设计要点
+
+每次执行前展示 diff 或命令预览，让用户有机会中断，是安全体系的核心体验。关键原则：
+
+1. **默认拒绝**——任何未明确允许的操作都需要确认
+2. **可审计**——所有操作记录到审计日志
+3. **可撤销**——至少文件修改可以[回退](/12-building-coding-agents/file-operations/02-advanced)
+4. **渐进式信任**——对于同一会话中已确认的操作，可以降低确认频率
+
+> **知识关联**：安全审批系统需要结合[代码审查清单](/11-ai-programming/code-review-ai/01-basics)识别危险模式；审计日志设计可参考[数据库 Schema 设计](/02-backend/database-design/01-basics)。

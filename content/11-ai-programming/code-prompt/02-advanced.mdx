@@ -1,0 +1,99 @@
+---
+title: 高级代码 Prompt 策略
+order: 2
+difficulty: advanced
+estimated_time: 35min
+tags: [AI编程, Prompt, LLM]
+---
+
+## 进阶
+
+### 链式 Prompt
+
+复杂任务拆解为多步，每一步的输出作为下一步的输入：
+
+```
+Step 1: "分析 src/api/handler.ts 的当前架构"
+Step 2: "基于上一步的分析，设计重构方案"
+Step 3: "根据重构方案，逐段生成代码"
+```
+
+这种方法比一步到位更可控——每步都可以人工审查和修正方向。
+
+### 文件级上下文注入
+
+```python
+# 自动收集相关文件作为 prompt 上下文
+def build_refactor_prompt(target_file: str) -> str:
+    imports = extract_imports(target_file)
+    related = find_related_files(imports)
+
+    context = ""
+    for f in related:
+        with open(f) as fh:
+            context += f"# File: {f}\n{fh.read()}\n\n"
+
+    return f"""
+    参考以下相关文件：
+    {context}
+
+    现在修改 {target_file}，实现：
+    [具体需求]
+    """
+```
+
+### 种子词技巧
+
+在 prompt 末尾引导 AI 的输出方向：
+
+```
+# 在 prompt 结尾加入种子词
+请输出修改后的完整文件，第一行以 import 开头：
+import
+```
+
+这利用了 LLM 的自回归特性——你控制第一个 token，后面的内容会更稳定。
+
+### 约束编码模式
+
+```markdown
+## 技术约束
+- 框架: FastAPI + SQLAlchemy
+- 错误处理: 所有异常返回统一格式
+- 日志: 每个函数入口和出口打日志
+- 类型: 完整的 Python 类型注解
+- 测试: 包含 pytest 单元测试
+
+## 安全约束
+- 所有用户输入必须经过 Pydantic 校验
+- SQL 查询使用参数化查询，禁止拼接
+- 密码/密钥必须从环境变量读取
+```
+
+### 反模式：Prompt 过载
+
+```markdown
+❌ 不要在一个 prompt 里塞太多需求：
+"给我写一个完整的电商系统，包含用户注册登录、
+商品管理、购物车、订单、支付、后台管理、
+数据分析、消息通知、优惠券功能..."
+
+✅ 应该拆分：
+1. "创建 User 模型的 Pydantic schema"
+2. "实现用户注册 API 端点"
+3. "实现 JWT 登录认证"
+...
+```
+
+### 测试先行 Prompt
+
+先写测试再写实现是最可靠的 AI 编程方式：
+
+```
+以下是测试用例。请实现能通过这些测试的代码。
+不要修改测试本身。
+
+[粘贴测试代码]
+```
+
+AI 代码通过测试 = 代码可用。把测试作为 prompt 的核心约束。

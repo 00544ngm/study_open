@@ -1,0 +1,145 @@
+---
+title: WebSocket 基础练习
+order: 3
+difficulty: intermediate
+estimated_time: 25min
+tags: [实践, WebSocket, FastAPI]
+---
+
+## 练习
+
+### 目标
+
+通过动手练习掌握 WebSocket 通信、实时消息推送和客户端实现。
+
+### 练习 1：实现 WebSocket 服务端
+
+```python
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from typing import Set
+
+app = FastAPI()
+
+
+class ConnectionManager:
+    """管理 WebSocket 连接。"""
+
+    def __init__(self):
+        self.active_connections: Set[WebSocket] = set()
+
+    async def connect(self, websocket: WebSocket):
+        """接受连接并加入集合。"""
+        await websocket.accept()
+        self.active_connections.add(websocket)
+
+    def disconnect(self, websocket: WebSocket):
+        """断开连接时移除。"""
+        self.active_connections.discard(websocket)
+
+    async def broadcast(self, message: str):
+        """向所有连接广播消息。"""
+        # 你的实现：遍历所有连接，逐个发送
+
+
+manager = ConnectionManager()
+
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await manager.connect(websocket)
+    try:
+        while True:
+            data = await websocket.receive_text()
+            # 回显消息给客户端
+            # 你的代码：
+            # 同时广播给所有连接
+            # 你的代码：
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+```
+
+### 练习 2：WebSocket 客户端
+
+```python
+import asyncio
+import websockets
+
+async def websocket_client():
+    """连接 WebSocket 服务端并收发消息。"""
+    uri = "ws://localhost:8000/ws"
+
+    async with websockets.connect(uri) as websocket:
+        # 1. 发送消息
+        await websocket.send("Hello Agent!")
+        # 你的代码：
+
+        # 2. 接收回复
+        response = await websocket.recv()
+        print(f"收到: {response}")
+
+        # 3. 连续发送 3 条消息，每次等待回复
+        for msg in ["msg1", "msg2", "msg3"]:
+            # 你的代码：
+
+    print("连接关闭")
+
+asyncio.run(websocket_client())
+```
+
+### 练习 3：实现实时日志推送
+
+```python
+import asyncio
+import json
+from datetime import datetime
+
+class LogBroadcaster:
+    """模拟 Agent 运行日志的实时推送。"""
+
+    def __init__(self):
+        self.subscribers = set()
+
+    def subscribe(self, websocket):
+        self.subscribers.add(websocket)
+
+    def unsubscribe(self, websocket):
+        self.subscribers.discard(websocket)
+
+    async def push_log(self, level: str, message: str):
+        """生成日志并通过 WebSocket 推送给所有订阅者。"""
+        log_entry = json.dumps({
+            "timestamp": datetime.now().isoformat(),
+            "level": level,
+            "message": message,
+        })
+        # 你的代码：推送给所有连接
+
+
+# 模拟日志生成
+async def simulate_agent_logs(broadcaster: LogBroadcaster):
+    """每秒生成一条模拟日志。"""
+    logs = [
+        ("INFO", "Agent 开始运行"),
+        ("INFO", "正在加载模型..."),
+        ("WARN", "Token 使用量接近限制"),
+        ("INFO", "任务完成"),
+    ]
+    for level, msg in logs:
+        await asyncio.sleep(1)
+        await broadcaster.push_log(level, msg)
+
+
+# 在 FastAPI 中整合
+@app.on_event("startup")
+async def startup():
+    asyncio.create_task(simulate_agent_logs(broadcaster))
+```
+
+### 验收清单
+
+- [ ] 能使用 FastAPI 创建 WebSocket 端点
+- [ ] 能管理多个 WebSocket 连接（连接/断开）
+- [ ] 能实现消息广播
+- [ ] 能编写 WebSocket 客户端收发消息
+- [ ] 能实现实时日志推送功能
+- [ ] 理解 WebSocket 的全双工通信特性

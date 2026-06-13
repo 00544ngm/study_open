@@ -6,7 +6,13 @@ estimated_time: 15min
 tags: [LangSmith, 监控]
 ---
 
-## 入门
+## 概述
+
+LangSmith 是 LangChain 推出的 LLM 应用全生命周期监控平台，提供 **Trace 追踪**、**评估**、**数据集管理** 和 **在线监控** 四大能力。
+
+不同于传统 APM（如 Datadog），LangSmith 专为 LLM 应用设计，能追踪 Prompt 内容、Token 消耗、工具调用链等 LLM 特有的指标。
+
+## 快速接入
 
 ```python
 import os
@@ -21,28 +27,119 @@ llm = ChatOpenAI(model="gpt-4o")
 llm.invoke("Hello")
 ```
 
-## 核心
+只需设置环境变量，所有 LangChain 调用会自动上报 Trace。
+
+### 非 LangChain 项目接入
+
+如果未使用 LangChain，用 `wrap_openai` 包装 OpenAI 客户端：
+
+```python
+from langsmith.wrappers import wrap_openai
+from openai import OpenAI
+
+client = wrap_openai(OpenAI())
+response = client.chat.completions.create(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "Hello"}],
+)
+# 所有调用自动追踪
+```
+
+或使用 `@traceable` 装饰器追踪任意函数：
+
+```python
+from langsmith import traceable
+
+@traceable(name="custom_function", run_type="chain")
+def my_function(input_text: str) -> str:
+    # 函数内的 LLM 调用、API 请求都会被追踪
+    return process(input_text)
+```
+
+## Trace 追踪
+
+每次 LLM 调用生成一个 Trace，包含完整的调用链路：
 
 ```python
 from langsmith import traceable
 from langsmith.wrappers import wrap_openai
+from openai import OpenAI
 
-# 手动追踪
-@traceable(name="agent_call", run_type="chain")
-async def my_agent(input_text: str) -> str:
-    result = await llm.invoke(input_text)
-    return result.content
+client = wrap_openai(OpenAI())
 
-# 查看追踪信息
-# LangSmith 控制台可查看:
-# - Prompt 内容
-# - Token 数量
-# - 延迟
-# - 成本
-# - 工具调用链
+@traceable(name="agent_execution", run_type="chain")
+def run_agent(query: str) -> str:
+    # 第一步：LLM 调用
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": query}],
+    )
+    result = response.choices[0].message.content
+
+    # 第二步：工具调用也自动追踪
+    # ...
+
+    return result
 ```
+
+### Trace 中可查看的信息
+
+| 字段 | 说明 | 用途 |
+|------|------|------|
+| Prompt | 完整的输入消息 | 调试输出质量问题 |
+| Response | 模型回复 | 检查生成内容 |
+| Token Count | 输入/输出 Token 数 | 成本核算 |
+| Latency | 端到端延迟 | 性能监控 |
+| Cost | 预估费用 | 成本控制 |
+| Tool Calls | 工具调用链路 | Agent 行为分析 |
+| Metadata | 自定义标签 | 过滤和分组 |
+
+## 手动记录
+
+除自动追踪外，也可以手动创建 Run 记录：
+
+```python
+from langsmith import Client
+
+client = Client()
+
+# 创建追踪树
+run = client.create_run(
+    name="custom_chain",
+    run_type="chain",
+    inputs={"query": "Hello"},
+    project_name="my-agent",
+)
+
+# 添加子 Run
+child = client.create_run(
+    name="llm_call",
+    run_type="llm",
+    inputs={"messages": [...]},
+    parent_run_id=run.id,
+    project_name="my-agent",
+)
+
+# 完成 Run
+client.update_run(child.id, outputs={"response": "..."})
+client.update_run(run.id, outputs={"result": "..."})
+```
+
+## 环境配置
+
+LangSmith 支持多环境隔离（Production / Staging / Development）：
+
+```python
+# 通过 project_name 区分环境
+os.environ["LANGSMITH_PROJECT"] = "agent-prod"    # 生产
+os.environ["LANGSMITH_PROJECT"] = "agent-staging"  # 预发布
+os.environ["LANGSMITH_PROJECT"] = "agent-dev"      # 开发
+```
+
+建议在代码中通过环境变量控制，避免硬编码。
 
 ## 练习
 
-1. 在 LangSmith 中创建一个项目，运行 Agent 并查看 Trace
-2. 为 Agent 添加自定义的 metadata 标签（如版本号、环境）
+1. 在 LangSmith 中创建一个项目，运行 Agent 并查看 Trace 详情
+2. 为 Agent 添加自定义 metadata 标签（如版本号、环境）
+3. 使用 `wrap_openai` 包装非 LangChain 项目并观察 Trace

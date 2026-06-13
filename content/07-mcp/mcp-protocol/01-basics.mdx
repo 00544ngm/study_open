@@ -6,38 +6,131 @@ estimated_time: 20min
 tags: [MCP, 协议]
 ---
 
-## 入门
+## 概述
 
-```text
-MCP 核心概念：
+MCP（Model Context Protocol）是 Anthropic 推出的开放协议，定义 AI 应用（Host）如何安全地访问外部工具和数据。类比 USB-C 为硬件设备提供的标准化连接方式，MCP 为 AI 应用提供标准化的接口。
 
-Host          → 需要访问数据的 AI 应用 (Claude Desktop, Cursor, Claude Code)
-Client        → 与 MCP Server 建立一对一连接的客户端
-Server        → 提供工具、资源、提示的轻量级服务
-Transport     → 通信方式 (stdio, SSE)
+## 架构模型
+
+```
+Host (Claude Desktop / Cursor / Claude Code)
+  │
+  ├── Client ── Transport ── Server (提供 Tools + Resources + Prompts)
+  │
+  └── 用户通过 Host 与 Agent 交互，Agent 通过 Client 调用 Server 能力
 ```
 
-## 核心
+### 四层角色
 
-### MCP 的三类能力
+| 角色 | 说明 | 示例 |
+|------|------|------|
+| **Host** | 需要访问数据的 AI 应用 | Claude Desktop、Cursor、Claude Code |
+| **Client** | 与 Server 一对一连接的客户端 | SDK 创建的会话 |
+| **Server** | 提供能力的轻量级服务 | 文件系统、数据库、API 封装 |
+| **Transport** | 通信层 | stdio（子进程）、SSE（HTTP）|
 
-```text
-1. Tools（工具）
-   - Agent 可以调用的函数
-   - 类似 OpenAI Function Calling
-   - 需要用户授权
+## 三类能力
 
-2. Resources（资源）
-   - 暴露给 Agent 的数据
-   - 类似 GET 请求
-   - 可自动同步
+### 1. Tools（工具）
 
-3. Prompts（提示模板）
-   - 预定义的 Prompt 模板
-   - 方便复用
+Agent 可以调用的函数，类似 OpenAI Function Calling。每次调用需用户授权：
+
+```python
+@mcp.tool()
+def search_docs(query: str) -> str:
+    """搜索内部文档"""
+    # 用户会在界面上看到 "要允许 Agent 调用 search_docs 吗？"
+    return search_results(query)
 ```
 
-### Python MCP Server 示例
+**特点：**
+- 由 Agent 主动调用（模型决定何时用）
+- 需要用户授权（安全控制）
+- 适合"写操作"和"需要决策的操作"
+
+### 2. Resources（资源）
+
+暴露给 Agent 的数据，类似 REST API 的 GET 请求：
+
+```python
+@mcp.resource("file:///docs/{path}")
+def get_document(path: str) -> str:
+    """读取文档内容"""
+    return read_file(f"/docs/{path}")
+```
+
+**特点：**
+- 由 Host/Client 主动读取
+- 支持 URI 模板（`file:///docs/{path}`）
+- 可自动同步（订阅更新）
+- 适合"读操作"
+
+### 3. Prompts（提示模板）
+
+预定义的 Prompt 模板，方便复用：
+
+```python
+@mcp.prompt()
+def code_review(code: str) -> str:
+    return f"请审查以下代码：\n```\n{code}\n```"
+```
+
+**特点：**
+- 预定义的模板
+- 由用户或 Host 触发
+- 适合标准化任务
+
+## Transport 通信方式
+
+### stdio（标准输入输出）
+
+MCP Server 作为子进程运行，通过 stdin/stdout 通信：
+
+```
+Claude Desktop → 启动 Python 子进程 → 通过 stdin/stdout 收发 JSON 消息
+```
+
+**适用场景：** 本地工具、文件系统操作、本地数据库
+
+### SSE（Server-Sent Events）
+
+通过 HTTP 连接通信，Server 可远程运行：
+
+```
+Claude Desktop → HTTP 请求 → 远程 MCP Server（运行在服务器上）
+```
+
+**适用场景：** 远程 API、共享服务、需要网络访问的工具
+
+## 消息格式
+
+MCP 使用 JSON-RPC 2.0 作为消息格式：
+
+```json
+// 请求
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/call",
+  "params": {
+    "name": "search_docs",
+    "arguments": {"query": "MCP protocol"}
+  }
+}
+
+// 响应
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "content": [
+      {"type": "text", "text": "MCP 是一种开放协议..."}
+    ]
+  }
+}
+```
+
+## 快速示例
 
 ```python
 # mcp_server.py
@@ -45,6 +138,7 @@ from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("learning-assistant")
 
+# Tools
 @mcp.tool()
 def search_notes(query: str) -> str:
     """搜索学习笔记"""
@@ -55,16 +149,34 @@ def get_topic_summary(topic: str) -> str:
     """获取知识点摘要"""
     return f"{topic} 的核心概念..."
 
+# Resources
 @mcp.resource("notes://latest")
 def latest_notes() -> str:
     """获取最近的学习笔记"""
     return "最近笔记内容..."
 
+# Prompts
+@mcp.prompt()
+def study_plan(topic: str) -> str:
+    return f"请为学习 {topic} 制定一个计划"
+
 if __name__ == "__main__":
     mcp.run()
 ```
+
+## 对比 OpenAI Function Calling
+
+| 特性 | MCP | OpenAI Function Calling |
+|------|-----|------------------------|
+| 协议 | 开放标准 | 厂商绑定 |
+| 传输 | stdio / SSE | HTTP only |
+| 能力 | Tools + Resources + Prompts | Functions only |
+| 资源模型 | 支持 URI 寻址和自动同步 | 无 |
+| 提示模板 | 内置支持 | 无 |
+| 服务发现 | 自动（list_tools） | 需手动配置 |
 
 ## 练习
 
 1. 创建一个 MCP Server，暴露一个读取本地笔记的工具
 2. 在 Claude Desktop 中配置并测试该 MCP Server
+3. 对比 MCP Resource 和 Tool 在适用场景上的区别

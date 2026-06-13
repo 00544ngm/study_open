@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 400" font-family="'Microsoft YaHei', 'PingFang SC', sans-serif">
+  <rect width="800" height="400" fill="#1e1e2e" rx="8"/>
+  <!-- Title bar -->
+  <rect x="0" y="0" width="800" height="36" fill="#181825" rx="8"/>
+  <rect x="0" y="20" width="800" height="16" fill="#181825"/>
+  <circle cx="16" cy="18" r="5" fill="#f38ba8"/>
+  <circle cx="32" cy="18" r="5" fill="#fab387"/>
+  <circle cx="48" cy="18" r="5" fill="#a6e3a1"/>
+  <text x="400" y="24" text-anchor="middle" fill="#cdd6f4" font-size="13" font-weight="bold">DevTools - Network Panel</text>
+  <!-- Toolbar -->
+  <rect x="0" y="36" width="800" height="32" fill="#313244"/>
+  <text x="12" y="56" fill="#89b4fa" font-size="12" font-weight="bold">All</text>
+  <text x="42" y="56" fill="#a6adc8" font-size="12">XHR</text>
+  <text x="80" y="56" fill="#a6adc8" font-size="12">JS</text>
+  <text x="108" y="56" fill="#a6adc8" font-size="12">CSS</text>
+  <text x="144" y="56" fill="#a6adc8" font-size="12">Img</text>
+  <text x="184" y="56" fill="#a6adc8" font-size="12">Doc</text>
+  <text x="226" y="56" fill="#a6adc8" font-size="12">WS</text>
+  <!-- Filter -->
+  <rect x="500" y="42" width="140" height="20" rx="4" fill="#45475a"/>
+  <text x="510" y="56" fill="#6c7086" font-size="11">Filter URLs</text>
+  <!-- Column headers -->
+  <rect x="0" y="68" width="800" height="28" fill="#45475a"/>
+  <text x="12" y="86" fill="#cdd6f4" font-size="11" font-weight="bold">Name</text>
+  <text x="280" y="86" fill="#cdd6f4" font-size="11" font-weight="bold">Status</text>
+  <text x="360" y="86" fill="#cdd6f4" font-size="11" font-weight="bold">Type</text>
+  <text x="440" y="86" fill="#cdd6f4" font-size="11" font-weight="bold">Initiator</text>
+  <text x="560" y="86" fill="#cdd6f4" font-size="11" font-weight="bold">Size</text>
+  <text x="640" y="86" fill="#cdd6f4" font-size="11" font-weight="bold">Time</text>
+  <!-- Row 1 - selected -->
+  <rect x="0" y="96" width="800" height="28" fill="#313244"/>
+  <circle cx="16" cy="110" r="4" fill="#a6e3a1"/>
+  <text x="28" y="114" fill="#89b4fa" font-size="12">api.example.com/v1/articles</text>
+  <text x="290" y="114" fill="#a6e3a1" font-size="12">200</text>
+  <text x="370" y="114" fill="#a6adc8" font-size="12">xhr</text>
+  <text x="450" y="114" fill="#a6adc8" font-size="12">fetch</text>
+  <text x="568" y="114" fill="#a6adc8" font-size="12">3.2 KB</text>
+  <text x="648" y="114" fill="#a6adc8" font-size="12">128 ms</text>
+  <!-- Row 2 -->
+  <rect x="0" y="124" width="800" height="28" fill="#1e1e2e"/>
+  <circle cx="16" cy="138" r="4" fill="#f9e2af"/>
+  <text x="28" y="142" fill="#89b4fa" font-size="12">api.example.com/auth</text>
+  <text x="290" y="142" fill="#fab387" font-size="12">302</text>
+  <text x="370" y="142" fill="#a6adc8" font-size="12">xhr</text>
+  <text x="450" y="142" fill="#a6adc8" font-size="12">fetch</text>
+  <text x="568" y="142" fill="#a6adc8" font-size="12">512 B</text>
+  <text x="648" y="142" fill="#a6adc8" font-size="12">45 ms</text>
+  <!-- Row 3 -->
+  <rect x="0" y="152" width="800" height="28" fill="#313244"/>
+  <circle cx="16" cy="166" r="4" fill="#f38ba8"/>
+  <text x="28" y="170" fill="#89b4fa" font-size="12">cdn.example.com/analytics.js</text>
+  <text x="290" y="170" fill="#a6e3a1" font-size="12">200</text>
+  <text x="370" y="170" fill="#a6adc8" font-size="12">script</text>
+  <text x="450" y="170" fill="#a6adc8" font-size="12">document</text>
+  <text x="568" y="170" fill="#a6adc8" font-size="12">28.1 KB</text>
+  <text x="648" y="170" fill="#a6adc8" font-size="12">312 ms</text>
+  <!-- Row 4 -->
+  <rect x="0" y="180" width="800" height="28" fill="#1e1e2e"/>
+  <circle cx="16" cy="194" r="4" fill="#a6e3a1"/>
+  <text x="28" y="198" fill="#89b4fa" font-size="12">api.example.com/v1/users</text>
+  <text x="290" y="198" fill="#a6e3a1" font-size="12">200</text>
+  <text x="370" y="198" fill="#a6adc8" font-size="12">xhr</text>
+  <text x="450" y="198" fill="#a6adc8" font-size="12">fetch</text>
+  <text x="568" y="198" fill="#a6adc8" font-size="12">1.8 KB</text>
+  <text x="648" y="198" fill="#a6adc8" font-size="12">95 ms</text>
+  <!-- Detail panel -->
+  <rect x="0" y="210" width="800" height="190" fill="#1e1e2e"/>
+  <rect x="0" y="210" width="800" height="28" fill="#313244"/>
+  <text x="12" y="230" fill="#89b4fa" font-size="12" font-weight="bold">Headers</text>
+  <text x="72" y="230" fill="#a6adc8" font-size="12">Payload</text>
+  <text x="132" y="230" fill="#a6adc8" font-size="12">Response</text>
+  <text x="204" y="230" fill="#a6adc8" font-size="12">Cookies</text>
+  <!-- Request URL -->
+  <text x="16" y="256" fill="#a6adc8" font-size="11">Request URL:</text>
+  <text x="100" y="256" fill="#89b4fa" font-size="11">https://api.example.com/v1/articles?page=1&page_size=20</text>
+  <text x="16" y="274" fill="#a6adc8" font-size="11">Request Method:</text>
+  <text x="120" y="274" fill="#f9e2af" font-size="11">GET</text>
+  <text x="16" y="292" fill="#a6adc8" font-size="11">Status Code:</text>
+  <text x="100" y="292" fill="#a6e3a1" font-size="11">200 OK</text>
+  <!-- Query params -->
+  <text x="16" y="318" fill="#cdd6f4" font-size="11" font-weight="bold">Query String Parameters</text>
+  <text x="16" y="340" fill="#a6adc8" font-size="11">page:</text>
+  <text x="100" y="340" fill="#fab387" font-size="11">1</text>
+  <text x="260" y="340" fill="#a6adc8" font-size="11">page_size:</text>
+  <text x="344" y="340" fill="#fab387" font-size="11">20</text>
+  <text x="500" y="340" fill="#a6adc8" font-size="11">sort:</text>
+  <text x="584" y="340" fill="#fab387" font-size="11">newest</text>
+  <!-- Legend -->
+  <text x="16" y="370" fill="#a6adc8" font-size="10">F12 → Network → XHR Filter → 找到 API 请求 → 查看 URL / Headers / Params</text>
+</svg>

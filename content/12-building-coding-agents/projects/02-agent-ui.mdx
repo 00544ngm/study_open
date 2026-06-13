@@ -1,0 +1,129 @@
+---
+title: 终端 UI 与 Agent 联调
+order: 2
+difficulty: advanced
+estimated_time: 60min
+tags: [项目, 编程智能体, 终端UI]
+---
+
+## 项目：为 Mini Code Agent 添加终端 UI
+
+### 目标
+
+为上一个项目的 Mini Code Agent 添加流式终端界面：分屏显示 LLM 输出、命令执行日志、文件修改 diff。
+
+### 阶段 1：流式输出
+
+```python
+import asyncio
+
+class StreamingUI:
+    def __init__(self):
+        self.running = True
+
+    async def stream_text(self, text: str, prefix: str = ""):
+        """逐字符流式输出。"""
+        for char in text:
+            if not self.running:
+                break
+            print(f"{prefix}{char}", end="", flush=True)
+            await asyncio.sleep(0.02)
+        print()
+
+    def stop(self):
+        self.running = False
+```
+
+**任务**: 实现流式输出，支持用户中断。
+
+### 阶段 2：分屏显示
+
+使用 ANSI 转义码实现上下分屏：
+
+```
+┌── LLM 输出 ──────────────────────────────┐
+│ 正在分析文件结构...                        │
+│ 找到 3 个需要修改的位置                    │
+├── 执行日志 ──────────────────────────────┤
+│ $ npm test                                │
+│ PASS src/agent.test.ts                    │
+│ $ git add -A                             │
+├── Diff ──────────────────────────────────┤
+│ + function validate() {                  │
+│ - function old_validate() {              │
+└───────────────────────────────────────────┘
+```
+
+```python
+class SplitScreen:
+    def __init__(self, height: int = 24):
+        self.height = height
+        self.panels = {
+            "llm": {"lines": [], "height": height // 2},
+            "log": {"lines": [], "height": height // 4},
+            "diff": {"lines": [], "height": height // 4},
+        }
+
+    def render(self):
+        output = []
+        for name, panel in self.panels.items():
+            output.append(f"\033[1m── {name.upper()} ──\033[0m")
+            visible = panel["lines"][-panel["height"]:]
+            output.extend(visible)
+        print("\033[H" + "\n".join(output))
+```
+
+**任务**: 实现分屏渲染，每个面板独立滚动。
+
+### 阶段 3：集成到 Agent
+
+将 UI 接入上一节的 Agent 循环：
+
+```python
+class AgentWithUI(Agent):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.ui = SplitScreen()
+
+    async def run(self, user_input: str):
+        self.ui.panels["llm"]["lines"].append(f"> {user_input}")
+        self.ui.render()
+
+        async for event in self.llm.stream(self.history):
+            if event.type == "text":
+                self.ui.panels["llm"]["lines"].append(event.content)
+            elif event.type == "tool_call":
+                self.ui.panels["log"]["lines"].append(
+                    f"$ {event.tool_name} {event.args}"
+                )
+            self.ui.render()
+```
+
+### 阶段 4: 用户确认弹窗
+
+```python
+async def confirm_action(prompt: str, timeout: int = 10) -> bool:
+    """显示确认提示，等待用户输入。"""
+    print(f"\n⚠ {prompt}")
+    print(f"  [Y] 确认  [n] 取消  [{timeout}s 后自动取消]")
+
+    try:
+        # 异步等待用户输入
+        response = await asyncio.wait_for(
+            asyncio.get_event_loop().run_in_executor(
+                None, input, "  > "
+            ),
+            timeout=timeout
+        )
+        return response.lower() in ("y", "yes", "")
+    except asyncio.TimeoutError:
+        return False
+```
+
+### 验收标准
+
+- [ ] LLM 输出逐字符流式显示
+- [ ] 三个面板独立更新不互相干扰
+- [ ] 用户中断（Ctrl+C）可以停止当前操作
+- [ ] 危险操作弹出确认窗口
+- [ ] 确认超时后自动取消

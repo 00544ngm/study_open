@@ -107,11 +107,11 @@ export default function SearchDialog() {
       {/* Trigger */}
       <button
         onClick={() => setOpen(true)}
-        className="flex items-center gap-2 px-3 py-1.5 text-sm text-[var(--text-muted)] border border-[var(--border-light)] rounded-lg hover:border-[var(--color-accent)] transition-colors"
+        className="flex items-center gap-2 px-3 py-1.5 text-sm text-[var(--text-muted, #94a3b8)] border border-[var(--border-light, #e2e8f0)] rounded-lg hover:border-[var(--color-accent, #3b82f6)] transition-colors"
       >
         <Search className="w-4 h-4" />
         <span className="hidden sm:inline">搜索知识点...</span>
-        <kbd className="hidden sm:inline text-xs px-1.5 py-0.5 rounded bg-[var(--border-light)]">Ctrl+K</kbd>
+        <kbd className="hidden sm:inline text-xs px-1.5 py-0.5 rounded bg-[var(--border-light, #e2e8f0)]">Ctrl+K</kbd>
       </button>
 
       {/* Dialog */}
@@ -120,28 +120,28 @@ export default function SearchDialog() {
           <div className="absolute inset-0 bg-black/50" />
           <div
             ref={dialogRef}
-            className="relative w-full max-w-lg rounded-xl border border-[var(--border-light)] bg-[var(--bg-card)] shadow-2xl overflow-hidden"
+            className="relative w-full max-w-lg rounded-xl border border-[var(--border-light, #e2e8f0)] bg-[var(--bg-card, #ffffff)] shadow-2xl overflow-hidden"
           >
             {/* Search input */}
-            <div className="flex items-center gap-3 px-4 py-3 border-b border-[var(--border-light)]">
-              <Search className="w-5 h-5 text-[var(--text-muted)]" />
+            <div className="flex items-center gap-3 px-4 py-3 border-b border-[var(--border-light, #e2e8f0)]">
+              <Search className="w-5 h-5 text-[var(--text-muted, #94a3b8)]" />
               <input
                 ref={inputRef}
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 onKeyDown={handleKeyDown}
                 placeholder="搜索知识点..."
-                className="flex-1 bg-transparent outline-none text-[var(--text-primary)] placeholder:text-[var(--text-muted)]"
+                className="flex-1 bg-transparent outline-none text-[var(--text-primary, #0f172a)] placeholder:text-[var(--text-muted, #94a3b8)]"
               />
               <button onClick={() => setOpen(false)}>
-                <X className="w-4 h-4 text-[var(--text-muted)] hover:text-[var(--text-primary)]" />
+                <X className="w-4 h-4 text-[var(--text-muted, #94a3b8)] hover:text-[var(--text-primary, #0f172a)]" />
               </button>
             </div>
 
             {/* Results */}
             <div ref={listRef} className="max-h-80 overflow-y-auto">
               {results.length === 0 && query.trim() ? (
-                <div className="px-4 py-8 text-center text-sm text-[var(--text-muted)]">
+                <div className="px-4 py-8 text-center text-sm text-[var(--text-muted, #94a3b8)]">
                   没有找到相关结果
                 </div>
               ) : (
@@ -152,14 +152,14 @@ export default function SearchDialog() {
                     onClick={() => { setOpen(false); setQuery(""); }}
                     className={`flex items-start gap-3 px-4 py-3 transition-colors ${
                       i === selectedIdx
-                        ? "bg-[var(--color-accent)]/10"
-                        : "hover:bg-[var(--border-light)]"
+                        ? "bg-[var(--color-accent, #3b82f6)]/10"
+                        : "hover:bg-[var(--border-light, #e2e8f0)]"
                     }`}
                   >
-                    <FileText className="w-4 h-4 mt-0.5 text-[var(--text-muted)] shrink-0" />
+                    <FileText className="w-4 h-4 mt-0.5 text-[var(--text-muted, #94a3b8)] shrink-0" />
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2 mb-0.5">
-                        <span className="text-sm font-medium text-[var(--text-primary)] truncate">
+                        <span className="text-sm font-medium text-[var(--text-primary, #0f172a)] truncate">
                           {r.title}
                         </span>
                         {r.difficulty && (
@@ -169,11 +169,11 @@ export default function SearchDialog() {
                         )}
                       </div>
                       {r.snippet && (
-                        <p className="text-xs text-[var(--text-muted)] line-clamp-2 mb-1">
+                        <p className="text-xs text-[var(--text-muted, #94a3b8)] line-clamp-2 mb-1">
                           {r.snippet}
                         </p>
                       )}
-                      <div className="flex items-center gap-2 text-xs text-[var(--text-muted)]">
+                      <div className="flex items-center gap-2 text-xs text-[var(--text-muted, #94a3b8)]">
                         <span>{r.stageTitle} / {r.topicTitle}</span>
                         {r.estimatedTime && (
                           <span className="flex items-center gap-0.5">

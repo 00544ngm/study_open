@@ -1,0 +1,198 @@
+---
+title: 云平台部署练习
+order: 3
+difficulty: intermediate
+estimated_time: 25min
+tags: [实践, AWS, 云平台, 部署]
+---
+
+## 练习
+
+### 目标
+
+通过动手练习掌握云平台核心服务的概念和部署策略。
+
+### 练习 1：云服务选型
+
+```python
+# 根据场景选择最合适的云服务
+
+from enum import Enum
+
+
+class ServiceCategory(Enum):
+    COMPUTE = "compute"          # 计算
+    DATABASE = "database"        # 数据库
+    STORAGE = "storage"          # 存储
+    NETWORK = "network"          # 网络
+    MONITORING = "monitoring"    # 监控
+
+
+# AWS 服务清单
+aws_services = {
+    "EC2": ServiceCategory.COMPUTE,
+    "ECS": ServiceCategory.COMPUTE,
+    "Lambda": ServiceCategory.COMPUTE,
+    "RDS": ServiceCategory.DATABASE,
+    "S3": ServiceCategory.STORAGE,
+    "CloudFront": ServiceCategory.NETWORK,
+    "CloudWatch": ServiceCategory.MONITORING,
+    "ELB": ServiceCategory.NETWORK,
+}
+
+
+def recommend_service(scenario: str) -> list[str]:
+    """
+    根据场景推荐 AWS 服务。
+    场景：
+    - "docker-web": 用 Docker 部署 Web 服务，需要容器编排
+    - "serverless-api": 无服务器 API，按调用计费
+    - "static-site": 静态网站托管，全球加速
+    - "data-backup": 数据备份和归档
+    """
+    # 你的代码：为每个场景推荐 1-2 个服务
+    pass
+
+
+# 测试
+scenarios = ["docker-web", "serverless-api", "static-site", "data-backup"]
+for s in scenarios:
+    print(f"{s}: {recommend_service(s)}")
+```
+
+### 练习 2：部署架构设计
+
+```python
+# 设计高可用的 Agent API 部署架构
+
+class DeploymentTier:
+    """部署层级"""
+    def __init__(self, name: str, min_instances: int, max_instances: int):
+        self.name = name
+        self.min_instances = min_instances
+        self.max_instances = max_instances
+        self.health_check_path = "/health"
+
+
+class LoadBalancer:
+    """负载均衡器配置"""
+    def __init__(self, protocol: str = "HTTP", port: int = 80):
+        self.protocol = protocol
+        self.port = port
+        self.health_check = None
+        self.ssl_enabled = False
+
+    # 你的代码：添加 enable_ssl 方法，设置证书 ARN
+    def enable_ssl(self, cert_arn: str):
+        pass
+
+
+class Architecture:
+    """部署架构"""
+
+    def __init__(self, name: str):
+        self.name = name
+        self.tiers: list[DeploymentTier] = []
+        self.load_balancer: LoadBalancer | None = None
+        self.database = None
+        self.cdn = None
+
+    def add_tier(self, tier: DeploymentTier):
+        self.tiers.append(tier)
+
+    def estimate_availability(self) -> float:
+        """
+        估算整体可用性。
+        假设单台机器可用性为 99.5%，多台通过负载均衡可提高。
+        公式：1 - (1-0.995)^n
+        """
+        if not self.tiers:
+            return 0
+        # 你的代码：计算最弱层的可用性
+        # 取各层可用性的最小值
+        pass
+
+
+# 测试
+def design_agent_platform():
+    """
+    设计一个高可用的 Agent 平台架构：
+    - 至少 2 个 API 实例
+    - 自动扩缩容（2-10 个实例）
+    - 负载均衡
+    - 托管数据库
+    - 健康检查
+    返回 Architecture 对象。
+    """
+    # 你的代码：
+    pass
+
+
+arch = design_agent_platform()
+print(f"Architecture: {arch.name}")
+print(f"Estimated availability: {arch.estimate_availability():.4%}")
+```
+
+### 练习 3：成本估算
+
+```python
+# 估算不同部署方案的成本
+
+class PricingPlan:
+    def __init__(self, name: str, hourly_rate: float, monthly_base: float = 0):
+        self.name = name
+        self.hourly_rate = hourly_rate      # 每小时费用
+        self.monthly_base = monthly_base     # 月基础费
+
+    def monthly_cost(self, hours: int = 730) -> float:
+        """计算月成本。"""
+        return self.monthly_base + self.hourly_rate * hours
+
+
+class DeploymentPlan:
+    """部署方案"""
+
+    def __init__(self, name: str):
+        self.name = name
+        self.compute: list[PricingPlan] = []
+        self.storage: list[PricingPlan] = []
+        self.database: list[PricingPlan] = []
+        self.network: list[PricingPlan] = []
+
+    def add_compute(self, plan: PricingPlan, instances: int = 1):
+        # 你的代码：添加计算资源（实例数 × 单价）
+        pass
+
+    def add_storage(self, plan: PricingPlan, size_gb: int = 100):
+        # 你的代码：添加存储资源
+        pass
+
+    def total_monthly(self) -> float:
+        """计算总月费。"""
+        # 你的代码：汇总所有费用
+        pass
+
+
+# 对比两种方案
+def compare_plans():
+    """
+    方案 A：按需实例（$0.10/h），托管数据库（$50/月）
+    方案 B：预留实例（$0.04/h），自管数据库（$30/月）
+
+    创建两个 DeploymentPlan，输出每月成本对比。
+    思考：方案 B 便宜但需要哪些额外运维成本？
+    """
+    # 你的代码：
+    pass
+
+
+compare_plans()
+```
+
+### 验收清单
+
+- [ ] 能根据不同场景选择合适的云服务
+- [ ] 能设计高可用部署架构
+- [ ] 能估算不同方案的可用性
+- [ ] 能对比不同部署方案的成本
+- [ ] 理解按需实例和预留实例的差异

@@ -1,0 +1,245 @@
+---
+title: MCP Client 开发练习
+order: 3
+difficulty: advanced
+estimated_time: 30min
+tags: [实践, MCP, Client]
+---
+
+## 练习
+
+### 目标
+
+通过动手练习掌握 MCP Client 的开发，包括 Server 连接、工具发现和调用、以及 Session 管理。
+
+### 练习 1：Client 连接与初始化
+
+```python
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+import asyncio
+
+
+async def connect_to_server(command: str, args: list[str]) -> ClientSession:
+    """
+    连接到 MCP Server 并初始化 Session。
+    command: 可执行文件路径（如 "python"）
+    args: 参数列表（如 ["server.py"]）
+    返回初始化后的 ClientSession。
+    """
+    # 1. 创建 StdioServerParameters
+    server_params = StdioServerParameters(
+        command=command,
+        args=args,
+    )
+
+    # 2. 建立 stdio 连接
+    async with stdio_client(server_params) as (read, write):
+        # 你的代码：创建 ClientSession 并初始化
+        pass
+
+
+async def test():
+    session = await connect_to_server("python", ["calculator_server.py"])
+    print(f"Session initialized: {session}")
+    await session.close()
+
+asyncio.run(test())
+```
+
+### 练习 2：工具发现与调用
+
+```python
+import asyncio
+from typing import List, Dict, Any
+
+
+class MCPSession:
+    """模拟 MCP Client Session（无需实际 Server）"""
+
+    def __init__(self, server_name: str = "demo"):
+        self.server_name = server_name
+
+    async def initialize(self):
+        print(f"Initialized session with {self.server_name}")
+
+    async def list_tools(self) -> List[Dict[str, Any]]:
+        """返回可用工具列表。"""
+        return [
+            {
+                "name": "search",
+                "description": "搜索信息",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"},
+                        "limit": {"type": "integer", "default": 5}
+                    },
+                    "required": ["query"]
+                }
+            },
+            {
+                "name": "calculate",
+                "description": "数学计算",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "expression": {"type": "string"}
+                    },
+                    "required": ["expression"]
+                }
+            },
+        ]
+
+    async def call_tool(self, name: str, arguments: dict) -> str:
+        """模拟工具调用。"""
+        if name == "search":
+            return f"搜索 '{arguments['query']}' 的结果..."
+        elif name == "calculate":
+            try:
+                return str(eval(arguments["expression"]))
+            except:
+                return "计算错误"
+        return "未知工具"
+
+
+class Agent:
+    """使用 MCP 工具的 Agent"""
+
+    def __init__(self, session: MCPSession):
+        self.session = session
+        self.tools = []
+
+    async def discover_tools(self):
+        """发现可用的工具并缓存。"""
+        # 你的代码：调用 session.list_tools() 并缓存
+        pass
+
+    async def run(self, task: str) -> str:
+        """
+        执行任务：
+        1. 自动判断需要哪个工具
+        2. 提取参数
+        3. 调用工具并返回结果
+        （简单实现：按关键词匹配工具）
+        """
+        # 你的代码：
+        pass
+
+
+# 测试
+async def test():
+    session = MCPSession("demo")
+    agent = Agent(session)
+
+    await agent.discover_tools()
+    print(f"发现 {len(agent.tools)} 个工具")
+
+    tasks = [
+        "搜索 AI Agent 的最新进展",
+        "计算 15 * 37 + 42",
+    ]
+    for task in tasks:
+        result = await agent.run(task)
+        print(f"任务: {task}")
+        print(f"结果: {result}")
+        print("---")
+
+asyncio.run(test())
+```
+
+### 练习 3：多 Server 管理
+
+```python
+import asyncio
+from typing import Dict, List, Any
+
+
+class ServerRegistry:
+    """管理多个 MCP Server 连接"""
+
+    def __init__(self):
+        self.servers: Dict[str, MCPSession] = {}
+
+    async def register_server(self, name: str, session: MCPSession):
+        """注册一个新的 Server 连接。"""
+        await session.initialize()
+        self.servers[name] = session
+        print(f"Server '{name}' registered")
+
+    async def get_tools_from_all(self) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        从所有已注册 Server 收集工具。
+        返回 {server_name: [tool, ...], ...}
+        """
+        # 你的代码：
+        pass
+
+    async def call_tool_on_server(self, server_name: str, tool_name: str,
+                                   arguments: dict) -> str:
+        """在指定 Server 上调用工具。"""
+        # 你的代码：检查 Server 是否存在，调用 call_tool
+        pass
+
+    def find_tool(self, tool_name: str) -> tuple[str, Dict[str, Any]] | None:
+        """
+        在所有 Server 中查找工具。
+        返回 (server_name, tool_info) 或 None。
+        """
+        # 你的代码：
+        pass
+
+
+class RouterAgent:
+    """可路由到多 Server 的 Agent"""
+
+    def __init__(self):
+        self.registry = ServerRegistry()
+
+    async def add_server(self, name: str, session: MCPSession):
+        await self.registry.register_server(name, session)
+
+    async def handle_request(self, request: str) -> Dict[str, Any]:
+        """
+        处理请求：
+        1. 解析请求意图（简单关键词匹配）
+        2. 查找对应 Server 和工具
+        3. 调用工具
+        4. 返回结果
+        """
+        # 你的代码：
+        pass
+
+
+# 测试
+async def test():
+    router = RouterAgent()
+
+    # 注册两个 Server
+    calc_session = MCPSession("calculator")
+    search_session = MCPSession("search-engine")
+
+    await router.add_server("calc", calc_session)
+    await router.add_server("search", search_session)
+
+    # 处理请求
+    requests = [
+        "计算 256 / 16",
+        "搜索最新的 Python 版本",
+    ]
+    for req in requests:
+        result = await router.handle_request(req)
+        print(f"请求: {req}")
+        print(f"结果: {result}")
+        print("---")
+
+asyncio.run(test())
+```
+
+### 验收清单
+
+- [ ] 能创建 MCP Client Session 并初始化
+- [ ] 能从 Server 发现可用工具
+- [ ] 能调用 Server 上的工具
+- [ ] 能管理多个 Server 连接
+- [ ] 能根据请求路由到正确的 Server

@@ -1,0 +1,139 @@
+---
+title: Agent 模式实现练习
+order: 3
+difficulty: intermediate
+estimated_time: 35min
+tags: [实践, Agent, 设计模式, ReAct]
+---
+
+## 练习
+
+### 目标
+
+通过动手实现 ReAct 循环、工具调用和 Agent 状态管理，掌握核心 Agent 设计模式。
+
+### 练习 1：实现 ReAct 循环
+
+```python
+class SimpleReActAgent:
+    """手动实现 ReAct（推理-行动-观察）循环。"""
+
+    def __init__(self, tools: dict[str, callable]):
+        self.tools = tools  # {"tool_name": tool_function}
+        self.messages = []
+
+    def think(self, observation: str) -> str:
+        """根据当前观察决定下一步行动。返回行动描述。"""
+        # 你的实现：将观察加入 messages，然后判断是继续行动还是给出最终答案
+        pass
+
+    def act(self, thought: str) -> str:
+        """
+        执行行动。
+        thought 格式: "Action: tool_name\nAction Input: args"
+        解析行动指令，调用对应工具，返回观察结果。
+        """
+        # 你的实现：解析 thought，查找并调用工具
+        pass
+
+    def run(self, task: str) -> str:
+        """
+        运行 Agent 直到给出最终答案。
+        循环: think → act → observe → think → ...
+        最大迭代次数: 10（防止无限循环）
+        """
+        # 你的实现：
+        pass
+
+
+# 测试工具
+def search(query: str) -> str:
+    return f"搜索结果: {query} 的相关信息"
+
+def calculate(expr: str) -> str:
+    return str(eval(expr))
+
+agent = SimpleReActAgent({"search": search, "calculate": calculate})
+result = agent.run("计算 15 * 23 等于多少？")
+print(result)
+```
+
+### 练习 2：带记忆的 Agent
+
+```python
+class MemoryAgent:
+    """支持短期记忆（对话历史）和长期记忆（关键信息存储）的 Agent。"""
+
+    def __init__(self):
+        self.short_term: list[dict] = []  # 最近 10 条消息
+        self.long_term: dict = {}          # 关键信息
+
+    def add_message(self, role: str, content: str):
+        """
+        添加消息到短期记忆。
+        如果超过 10 条，移除最早的消息。
+        """
+        # 你的实现：
+        pass
+
+    def remember(self, key: str, value: str):
+        """存储关键信息到长期记忆。"""
+        self.long_term[key] = value
+
+    def recall(self, key: str) -> str | None:
+        """从长期记忆中检索。"""
+        return self.long_term.get(key)
+
+    def get_context(self) -> list[dict]:
+        """返回当前上下文（短期记忆 + 长期记忆摘要）。"""
+        # 你的实现：返回短期记忆，并在开头附加长期记忆摘要
+        pass
+
+
+# 测试
+agent = MemoryAgent()
+agent.add_message("user", "我叫小明")
+agent.remember("user_name", "小明")
+agent.add_message("assistant", "你好小明！")
+agent.add_message("user", "我叫什么？")
+context = agent.get_context()
+print(context)  # 应包含 user_name 信息
+```
+
+### 练习 3：工具调用与错误处理
+
+```python
+# 实现一个安全的工具调用系统
+
+def read_file(path: str) -> str:
+    if ".." in path:
+        raise PermissionError("Path traversal detected")
+    if not path.endswith(".txt"):
+        raise ValueError("Only .txt files allowed")
+    return f"内容 of {path}"
+
+
+def safe_tool_call(tool_func: callable, **kwargs) -> dict:
+    """
+    安全调用工具，统一处理错误。
+    返回: {"success": bool, "result": any, "error": str | None}
+    """
+    # 你的实现：
+    pass
+
+
+# 测试
+print(safe_tool_call(read_file, path="../etc/passwd"))
+# 应返回: {"success": false, "result": None, "error": "Path traversal detected"}
+
+print(safe_tool_call(read_file, path="test.txt"))
+# 应返回: {"success": true, "result": "内容 of test.txt", "error": None}
+```
+
+### 验收清单
+
+- [ ] 能实现 ReAct 循环的基本框架
+- [ ] 能解析工具调用指令并执行对应工具
+- [ ] 能管理短期记忆（滑动窗口）和长期记忆
+- [ ] 能安全调用工具（参数校验 + 错误处理）
+- [ ] 理解 Observation → Thought → Action 的循环流程

@@ -1,0 +1,90 @@
+---
+title: Windows 环境练习
+order: 3
+difficulty: beginner
+estimated_time: 20min
+tags: [实践, Windows, PowerShell, CMD]
+---
+
+## 练习
+
+### 目标
+
+通过动手练习掌握 Windows PowerShell 和 CMD 常用命令，为 AI Agent 开发做准备。
+
+### 练习 1：文件系统操作（PowerShell）
+
+```powershell
+# 1. 创建项目目录结构
+New-Item -ItemType Directory -Path "my-agent-project"
+# 一次性创建多层目录
+# 你的命令：
+
+# 2. 创建文件
+"print('Hello Agent')" | Out-File -FilePath "my-agent-project/main.py"
+# 创建一个 README.md，内容为 "# My Agent Project"
+# 你的命令：
+
+# 3. 查看目录结构
+Get-ChildItem -Path "my-agent-project" -Recurse
+
+# 4. 复制和移动文件
+# 将 main.py 复制到 backup.py
+# 你的命令：
+# 将 backup.py 移动到子目录
+# 你的命令：
+
+# 5. 删除测试文件
+# 你的命令：
+```
+
+### 练习 2：环境变量与路径
+
+```powershell
+# 1. 查看当前环境变量 PATH
+$env:Path
+
+# 2. 检查 Python 是否可用
+Get-Command python
+
+# 3. 创建临时环境变量
+$env:AGENT_CONFIG_PATH = "C:\agent\config.json"
+# 验证变量已设置
+# 你的命令：
+
+# 4. 查看当前目录
+Get-Location
+
+# 5. 切换到项目目录并验证
+Set-Location "my-agent-project"
+# 你的命令：
+```
+
+### 练习 3：进程与服务管理
+
+```powershell
+# 1. 列出当前运行的进程（前 10 个）
+# 你的命令：
+
+# 2. 查找特定进程（如 python 进程）
+# 你的命令：
+
+# 3. 测试网络连接
+Test-NetConnection -ComputerName "google.com" -Port 80
+
+# 4. 查看系统信息
+# 使用 Get-ComputerInfo 查看操作系统信息
+# 你的命令：
+
+# 5. 练习管道：将进程列表按内存使用排序
+Get-Process | Sort-Object WorkingSet -Descending | Select-Object -First 5
+```
+
+### 验收清单
+
+- [ ] 能使用 `New-Item` 创建文件和目录
+- [ ] 能使用 `Get-ChildItem` 浏览目录
+- [ ] 能设置和读取环境变量
+- [ ] 能使用 `Get-Process` 管理进程
+- [ ] 理解 PowerShell 管道和对象传递
+- [ ] 能使用 `Test-NetConnection` 测试网络

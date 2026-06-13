@@ -1,0 +1,92 @@
+---
+title: Redis 基础练习
+order: 3
+difficulty: beginner
+estimated_time: 25min
+tags: [实践, Redis, 缓存]
+---
+
+## 练习
+
+### 目标
+
+通过动手练习掌握 Redis 核心数据结构：String、Hash、List、Set、Sorted Set。
+
+### 练习 1：缓存 Agent 状态
+
+```python
+import redis.asyncio as redis
+
+async def exercise_1():
+    client = redis.Redis(host='localhost', port=6379, db=0)
+
+    # 1. 存储 agent 状态（String）
+    # 设置 key 为 "agent:status:runner-1"，值为 "running"
+    # 你的代码：
+
+    # 2. 设置 60 秒过期时间
+    # 你的代码：
+
+    # 3. 读取并验证
+    status = await client.get("agent:status:runner-1")
+    print(f"Status: {status}")  # 应输出 b'running'
+
+    # 4. 检查剩余存活时间（TTL）
+    # 你的代码：
+
+    await client.close()
+```
+
+### 练习 2：Hash 存储配置
+
+```python
+async def exercise_2():
+    client = redis.Redis(host='localhost', port=6379, db=0)
+
+    # 1. 用 Hash 存储 Agent 配置
+    # key: "agent:config:runner-1", fields: model, temperature, max_tokens
+    # 你的代码：
+
+    # 2. 读取单个字段
+    model = await client.hget("agent:config:runner-1", "model")
+    print(f"Model: {model}")
+
+    # 3. 读取所有字段
+    # 你的代码：
+
+    # 4. 更新 temperature 字段
+    # 你的代码：
+
+    await client.close()
+```
+
+### 练习 3：List 实现消息队列
+
+```python
+async def exercise_3():
+    client = redis.Redis(host='localhost', port=6379, db=0)
+
+    # 1. 模拟任务入队（LPUSH）
+    tasks = ["task:analyze", "task:generate", "task:review"]
+    for t in tasks:
+        # 你的代码：将任务推入 "task:queue"
+
+    # 2. 查看队列长度
+    # 你的代码：
+
+    # 3. 从队列取出任务（BRPOP，带超时）
+    # 你的代码：
+
+    # 4. 清空队列
+    # 你的代码：
+
+    await client.close()
+```
+
+### 验收清单
+
+- [ ] 能使用 String 类型存储和读取键值对
+- [ ] 能设置键的过期时间（TTL）
+- [ ] 能使用 Hash 存储和操作对象字段
+- [ ] 能使用 List 实现简单的消息队列
+- [ ] 理解 Redis 的基本数据类型和适用场景

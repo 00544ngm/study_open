@@ -1,0 +1,158 @@
+---
+title: Agent 测试实战练习
+order: 3
+difficulty: intermediate
+estimated_time: 30min
+tags: [实践, 测试, Mock, Agent]
+---
+
+## 练习
+
+### 目标
+
+通过动手练习掌握 Agent 应用的单元测试、Mock 和集成测试技巧。
+
+### 练习 1：Mock LLM 调用
+
+```python
+from unittest.mock import AsyncMock, patch
+import pytest
+
+
+# 被测试的函数
+async def get_agent_response(prompt: str) -> str:
+    """调用 LLM 获取回复。"""
+    from langchain_openai import ChatOpenAI
+    llm = ChatOpenAI(model="gpt-4")
+    response = await llm.ainvoke(prompt)
+    return response.content
+
+
+@pytest.mark.asyncio
+async def test_get_agent_response():
+    """使用 Mock 模拟 LLM 调用。"""
+    # 1. 用 patch 模拟 ChatOpenAI
+    with patch("langchain_openai.ChatOpenAI") as MockLLM:
+        mock_instance = MockLLM.return_value
+        # 配置 mock 返回值
+        mock_response = AsyncMock()
+        mock_response.content = "这是模拟的回复"
+        mock_instance.ainvoke.return_value = mock_response
+
+        # 2. 调用被测试函数
+        result = await get_agent_response("你好")
+
+        # 3. 验证
+        assert result == "这是模拟的回复"
+        mock_instance.ainvoke.assert_called_once_with("你好")
+        print("测试通过！")
+
+
+# 练习：Mock 一个工具调用
+@pytest.mark.asyncio
+async def test_agent_with_tool():
+    """
+    测试 Agent 在使用搜索工具时的行为。
+    要求：
+    - Mock search_tool.invoke 返回固定结果
+    - 验证 Agent 正确使用了搜索结果
+    """
+    # 你的代码：
+    pass
+```
+
+### 练习 2：测试 Agent 状态管理
+
+```python
+class AgentState:
+    """管理 Agent 的运行状态。"""
+
+    def __init__(self):
+        self.status = "idle"  # idle | running | paused | error
+        self.tokens_used = 0
+        self.errors: list[str] = []
+
+    def start(self):
+        if self.status == "running":
+            raise RuntimeError("Agent already running")
+        self.status = "running"
+
+    def pause(self):
+        if self.status != "running":
+            raise RuntimeError("Can only pause a running agent")
+        self.status = "paused"
+
+    def error(self, msg: str):
+        self.status = "error"
+        self.errors.append(msg)
+
+    def add_tokens(self, count: int):
+        if count < 0:
+            raise ValueError("Token count cannot be negative")
+        self.tokens_used += count
+
+
+# 补全测试
+class TestAgentState:
+    def test_initial_state(self):
+        state = AgentState()
+        assert state.status == "idle"
+        assert state.tokens_used == 0
+
+    def test_start_transition(self):
+        """测试 idle → running 转换。"""
+        # 你的代码：
+        pass
+
+    def test_cannot_start_twice(self):
+        """测试重复 start 抛出异常。"""
+        # 你的代码：
+        pass
+
+    def test_add_tokens_negative(self):
+        """测试负数 token 抛出异常。"""
+        # 你的代码：
+        pass
+```
+
+### 练习 3：集成测试
+
+```python
+# 创建一个简单的 Agent（用于集成测试）
+class SimpleAgent:
+    def __init__(self):
+        self.tools = {"echo": lambda x: x}
+
+    async def process(self, input_text: str) -> dict:
+        """处理输入并返回结果。"""
+        result = self.tools["echo"](input_text)
+        return {"success": True, "output": result, "tool": "echo"}
+
+
+@pytest.mark.asyncio
+async def test_agent_integration():
+    """
+    集成测试：测试 Agent 的完整处理流程。
+    验证：
+    - 正常输入返回正确结果
+    - 空输入的处理
+    - 超长输入的处理
+    """
+    agent = SimpleAgent()
+
+    # 正常输入
+    result = await agent.process("hello")
+    assert result["success"]
+    assert result["output"] == "hello"
+
+    # 你的代码：测试空输入
+    # 你的代码：测试超长输入
+```
+
+### 验收清单
+
+- [ ] 能用 `unittest.mock.patch` 模拟 LLM 调用
+- [ ] 能使用 `AsyncMock` 模拟异步函数
+- [ ] 能测试 Agent 状态机的状态转换
+- [ ] 能编写集成测试覆盖完整流程
+- [ ] 测试包含正常路径和异常路径

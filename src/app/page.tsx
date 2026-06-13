@@ -8,7 +8,7 @@ import ProgressBar from "@/components/ProgressBar";
 import ExportProgress from "@/components/ExportProgress";
 import RecentLearning from "@/components/RecentLearning";
 import InterestedSection from "@/components/InterestedSection";
-import { getProgress, getStageProgress } from "@/lib/progress";
+import { getProgress } from "@/lib/progress";
 import { GraduationCap, ArrowRight, BookOpen, Zap, Clock } from "lucide-react";
 
 const totalTopics = getAllStages().reduce((sum, s) => sum + s.topics.length, 0);

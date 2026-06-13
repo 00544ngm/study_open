@@ -1,5 +1,5 @@
 ---
-title: 代码搜索引
+title: 代码搜索引擎
 order: 1
 difficulty: advanced
 estimated_time: 35min
@@ -8,36 +8,90 @@ tags: [代码搜索, 编程智能体]
 
 ## 核心
 
+### 为什么智能体需要代码搜索
+
+智能体收到用户需求后，第一步不是写代码——而是理解当前代码库。搜索能力决定了智能体理解代码的速度和准确性。
+
 ### 关键词搜索 (ripgrep)
 
 ```bash
-# 多行匹配
+# 基础搜索
+rg "function" src/
+
+# 多行匹配（匹配跨行模式）
 rg -U "function\s+\w+\s*\(" src/
 
 # 文件类型过滤
 rg -t py "def agent_" --no-filename
+
+# 上下文显示（显示匹配行前后内容）
+rg -C 3 "TODO" src/ --color=always
+
+# 只显示文件名（不显示匹配内容）
+rg -l "class Agent" src/
+
+# 反向匹配（查找不包含某内容的文件）
+rg -L "import pytest" tests/
 ```
 
 ### AST 解析 (Tree-sitter)
 
-比正则更精确的代码理解：
+正则搜索有局限性——它不理解代码结构。Tree-sitter 可以精确解析代码语法：
 
 ```python
-# 用 Tree-sitter 解析函数定义
+# 用 Tree-sitter 精确查找函数定义
 tree = parser.parse(source_bytes)
 query = tree_sitter.Language(lang).query(
     "(function_definition name: (identifier) @name)"
 )
 captures = query.captures(tree.root_node)
+
+# 比正则更强大的地方：
+# - 能区分"函数的调用"和"函数的定义"
+# - 能精确获取函数参数列表
+# - 能理解嵌套结构
 ```
 
 ### 代码图谱
 
-建立项目的 import/export 依赖关系图：
+```python
+class DependencyGraph:
+    """建立项目的 import/export 依赖关系图。"""
+
+    def __init__(self):
+        self.graph = {}
+
+    def build(self, root_dir: str):
+        """扫描项目目录，建立依赖关系。"""
+        for path in glob.glob(f"{root_dir}/**/*.py", recursive=True):
+            imports = self._extract_imports(path)
+            self.graph[path] = imports
+
+    def find_affected(self, changed_file: str) -> list[str]:
+        """找到受该文件变更影响的所有其他文件。"""
+        affected = []
+        for file, imports in self.graph.items():
+            if changed_file in imports:
+                affected.append(file)
+        return affected
+```
 
 ```
+# 依赖图示例
 agent.py → tool_use.py → api_client.py
          → memory.py
+         → config.py
 ```
 
 帮助智能体理解"改这个文件会影响哪些其他文件"。
+
+### 搜索策略选择
+
+| 场景 | 搜索方式 | 速度 |
+|------|---------|------|
+| 找函数定义 | AST 解析 | 中等 |
+| 找文本关键词 | ripgrep | 最快 |
+| 找文件名 | glob 匹配 | 最快 |
+| 语义相似 | Embedding 搜索 | 慢 |
+
+> **知识关联**：搜索结果是上下文管理的重要输入，参见[上下文窗口管理](/12-building-coding-agents/context-management/01-basics)；代码审查中利用搜索发现潜在问题，详见[AI 代码审查清单](/11-ai-programming/code-review-ai/01-basics)。

@@ -1,0 +1,207 @@
+---
+title: Kubernetes 练习
+order: 3
+difficulty: intermediate
+estimated_time: 30min
+tags: [实践, Kubernetes, 容器编排]
+---
+
+## 练习
+
+### 目标
+
+通过动手练习掌握 Kubernetes 的核心概念，包括 Pod、Deployment、Service、ConfigMap 的配置和使用。
+
+### 练习 1：Deployment 与 Service
+
+```yaml
+# 补全 Agent API 的 K8s 配置
+
+# 1. Deployment：部署 3 个副本的 Agent API
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-api
+  labels:
+    app: agent-api
+spec:
+  # 你的代码：设置 3 个副本
+  replicas: 3
+  selector:
+    matchLabels:
+      app: agent-api
+  template:
+    metadata:
+      labels:
+        app: agent-api
+    spec:
+      containers:
+      - name: api
+        image: agent-api:latest
+        # 你的代码：设置容器端口为 8000
+        ports:
+        - containerPort: 8000
+        # 你的代码：添加存活探针（HTTP GET /health，端口 8000）
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        # 你的代码：添加就绪探针
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8000
+          initialDelaySeconds: 3
+          periodSeconds: 5
+        # 你的代码：设置资源限制（CPU 500m，内存 512Mi）
+        resources:
+          limits:
+            cpu: 500m
+            memory: 512Mi
+          requests:
+            cpu: 200m
+            memory: 256Mi
+---
+# 2. Service：暴露 Deployment
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-api-service
+spec:
+  # 你的代码：选择器匹配 app: agent-api
+  selector:
+    app: agent-api
+  # 你的代码：ClusterIP 类型，映射 80→8000
+  ports:
+  - port: 80
+    targetPort: 8000
+  type: ClusterIP
+```
+
+### 练习 2：配置管理
+
+```yaml
+# 1. ConfigMap：存储非敏感配置
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agent-config
+data:
+  # 你的代码：添加配置项
+  # LOG_LEVEL=info
+  # MAX_TOKENS=4096
+  # MODEL_NAME=gpt-4o
+  LOG_LEVEL: "info"
+  MAX_TOKENS: "4096"
+  MODEL_NAME: "gpt-4o"
+
+---
+# 2. Secret：存储敏感配置
+apiVersion: v1
+kind: Secret
+metadata:
+  name: agent-secrets
+type: Opaque
+data:
+  # 你的代码：添加加密后的值（base64）
+  # API_KEY=sk-test123（base64 编码）
+  # DB_PASSWORD=agent_pass_2024
+  API_KEY: c2stdGVzdDEyMw==        # sk-test123
+  DB_PASSWORD: YWdlbnRfcGFzc18yMDI0  # agent_pass_2024
+
+---
+# 3. 在 Deployment 中使用 ConfigMap 和 Secret
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: agent-api
+  template:
+    metadata:
+      labels:
+        app: agent-api
+    spec:
+      containers:
+      - name: api
+        image: agent-api:latest
+        ports:
+        - containerPort: 8000
+        env:
+        # 你的代码：从 ConfigMap 引用 LOG_LEVEL 和 MODEL_NAME
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: agent-config
+              key: LOG_LEVEL
+        - name: MODEL_NAME
+          valueFrom:
+            configMapKeyRef:
+              name: agent-config
+              key: MODEL_NAME
+        # 你的代码：从 Secret 引用 API_KEY
+        - name: API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: agent-secrets
+              key: API_KEY
+```
+
+### 练习 3：kubectl 命令
+
+```bash
+# 补全以下 kubectl 命令
+
+# 1. 查看所有 Pod
+# 你的代码：
+kubectl ________
+
+# 2. 查看所有 Pod（包含所在节点信息）
+# 你的代码：
+kubectl ________ -o wide
+
+# 3. 查看 Deployment 状态
+# 你的代码：
+kubectl ________ deployment agent-api
+
+# 4. 查看 Pod 日志（实时跟踪）
+# 你的代码：
+kubectl ________ -f pod/agent-api-xxxxx
+
+# 5. 将本地 8080 端口转发到 Pod 的 8000 端口
+# 你的代码：
+kubectl ________ 8080:8000 pod/agent-api-xxxxx
+
+# 6. 扩容 Deployment 到 5 个副本
+# 你的代码：
+kubectl ________ deployment agent-api --replicas=5
+
+# 7. 滚动更新镜像版本
+# 你的代码：
+kubectl ________ deployment agent-api --image=agent-api:v2
+
+# 8. 查看滚动更新状态
+# 你的代码：
+kubectl ________ deployment agent-api
+
+# 9. 回滚到上一个版本
+# 你的代码：
+kubectl ________ deployment agent-api
+
+# 10. 删除 Deployment
+# 你的代码：
+kubectl ________ deployment agent-api
+```
+
+### 验收清单
+
+- [ ] 能编写 Deployment 和 Service 配置
+- [ ] 能配置存活探针和就绪探针
+- [ ] 能使用 ConfigMap 和 Secret 管理配置
+- [ ] 能使用 kubectl 命令管理资源
+- [ ] 理解滚动更新和回滚机制

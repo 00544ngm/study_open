@@ -1,0 +1,106 @@
+---
+title: 代码搜索工具构建练习
+order: 3
+difficulty: advanced
+estimated_time: 35min
+tags: [实践, 代码搜索, AST]
+---
+
+## 练习
+
+### 目标
+
+实现一个简单的代码搜索引擎，包含关键词搜索和基本的 AST 解析能力。
+
+### 练习 1：实现代码搜索器
+
+```python
+import os
+import re
+from typing import Callable
+
+class CodeSearcher:
+    """基于 ripgrep 风格的多功能代码搜索器。"""
+
+    def __init__(self, root_dir: str):
+        self.root_dir = root_dir
+        self.file_cache = {}  # 文件路径 → 内容
+
+    def search_text(self, pattern: str, file_ext: str = ".py") -> list[dict]:
+        """
+        按关键词搜索代码：
+        返回 [{file, line, content, line_number}]
+        """
+        pass
+
+    def search_regex(self, pattern: str, file_ext: str = ".py") -> list[dict]:
+        """按正则表达式搜索。"""
+        pass
+
+    def multi_line_search(self, pattern: str, context_lines: int = 3) -> list[dict]:
+        """跨行搜索，显示上下文。"""
+        pass
+```
+
+**测试**：
+```python
+searcher = CodeSearcher("./src")
+
+# 查找所有函数定义
+results = searcher.search_regex(r"def \w+\(")
+assert len(results) > 0
+
+# 查找中文注释
+results = searcher.search_text("# .*[一-鿿]")
+assert len(results) > 0
+```
+
+### 练习 2：实现函数提取器
+
+```python
+class FunctionExtractor:
+    """从 Python 文件中提取函数定义和文档字符串。"""
+
+    def extract_functions(self, file_path: str) -> list[dict]:
+        """
+        解析文件，提取所有函数定义：
+        返回 [{name: str, args: list, docstring: str, start_line: int, end_line: int}]
+        """
+        pass
+
+    def find_function(self, file_path: str, name: str) -> dict | None:
+        """在文件中查找指定函数。"""
+        pass
+```
+
+提示：使用 `ast` 模块（Python 内置）进行解析。
+
+### 练习 3：代码影响分析
+
+```python
+class ImpactAnalyzer:
+    """分析修改一个文件会影响哪些其他文件。"""
+
+    def build_dependency_graph(self, root_dir: str) -> dict[str, set[str]]:
+        """
+        扫描项目，建立 import 依赖关系图。
+        返回 {被导入的文件: {依赖它的文件}}
+        """
+        pass
+
+    def find_impacted_files(self, changed_file: str) -> list[str]:
+        """找到受变更影响的所有文件。"""
+        pass
+
+    def find_dead_files(self) -> list[str]:
+        """找到没有被任何地方导入的文件。"""
+        pass
+```
+
+### 验收清单
+
+- [ ] `CodeSearcher` 支持文本和正则搜索
+- [ ] `FunctionExtractor` 能准确提取函数签名和文档
+- [ ] `ImpactAnalyzer` 能建立依赖图并找出受影响文件
+- [ ] 搜索结果包含行号以便智能体精确定位
+- [ ] 处理大文件时不崩溃

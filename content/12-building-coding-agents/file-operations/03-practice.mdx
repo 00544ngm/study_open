@@ -1,0 +1,82 @@
+---
+title: 文件操作工具构建练习
+order: 3
+difficulty: advanced
+estimated_time: 35min
+tags: [实践, 文件系统, 编程智能体]
+---
+
+## 练习
+
+### 目标
+
+动手实现一个文件操作工具集，这是构建编程智能体的基础组件。
+
+### 练习 1：实现安全读取函数
+
+```python
+# 实现以下函数，要求处理所有边界情况
+def safe_read_file(path: str, max_size: int = 1024 * 1024) -> str:
+    """
+    安全读取文件：
+    - 文件不存在时返回友好错误
+    - 文件超过 max_size 时截断并提示
+    - 支持文本编码自动检测
+    - 禁止读取 .env、.git 等敏感文件
+    """
+    # 你的实现
+    pass
+```
+
+**测试你的函数**：
+```python
+assert safe_read_file("nonexistent.py") == "错误：文件不存在"
+result = safe_read_file("large_file.bin")  # 应截断
+assert result.endswith("...（文件过大，已截断）")
+```
+
+### 练习 2：实现上下文替换编辑
+
+```python
+def smart_edit(path: str, old_block: str, new_block: str) -> bool:
+    """
+    基于上下文的智能编辑：
+    - 在文件中找到 old_block 的位置
+    - 将其替换为 new_block
+    - 如果找不到，返回 False
+    - 如果找到多个匹配，不修改并报错
+    """
+    # 你的实现
+    pass
+```
+
+### 练习 3：实现带备份的回滚系统
+
+```python
+class EditHistory:
+    """记录所有的文件修改，支持回滚到任意历史点。"""
+
+    def __init__(self, backup_dir: str = ".agent_backups"):
+        self.backup_dir = backup_dir
+        self.history: list[dict] = []
+
+    def snapshot(self, path: str) -> str:
+        """编辑前创建快照，返回快照 ID。"""
+        pass
+
+    def rollback(self, snapshot_id: str):
+        """回滚到指定快照。"""
+        pass
+
+    def rollback_last(self):
+        """回滚最后一次修改。"""
+        pass
+```
+
+### 验收清单
+
+- [ ] `safe_read_file` 处理了所有边界情况
+- [ ] `smart_edit` 支持上下文匹配替换
+- [ ] `EditHistory` 支持快照和回滚
+- [ ] 所有函数包含完整类型注解
+- [ ] 不能有路径穿越漏洞

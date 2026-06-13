@@ -1,0 +1,94 @@
+---
+title: 自动化审查流水线
+order: 2
+difficulty: advanced
+estimated_time: 30min
+tags: [AI编程, Code Review, CI/CD]
+---
+
+## 进阶
+
+### CI 审查流水线
+
+将 AI 审查集成到 CI 流程中：
+
+```yaml
+# .github/workflows/ai-review.yml
+name: AI Code Review
+on: [pull_request]
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: AI Review
+        run: |
+          git diff origin/main...HEAD | \
+            claude --print "审查以下 diff，
+              检查：1) 安全隐患 2) 性能问题
+              3) 边缘情况遗漏 4) 错误处理缺失"
+```
+
+### 审查级别矩阵
+
+不是所有代码都需要同等程度的审查：
+
+| 变更类型 | 审查级别 | 方法 |
+|---------|---------|------|
+| 注释/文档 | 免审 | 直接合并 |
+| 测试代码 | 轻审 | AI 自动审查 |
+| 工具函数 | 标准 | AI + 人工抽查 |
+| 业务逻辑 | 严格 | AI + 人工逐行 |
+| 安全相关 | 最高 | AI + 人工 + 第三方审计 |
+
+### 差异审查策略
+
+```python
+# 只审查 AI 生成的新增代码
+def get_ai_generated_diff(base_branch: str) -> list[str]:
+    result = subprocess.run(
+        ["git", "diff", base_branch, "--", "*.py", "*.ts"],
+        capture_output=True, text=True
+    )
+    lines = result.stdout.split("\n")
+
+    # 只关注新增行（以 + 开头，排除 +++ 文件头）
+    added = [l[1:] for l in lines
+             if l.startswith("+") and not l.startswith("+++")]
+
+    return added
+```
+
+### 常见 AI 缺陷模式
+
+```python
+# 模式 1: 硬编码敏感信息
+API_KEY = "sk-xxxxxxxxxxxx"   # AI 可能把密钥写死在代码里
+
+# 模式 2: 缺失输入校验
+def process(data: dict):
+    return data["user"]["id"]  # 没有 KeyError 处理
+
+# 模式 3: 不安全的反序列化
+import pickle
+data = pickle.loads(raw_bytes)  # 可能导致 RCE
+
+# 模式 4: 日志泄露
+logging.info(f"Login: {user_input}")  # 可能记录敏感信息
+
+# 模式 5: 无限重试
+while True:
+    try: result = api_call()
+    except: continue  # 没有退避和上限
+```
+
+### AI 审查清单
+
+每次审查 AI 生成代码时，逐项检查：
+
+1. **安全性**: 有没有密钥泄露、注入风险、权限缺失？
+2. **正确性**: 逻辑对不对？边界情况呢？
+3. **可维护性**: 命名清晰吗？注释有必要吗？耦合度？
+4. **性能**: 有没有不必要的循环、重复查询？
+5. **一致性**: 符合项目现有的代码风格和架构吗？
+6. **完整性**: 错误处理了吗？日志打了吗？测试写了吗？

@@ -8,7 +8,7 @@ import TableOfContents from "@/components/TableOfContents";
 import LearningPath from "@/components/LearningPath";
 import { isCompleted, toggleTopic, isInterested, toggleInterest } from "@/lib/progress";
 import type { KnowledgeItem } from "@/lib/content";
-import { ArrowLeft, Clock, CheckCircle2, Circle, ChevronLeft, ChevronRight, Filter, Star } from "lucide-react";
+import { Clock, CheckCircle2, Circle, ChevronLeft, ChevronRight, Filter, Star } from "lucide-react";
 import clsx from "clsx";
 
 export default function TopicClient({
@@ -61,8 +61,8 @@ export default function TopicClient({
   if (items.length === 0) {
     return (
       <div className="max-w-3xl mx-auto py-12 text-center">
-        <p className="text-[var(--text-muted)] mb-4">该模块暂未添加内容</p>
-        <Link href={`/stages/${stageId}`} className="text-[var(--color-accent)] hover:underline">
+        <p className="text-[var(--text-muted, #94a3b8)] mb-4">该模块暂未添加内容</p>
+        <Link href={`/stages/${stageId}`} className="text-[var(--color-accent, #3b82f6)] hover:underline">
           返回 {stageTitle}
         </Link>
       </div>
@@ -87,17 +87,17 @@ export default function TopicClient({
     <div className="max-w-3xl mx-auto">
       <div ref={topRef} />
       {/* Breadcrumb */}
-      <div className="flex items-center gap-2 text-sm text-[var(--text-muted)] mb-6">
-        <Link href="/" className="hover:text-[var(--text-secondary)]">首页</Link>
+      <div className="flex items-center gap-2 text-sm text-[var(--text-muted, #94a3b8)] mb-6">
+        <Link href="/" className="hover:text-[var(--text-secondary, #475569)]">首页</Link>
         <span>/</span>
-        <Link href={`/stages/${stageId}`} className="hover:text-[var(--text-secondary)]">{stageTitle}</Link>
+        <Link href={`/stages/${stageId}`} className="hover:text-[var(--text-secondary, #475569)]">{stageTitle}</Link>
         <span>/</span>
-        <span className="text-[var(--text-primary)]">{topicTitle}</span>
+        <span className="text-[var(--text-primary, #0f172a)]">{topicTitle}</span>
       </div>
 
       {/* Difficulty filter */}
       <div className="flex items-center gap-2 mb-6 flex-wrap">
-        <Filter className="w-4 h-4 text-[var(--text-muted)]" />
+        <Filter className="w-4 h-4 text-[var(--text-muted, #94a3b8)]" />
         {difficultyOptions.map((opt) => (
           <button
             key={opt.value}
@@ -105,8 +105,8 @@ export default function TopicClient({
             className={clsx(
               "text-xs font-medium px-3 py-1.5 rounded-full border transition-colors",
               difficultyFilter === opt.value
-                ? "bg-[var(--color-accent)] text-white border-[var(--color-accent)]"
-                : "border-[var(--border-light)] text-[var(--text-muted)] hover:border-[var(--color-accent)]"
+                ? "bg-[var(--color-accent, #3b82f6)] text-white border-[var(--color-accent, #3b82f6)]"
+                : "border-[var(--border-light, #e2e8f0)] text-[var(--text-muted, #94a3b8)] hover:border-[var(--color-accent, #3b82f6)]"
             )}
           >
             {opt.label}
@@ -119,7 +119,7 @@ export default function TopicClient({
       {filteredItems.length > 0 && (
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-2">
-            <span className="text-sm text-[var(--text-muted)]">
+            <span className="text-sm text-[var(--text-muted, #94a3b8)]">
               {effectiveIdx + 1} / {filteredItems.length}
             </span>
             <div className="flex gap-1">
@@ -129,7 +129,7 @@ export default function TopicClient({
                   onClick={() => setCurrentIdx(i)}
                   className={clsx(
                     "w-2 h-2 rounded-full transition-colors",
-                    i === effectiveIdx ? "bg-[var(--color-accent)]" : "bg-[var(--border-light)] hover:bg-[var(--text-muted)]"
+                    i === effectiveIdx ? "bg-[var(--color-accent, #3b82f6)]" : "bg-[var(--border-light, #e2e8f0)] hover:bg-[var(--text-muted, #94a3b8)]"
                   )}
                 />
               ))}
@@ -146,13 +146,13 @@ export default function TopicClient({
               {diffLabel}
             </span>
             {item.estimatedTime && (
-              <span className="flex items-center gap-1 text-xs text-[var(--text-muted)]">
+              <span className="flex items-center gap-1 text-xs text-[var(--text-muted, #94a3b8)]">
                 <Clock className="w-3 h-3" />
                 {item.estimatedTime}
               </span>
             )}
           </div>
-          <h1 className="text-2xl sm:text-3xl font-bold text-[var(--text-primary)]">
+          <h1 className="text-2xl sm:text-3xl font-bold text-[var(--text-primary, #0f172a)]">
             {item.title}
           </h1>
         </div>
@@ -171,8 +171,8 @@ export default function TopicClient({
                 className={clsx(
                   "flex items-center gap-2 px-4 py-2 rounded-lg border text-sm transition-all",
                   completed
-                    ? "border-[var(--color-success)] text-[var(--color-success)] bg-[var(--color-success)]/5"
-                    : "border-[var(--border-light)] text-[var(--text-muted)] hover:border-[var(--color-accent)]"
+                    ? "border-[var(--color-success, #10b981)] text-[var(--color-success, #10b981)] bg-[var(--color-success, #10b981)]/5"
+                    : "border-[var(--border-light, #e2e8f0)] text-[var(--text-muted, #94a3b8)] hover:border-[var(--color-accent, #3b82f6)]"
                 )}
               >
                 {completed ? <CheckCircle2 className="w-4 h-4" /> : <Circle className="w-4 h-4" />}
@@ -184,7 +184,7 @@ export default function TopicClient({
                   "flex items-center gap-2 px-4 py-2 rounded-lg border text-sm transition-all",
                   interested
                     ? "border-amber-400 text-amber-500 bg-amber-50 dark:bg-amber-900/20"
-                    : "border-[var(--border-light)] text-[var(--text-muted)] hover:border-amber-400"
+                    : "border-[var(--border-light, #e2e8f0)] text-[var(--text-muted, #94a3b8)] hover:border-amber-400"
                 )}
               >
                 <Star className={clsx("w-4 h-4", interested && "fill-amber-400")} />
@@ -199,11 +199,11 @@ export default function TopicClient({
           )}
 
           {/* Prev / Next */}
-          <div className="mt-8 flex items-center justify-between border-t border-[var(--border-light)] pt-6">
+          <div className="mt-8 flex items-center justify-between border-t border-[var(--border-light, #e2e8f0)] pt-6">
             {prevItem ? (
               <button
                 onClick={() => setCurrentIdx(effectiveIdx - 1)}
-                className="flex items-center gap-2 text-sm text-[var(--text-secondary)] hover:text-[var(--color-accent)]"
+                className="flex items-center gap-2 text-sm text-[var(--text-secondary, #475569)] hover:text-[var(--color-accent, #3b82f6)]"
               >
                 <ChevronLeft className="w-4 h-4" />
                 {prevItem.title}
@@ -212,7 +212,7 @@ export default function TopicClient({
             {nextItem ? (
               <button
                 onClick={() => setCurrentIdx(effectiveIdx + 1)}
-                className="flex items-center gap-2 text-sm text-[var(--text-secondary)] hover:text-[var(--color-accent)]"
+                className="flex items-center gap-2 text-sm text-[var(--text-secondary, #475569)] hover:text-[var(--color-accent, #3b82f6)]"
               >
                 {nextItem.title}
                 <ChevronRight className="w-4 h-4" />

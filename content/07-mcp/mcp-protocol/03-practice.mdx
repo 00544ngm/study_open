@@ -1,0 +1,172 @@
+---
+title: MCP 协议练习
+order: 3
+difficulty: intermediate
+estimated_time: 25min
+tags: [实践, MCP, 协议]
+---
+
+## 练习
+
+### 目标
+
+通过动手练习掌握 MCP 协议的核心概念，理解 Tools、Resources、Prompts 三类能力以及 Transport 机制。
+
+### 练习 1：理解 MCP 三类能力
+
+```python
+# 根据协议定义，补全以下代码
+
+from enum import Enum
+from typing import List, Dict, Any
+from dataclasses import dataclass, field
+
+
+class CapabilityType(Enum):
+    TOOL = "tools"
+    RESOURCE = "resources"
+    PROMPT = "prompts"
+
+
+@dataclass
+class Tool:
+    """MCP 工具定义"""
+    name: str
+    description: str
+    input_schema: Dict[str, Any]
+
+
+@dataclass
+class Resource:
+    """MCP 资源定义"""
+    uri: str
+    name: str
+    description: str
+    # 你的代码：添加 mime_type 字段，类型为 str，默认值为 "text/plain"
+
+
+@dataclass
+class PromptTemplate:
+    """MCP 提示模板"""
+    name: str
+    description: str
+    arguments: List[Dict[str, Any]] = field(default_factory=list)
+
+
+# 补全函数：列出三类能力
+def list_capabilities(server_name: str) -> Dict[CapabilityType, List[str]]:
+    """
+    返回模拟的 MCP Server 能力列表。
+    server_name 为 "calculator" 时包含 add/subtract 工具；
+    为 "file-server" 时包含 read/write 资源和 code-review 提示。
+    """
+    result = {}
+    # 你的代码：根据 server_name 返回对应的能力
+    pass
+
+
+# 测试
+print(list_capabilities("calculator"))
+print(list_capabilities("file-server"))
+```
+
+### 练习 2：Transport 通信模拟
+
+```python
+import json
+import asyncio
+from enum import Enum
+
+
+class MessageType(Enum):
+    REQUEST = "request"
+    RESPONSE = "response"
+    NOTIFICATION = "notification"
+
+
+class Transport(str, Enum):
+    STDIO = "stdio"
+    SSE = "sse"
+
+
+@dataclass
+class MCPMessage:
+    type: MessageType
+    method: str
+    params: Dict[str, Any] = field(default_factory=dict)
+    id: str = ""
+
+
+class MCPServer:
+    """模拟 MCP Server，支持 stdio 和 SSE 两种 Transport"""
+
+    def __init__(self, transport: Transport = Transport.STDIO):
+        self.transport = transport
+
+    async def handle_message(self, message: MCPMessage) -> MCPMessage:
+        # 你的代码：根据 message.method 分发处理
+        # 支持的方法：
+        #   - "tools/list" → 返回工具列表
+        #   - "tools/call" → 调用工具（从 params 中获取 name 和 arguments）
+        # 返回对应的 MCPMessage（type=RESPONSE，包含结果）
+        pass
+
+
+# 测试
+async def test():
+    server = MCPServer(Transport.STDIO)
+    req = MCPMessage(
+        type=MessageType.REQUEST,
+        method="tools/list",
+        id="1"
+    )
+    resp = await server.handle_message(req)
+    print(f"Response: {resp}")
+
+asyncio.run(test())
+```
+
+### 练习 3：协议版本协商
+
+```python
+# 模拟 MCP 客户端-服务端协议版本协商
+
+SUPPORTED_VERSIONS = ["2025-03-26", "2025-04-01", "2025-05-01"]
+
+
+class MCPCapability:
+    def __init__(self, version: str, capabilities: List[str]):
+        self.version = version
+        self.capabilities = set(capabilities)
+
+
+class MCPClient:
+    def __init__(self, version: str, capabilities: List[str]):
+        self.capability = MCPCapability(version, capabilities)
+
+    def negotiate(self, server_cap: MCPCapability) -> tuple[str, List[str]]:
+        """
+        协议协商：
+        1. 找到双方都支持的最高版本（按 SUPPORTED_VERSIONS 顺序）
+        2. 取双方能力的交集
+        返回 (agreed_version, common_capabilities)
+        """
+        # 你的代码：
+        pass
+
+
+# 测试
+client = MCPClient("2025-04-01", ["tools", "resources"])
+server = MCPCapability("2025-05-01", ["tools", "prompts"])
+
+version, caps = client.negotiate(server)
+print(f"协商版本: {version}, 能力: {caps}")
+```
+
+### 验收清单
+
+- [ ] 能区分 MCP 的三类能力（Tools、Resources、Prompts）
+- [ ] 理解 stdio 和 SSE 两种 Transport 的区别
+- [ ] 能实现基本的 MCP 消息处理
+- [ ] 理解协议版本协商机制
+- [ ] 能模拟客户端-服务端通信流程

@@ -1,0 +1,172 @@
+---
+title: 上下文压缩与选择性记忆
+order: 2
+difficulty: advanced
+estimated_time: 40min
+tags: [上下文管理, LLM, 压缩]
+---
+
+## 进阶
+
+### 上下文压缩策略
+
+```python
+import json
+from typing import Any
+
+class ContextCompressor:
+    """将历史对话压缩为结构化摘要。"""
+
+    def compress(self, messages: list[dict]) -> dict:
+        """将消息列表压缩为结构化摘要。"""
+        return {
+            "goals": self._extract_goals(messages),
+            "decisions": self._extract_decisions(messages),
+            "file_states": self._extract_file_states(messages),
+            "pending": self._extract_pending(messages),
+            "token_count": self._count_tokens(messages)
+        }
+
+    def _extract_goals(self, messages: list[dict]) -> list[str]:
+        """提取用户的核心目标。"""
+        goals = []
+        for msg in messages[-20:]:  # 只看最近的消息
+            if msg["role"] == "user":
+                # 提取以"要/需要/请/帮我"开头的句子
+                for line in msg["content"].split("\n"):
+                    if any(line.startswith(w) for w in ["要", "需要", "请", "帮我"]):
+                        goals.append(line[:100])
+        return goals[-5:]  # 最多保留5个目标
+
+    def _count_tokens(self, messages: list[dict]) -> int:
+        total = 0
+        for msg in messages:
+            total += len(msg["content"]) // 3
+        return total
+
+    def _extract_decisions(self, messages) -> list[str]:
+        decisions = []
+        for msg in messages[-30:]:
+            if "决定" in msg["content"] or "确认" in msg["content"]:
+                decisions.append(msg["content"][:150])
+        return decisions[-5:]
+
+    def _extract_file_states(self, messages) -> dict[str, str]:
+        """记录哪些文件被修改过及其状态。"""
+        files = {}
+        for msg in messages:
+            for line in msg["content"].split("\n"):
+                if "修改" in line and ("src/" in line or "content/" in line):
+                    files[line.strip()] = "modified"
+        return files
+```
+
+### 选择性遗忘
+
+不是所有历史信息都需要保留：
+
+```python
+class SelectiveMemory:
+    """只保留对后续交互有用的信息。"""
+
+    def __init__(self, max_tokens: int = 8000):
+        self.max_tokens = max_tokens
+        self.short_term: list[dict] = []
+        self.long_term: dict[str, Any] = {}
+
+    def add(self, message: dict):
+        self.short_term.append(message)
+        self._maybe_consolidate()
+
+    def _maybe_consolidate(self):
+        total = sum(len(m["content"]) // 3 for m in self.short_term)
+        if total > self.max_tokens:
+            self._consolidate()
+
+    def _consolidate(self):
+        """将短期记忆压缩到长期记忆。"""
+        # 保留最近的 20% 消息
+        keep = max(1, len(self.short_term) // 5)
+        recent = self.short_term[-keep:]
+
+        # 将早期的消息压缩
+        early = self.short_term[:-keep]
+        if early:
+            summary = self._summarize_messages(early)
+            self.long_term["history"] = summary
+
+        self.short_term = recent
+
+    def get_context(self) -> list[dict]:
+        """获取当前上下文，包含长短期记忆。"""
+        context = []
+        if "history" in self.long_term:
+            context.append({
+                "role": "system",
+                "content": f"历史摘要：{self.long_term['history']}"
+            })
+        return context + self.short_term
+```
+
+### Token 预算分配
+
+```python
+class TokenBudget:
+    """为上下文的不同部分分配 token 预算。"""
+
+    BUDGETS = {
+        "system_prompt": 2000,   # 系统提示
+        "file_context": 4000,    # 当前文件
+        "related_files": 3000,   # 相关文件
+        "chat_history": 4000,    # 对话历史
+        "output_buffer": 2000,   # 输出预留
+    }
+
+    def __init__(self, max_total: int = 32000):
+        self.max_total = max_total
+        self.usage: dict[str, int] = {}
+
+    def can_fit(self, section: str, tokens: int) -> bool:
+        """检查某部分是否可以放入预算。"""
+        budget = self.BUDGETS.get(section, 1000)
+        used = self.usage.get(section, 0)
+        return used + tokens <= budget
+
+    def allocate(self, section: str, tokens: int) -> bool:
+        if self.can_fit(section, tokens):
+            self.usage[section] = self.usage.get(section, 0) + tokens
+            return True
+        return False
+
+    def summary(self) -> str:
+        total = sum(self.usage.values())
+        return f"Token 使用: {total}/{self.max_total} " + \
+               " ".join(f"{k}={v}" for k, v in self.usage.items())
+```
+
+### 优先级队列
+
+```python
+from heapq import heappush, heappop
+
+class PriorityContext:
+    """根据相关性对上下文项目排序。"""
+
+    def __init__(self):
+        self.items: list[tuple[int, str, Any]] = []
+
+    def add(self, priority: int, label: str, content: Any):
+        heappush(self.items, (priority, label, content))
+
+    def get_top(self, max_tokens: int) -> list[Any]:
+        """获取优先级最高的上下文，直到达到 token 限制。"""
+        result = []
+        used = 0
+        while self.items and used < max_tokens:
+            _, label, content = heappop(self.items)
+            tokens = len(str(content)) // 3
+            if used + tokens <= max_tokens:
+                result.append({label: content})
+                used += tokens
+        return result
+```

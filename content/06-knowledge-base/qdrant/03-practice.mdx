@@ -1,0 +1,140 @@
+---
+title: Qdrant 向量数据库练习
+order: 3
+difficulty: intermediate
+estimated_time: 30min
+tags: [实践, Qdrant, 向量数据库]
+---
+
+## 练习
+
+### 目标
+
+通过动手练习掌握 Qdrant 向量数据库的集合管理、向量插入和相似度搜索。
+
+### 练习 1：创建集合并插入向量
+
+```python
+from qdrant_client import QdrantClient
+from qdrant_client.models import Distance, VectorParams, PointStruct
+import uuid
+
+client = QdrantClient(host="localhost", port=6333)
+
+# 1. 创建集合
+collection_name = "agent_knowledge"
+
+# 如果集合已存在，先删除
+client.delete_collection(collection_name, timeout=10)
+
+# 创建集合，向量维度 384（可用小模型），使用 Cosine 距离
+# 你的代码：
+
+# 2. 准备数据
+documents = [
+    {"text": "ReAct 模式让 Agent 交替进行推理和行动", "source": "agent-patterns"},
+    {"text": "Tool 是 Agent 与外部世界交互的接口", "source": "agent-patterns"},
+    {"text": "Memory 系统让 Agent 记住之前的对话", "source": "agent-memory"},
+    {"text": "Plan 模块让 Agent 能分解复杂任务", "source": "agent-planning"},
+    {"text": "Embedding 将文本转换为向量表示", "source": "knowledge-base"},
+]
+
+# 3. 生成向量并插入
+# 使用简单的字符计数模拟向量（实际应使用 Embedding API）
+def simple_embed(text: str, dim: int = 384) -> list[float]:
+    """简单的模拟向量生成（仅用于练习）。"""
+    import hashlib
+    vec = []
+    for i in range(dim):
+        h = hashlib.md5(f"{text}{i}".encode()).hexdigest()
+        vec.append(int(h[:8], 16) / 2**32)
+    return vec
+
+
+points = []
+for i, doc in enumerate(documents):
+    vector = simple_embed(doc["text"])
+    point = PointStruct(
+        id=i+1,
+        vector=vector,
+        payload=doc,
+    )
+    points.append(point)
+
+# 插入到集合
+client.upsert(collection_name=collection_name, points=points)
+print(f"Inserted {len(points)} points")
+```
+
+### 练习 2：向量搜索
+
+```python
+# 1. 基础相似度搜索
+query_text = "Agent 如何进行推理"
+query_vector = simple_embed(query_text)
+
+search_result = client.search(
+    collection_name=collection_name,
+    query_vector=query_vector,
+    limit=3,
+)
+
+print("搜索结果：")
+for scored_point in search_result:
+    payload = scored_point.payload
+    print(f"  [{scored_point.score:.3f}] {payload['text']}")
+
+# 2. 带过滤的搜索：只搜索特定来源
+# 你的代码：搜索 source 为 "agent-patterns" 的文档
+
+# 3. 批量搜索
+queries = ["工具使用", "记忆系统", "任务规划"]
+for q in queries:
+    # 你的代码：对每个查询搜索，打印 top-1 结果
+    pass
+```
+
+### 练习 3：Payload 过滤
+
+```python
+from qdrant_client.models import Filter, FieldCondition, MatchValue
+
+# 1. 添加更多带元数据的文档
+additional_docs = [
+    {"text": "Python 装饰器使用 @ 语法", "source": "python", "difficulty": "beginner"},
+    {"text": "asyncio 实现并发编程", "source": "python", "difficulty": "advanced"},
+    {"text": "FastAPI 依赖注入系统", "source": "backend", "difficulty": "intermediate"},
+]
+
+points = []
+for i, doc in enumerate(additional_docs):
+    points.append(PointStruct(
+        id=len(documents) + i + 1,
+        vector=simple_embed(doc["text"]),
+        payload=doc,
+    ))
+client.upsert(collection_name=collection_name, points=points)
+
+# 2. 带过滤的搜索
+# 搜索 "编程" 相关内容，只返回 beginner 难度的
+query_filter = Filter(
+    must=[
+        FieldCondition(key="difficulty", match=MatchValue("beginner")),
+    ]
+)
+# 你的代码：使用 query_filter 参数搜索
+
+# 3. 组合过滤：advanced 难度的 backend 内容
+# 你的代码：
+
+# 4. 清理：删除集合
+client.delete_collection(collection_name)
+```
+
+### 验收清单
+
+- [ ] 能创建带向量参数的集合
+- [ ] 能插入带 payload 的向量点
+- [ ] 能进行相似度搜索并获取 top-k 结果
+- [ ] 能使用 Filter 进行元数据过滤
+- [ ] 理解向量维度、距离度量（Cosine）的概念

@@ -2,46 +2,156 @@
 title: Schema 设计与迁移
 order: 1
 difficulty: intermediate
-estimated_time: 25min
-tags: [数据库, PostgreSQL]
+estimated_time: 30min
+tags: [数据库, PostgreSQL, Schema]
 ---
 
 ## 核心
 
 ### 设计原则
 
+AI Agent 项目涉及多个数据模型：用户会话、Agent 状态、聊天历史、任务队列。好的数据库设计决定了系统的可维护性和查询性能。
+
 ```sql
 -- 规范化设计
 CREATE TABLE agents (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name TEXT NOT NULL,
-  config JSONB,
-  created_at TIMESTAMPTZ DEFAULT now()
+  model TEXT NOT NULL DEFAULT 'gpt-4',
+  config JSONB DEFAULT '{}',
+  status TEXT DEFAULT 'inactive'
+    CHECK (status IN ('active', 'inactive', 'error')),
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
 );
 
 CREATE TABLE conversations (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  agent_id UUID REFERENCES agents(id),
-  messages JSONB[],
+  agent_id UUID REFERENCES agents(id) ON DELETE CASCADE,
+  title TEXT,
+  messages JSONB[] DEFAULT '{}',
   status TEXT DEFAULT 'active'
+    CHECK (status IN ('active', 'archived')),
+  token_count INTEGER DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT now()
 );
+
+-- 性能索引
+CREATE INDEX idx_conversations_agent_id ON conversations(agent_id);
+CREATE INDEX idx_conversations_created_at ON conversations(created_at DESC);
+CREATE INDEX idx_agents_status ON agents(status) WHERE status = 'active';
+```
+
+### 表关系设计
+
+```sql
+-- 一对多：Agent → Conversations
+-- 已在上面通过 agent_id FOREIGN KEY 实现
+
+-- 多对多：Agent ↔ Tools（通过关联表）
+CREATE TABLE agent_tools (
+  agent_id UUID REFERENCES agents(id) ON DELETE CASCADE,
+  tool_name TEXT NOT NULL,
+  enabled BOOLEAN DEFAULT true,
+  config JSONB DEFAULT '{}',
+  PRIMARY KEY (agent_id, tool_name)
+);
+
+-- 树形结构：消息回复链
+CREATE TABLE messages (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
+  parent_id UUID REFERENCES messages(id),
+  role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system', 'tool')),
+  content TEXT NOT NULL,
+  tokens INTEGER DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+```
+
+### JSONB 使用模式
+
+PostgreSQL 的 JSONB 是 AI Agent 项目的核心数据类型，用于存储灵活的配置和结构化数据：
+
+```sql
+-- 存储 Agent 配置（Schema 灵活）
+INSERT INTO agents (name, config) VALUES (
+  'code-assistant',
+  '{
+    "model": "gpt-4",
+    "temperature": 0.1,
+    "tools": ["read", "edit", "search"],
+    "maxTokens": 4096,
+    "security": {
+      "allowedPaths": ["/home/project/src"],
+      "deniedCommands": ["rm -rf"]
+    }
+  }'::JSONB
+);
+
+-- JSONB 查询：查找使用特定工具的 Agent
+SELECT name FROM agents
+WHERE config->'tools' ? 'read';
+
+-- JSONB 索引加速
+CREATE INDEX idx_agents_config_tools ON agents USING GIN (config jsonb_path_ops);
 ```
 
 ### 迁移策略 (Alembic)
 
 ```bash
+# 初始化
 alembic init migrations
+
+# 自动生成迁移
 alembic revision --autogenerate -m "add agents table"
+
+# 应用迁移
 alembic upgrade head
+
+# 回滚
+alembic downgrade -1
+
+# 查看历史
+alembic history
 ```
 
-## 进阶
+编写安全的迁移脚本：
 
-### 查询优化
+```python
+"""add messages table
 
-```sql
-EXPLAIN ANALYZE SELECT * FROM conversations
-WHERE agent_id = '...' AND status = 'active';
+Revision ID: a1b2c3d4
+Revises: previous_revision
+"""
+
+def upgrade():
+    op.create_table(
+        "messages",
+        sa.Column("id", sa.UUID(), primary_key=True),
+        sa.Column("conversation_id", sa.UUID(), nullable=False),
+        sa.Column("role", sa.String(), nullable=False),
+        sa.Column("content", sa.Text(), nullable=False),
+        sa.Column("tokens", sa.Integer(), server_default="0"),
+        sa.Column("created_at", sa.DateTime(), server_default=sa.func.now()),
+        sa.ForeignKeyConstraint(
+            ["conversation_id"], ["conversations.id"],
+            ondelete="CASCADE"
+        ),
+    )
+    op.create_index("idx_messages_conversation", "messages", ["conversation_id"])
+
+def downgrade():
+    op.drop_table("messages")
 ```
 
-理解索引类型（B-tree、GIN、GiST）和查询计划对 AI 生成的 SQL 进行审查优化。
+### 数据类型选择
+
+| 类型 | 用途 | 示例 |
+|------|------|------|
+| `UUID` | 主键，分布式 ID | `gen_random_uuid()` |
+| `TEXT` | 变长文本 | 消息内容 |
+| `JSONB` | 灵活配置，半结构化 | Agent config |
+| `TIMESTAMPTZ` | 时间戳（带时区） | `created_at` |
+| `INTEGER` | 计数，token 统计 | `token_count` |
+| `ENUM` | 有限状态集 | Agent 状态 |

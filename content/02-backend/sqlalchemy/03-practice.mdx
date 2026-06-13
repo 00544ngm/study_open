@@ -1,0 +1,119 @@
+---
+title: SQLAlchemy 基础练习
+order: 3
+difficulty: beginner
+estimated_time: 30min
+tags: [实践, SQLAlchemy, ORM]
+---
+
+## 练习
+
+### 目标
+
+通过动手练习掌握 SQLAlchemy ORM 建模、查询和关系映射。
+
+### 练习 1：定义 ORM 模型
+
+```python
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, ForeignKey, Text
+from sqlalchemy.orm import declarative_base, relationship
+from datetime import datetime
+
+Base = declarative_base()
+
+# 1. 补全 Agent 模型
+class Agent(Base):
+    __tablename__ = "agents"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100), nullable=False)
+    model = Column(String(50), default="gpt-4")
+    temperature = Column(Float, default=0.1)
+    # 添加 created_at 字段，默认当前时间
+    # 你的代码：
+
+    # 关联 conversations
+    conversations = relationship("Conversation", back_populates="agent")
+
+
+# 2. 补全 Conversation 模型
+class Conversation(Base):
+    __tablename__ = "conversations"
+
+    id = Column(Integer, primary_key=True)
+    agent_id = Column(Integer, ForeignKey("agents.id"))
+    title = Column(String(200))
+    # 添加 messages 字段（Text 类型，存储 JSON）
+    # 你的代码：
+
+    agent = relationship("Agent", back_populates="conversations")
+
+
+# 3. 创建表
+engine = create_engine("sqlite:///agent.db")
+Base.metadata.create_all(engine)
+```
+
+### 练习 2：CRUD 操作
+
+```python
+from sqlalchemy.orm import Session
+
+session = Session(engine)
+
+# 1. 创建数据
+agent1 = Agent(name="code-assistant", model="gpt-4", temperature=0.1)
+agent2 = Agent(name="data-analyzer", model="gpt-3.5-turbo", temperature=0.3)
+# 添加到 session 并提交
+# 你的代码：
+
+# 2. 查询数据
+# 查询所有 agent
+agents = session.query(Agent).all()
+for a in agents:
+    print(f"Agent: {a.name}, Model: {a.model}")
+
+# 按条件查询（temperature < 0.2 的 agent）
+# 你的代码：
+
+# 3. 更新数据
+# 将第一个 agent 的 temperature 改为 0.2
+# 你的代码：
+session.commit()
+
+# 4. 删除数据
+# 删除第二个 agent
+# 你的代码：
+session.commit()
+```
+
+### 练习 3：关系查询
+
+```python
+# 基于练习 1 的模型
+
+# 1. 创建一个带对话的 agent
+agent = Agent(name="chat-bot", model="gpt-4")
+session.add(agent)
+session.flush()  # 获取 agent.id
+
+conv1 = Conversation(agent_id=agent.id, title="对话1", messages='{"count": 5}')
+conv2 = Conversation(agent_id=agent.id, title="对话2", messages='{"count": 3}')
+session.add_all([conv1, conv2])
+session.commit()
+
+# 2. 通过关系属性查询（延迟加载）
+# 你的代码：访问 agent.conversations
+
+# 3. 使用 joined loading 预加载
+from sqlalchemy.orm import joinedload
+# 你的代码：一次查询加载 agent + conversations
+```
+
+### 验收清单
+
+- [ ] 能使用 `declarative_base` 定义 ORM 模型
+- [ ] 能建立外键和模型关联（one-to-many）
+- [ ] 能执行 CRUD 操作（增删改查）
+- [ ] 能使用关系属性进行关联查询
+- [ ] 理解延迟加载（lazy loading）和预加载（eager loading）

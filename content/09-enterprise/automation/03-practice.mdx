@@ -1,0 +1,305 @@
+---
+title: 自动化平台实践练习
+order: 3
+difficulty: advanced
+estimated_time: 25min
+tags: [实践, 企业级, 自动化]
+---
+
+## 练习
+
+### 目标
+
+通过动手练习掌握自动化平台的核心模块设计，包括 Agent 管理、任务调度和监控集成。
+
+### 练习 1：Agent 管理与注册
+
+```python
+from typing import Dict, Any, Callable
+from datetime import datetime
+from enum import Enum
+import uuid
+
+
+class AgentStatus(Enum):
+    IDLE = "idle"
+    RUNNING = "running"
+    ERROR = "error"
+    DISABLED = "disabled"
+
+
+class AgentMetadata:
+    """Agent 元数据"""
+    def __init__(self, name: str, version: str, description: str = ""):
+        self.id = str(uuid.uuid4())[:8]
+        self.name = name
+        self.version = version
+        self.description = description
+        self.status = AgentStatus.IDLE
+        self.created_at = datetime.now()
+        self.last_heartbeat = datetime.now()
+        self.total_tasks = 0
+        self.failed_tasks = 0
+
+
+class AgentRegistry:
+    """Agent 注册中心"""
+
+    def __init__(self):
+        self.agents: Dict[str, AgentMetadata] = {}
+        self.handlers: Dict[str, Callable] = {}
+
+    def register(self, name: str, version: str, handler: Callable, description: str = "") -> str:
+        """
+        注册 Agent。
+        创建 AgentMetadata，保存 handler。
+        返回 agent_id。
+        """
+        # 你的代码：
+        pass
+
+    def unregister(self, agent_id: str):
+        """注销 Agent。"""
+        if agent_id in self.agents:
+            del self.agents[agent_id]
+            del self.handlers[agent_id]
+
+    def get_agent(self, agent_id: str) -> AgentMetadata | None:
+        return self.agents.get(agent_id)
+
+    def list_agents(self, status: AgentStatus | None = None) -> list[AgentMetadata]:
+        """
+        列出所有 Agent，可按状态过滤。
+        """
+        # 你的代码：
+        pass
+
+    def update_heartbeat(self, agent_id: str):
+        """更新 Agent 心跳时间。"""
+        if agent_id in self.agents:
+            self.agents[agent_id].last_heartbeat = datetime.now()
+
+    def get_healthy_agents(self, max_stale_seconds: int = 30) -> list[AgentMetadata]:
+        """获取心跳正常的 Agent。"""
+        # 你的代码：
+        pass
+
+
+# 测试
+registry = AgentRegistry()
+
+def search_handler(task: str) -> str:
+    return f"搜索: {task}"
+
+def analyze_handler(task: str) -> str:
+    return f"分析: {task}"
+
+id1 = registry.register("search-agent", "1.0.0", search_handler, "搜索 Agent")
+id2 = registry.register("analyze-agent", "1.0.0", analyze_handler, "分析 Agent")
+
+print(f"Agent 列表: {[a.name for a in registry.list_agents()]}")
+print(f"健康 Agent: {[a.name for a in registry.get_healthy_agents()]}")
+```
+
+### 练习 2：任务调度器
+
+```python
+import asyncio
+import random
+from typing import Any
+from datetime import datetime
+from dataclasses import dataclass, field
+
+
+class TaskPriority:
+    LOW = 0
+    MEDIUM = 1
+    HIGH = 2
+    CRITICAL = 3
+
+
+@dataclass
+class Task:
+    id: str
+    agent_id: str
+    payload: Any
+    priority: int = TaskPriority.MEDIUM
+    created_at: datetime = field(default_factory=datetime.now)
+    status: str = "pending"  # pending | running | completed | failed
+
+
+class TaskScheduler:
+    """任务调度器"""
+
+    def __init__(self, max_concurrency: int = 10):
+        self.max_concurrency = max_concurrency
+        self.queue: list[Task] = []
+        self.running: dict[str, Task] = {}
+        self.completed: list[Task] = []
+        self.agent_registry: AgentRegistry | None = None
+
+    def set_registry(self, registry: AgentRegistry):
+        self.agent_registry = registry
+
+    def add_task(self, agent_id: str, payload: Any, priority: int = TaskPriority.MEDIUM) -> str:
+        """添加任务到队列（按优先级排序）。"""
+        # 你的代码：创建 Task，插入到 queue 的正确位置（按优先级降序）
+        pass
+
+    async def process_next(self) -> bool:
+        """
+        处理下一个任务：
+        1. 检查并发数
+        2. 从队列取出最高优先级任务
+        3. 检查 Agent 是否健康
+        4. 执行任务
+        5. 更新状态
+        """
+        if len(self.running) >= self.max_concurrency:
+            return False
+
+        if not self.queue:
+            return False
+
+        # 你的代码：取出队列第一个任务，执行它
+        pass
+
+    async def run_loop(self):
+        """持续处理队列中的任务。"""
+        while self.queue or self.running:
+            await self.process_next()
+            await asyncio.sleep(0.1)
+
+    def get_stats(self) -> dict:
+        """获取调度器统计信息。"""
+        return {
+            "queue_size": len(self.queue),
+            "running": len(self.running),
+            "completed": len(self.completed),
+        }
+
+
+# 测试
+async def test():
+    registry = AgentRegistry()
+    scheduler = TaskScheduler(max_concurrency=3)
+    scheduler.set_registry(registry)
+
+    def dummy_handler(task: str) -> str:
+        return f"完成: {task}"
+
+    agent_id = registry.register("worker", "1.0", dummy_handler)
+
+    for i in range(5):
+        scheduler.add_task(agent_id, f"任务 {i}", random.randint(0, 3))
+
+    await scheduler.run_loop()
+    print(f"统计: {scheduler.get_stats()}")
+
+asyncio.run(test())
+```
+
+### 练习 3：监控集成
+
+```python
+from typing import Any
+from datetime import datetime, timedelta
+from collections import defaultdict
+
+
+class MetricsCollector:
+    """指标收集器"""
+
+    def __init__(self):
+        self.metrics: dict[str, list[dict]] = defaultdict(list)
+
+    def record(self, metric_name: str, value: float, tags: dict | None = None):
+        """记录一个指标。"""
+        self.metrics[metric_name].append({
+            "value": value,
+            "timestamp": datetime.now(),
+            "tags": tags or {},
+        })
+
+    def query(self, metric_name: str, duration_minutes: int = 60) -> list[dict]:
+        """查询最近 N 分钟的指标数据。"""
+        cutoff = datetime.now() - timedelta(minutes=duration_minutes)
+        # 你的代码：过滤出 cutoff 之后的数据
+        pass
+
+    def average(self, metric_name: str, duration_minutes: int = 60) -> float:
+        """计算指标平均值。"""
+        data = self.query(metric_name, duration_minutes)
+        if not data:
+            return 0.0
+        return sum(d["value"] for d in data) / len(data)
+
+    def percentile(self, metric_name: str, p: float, duration_minutes: int = 60) -> float:
+        """计算百分位值。"""
+        data = self.query(metric_name, duration_minutes)
+        if not data:
+            return 0.0
+        values = sorted(d["value"] for d in data)
+        idx = int(len(values) * p / 100)
+        return values[min(idx, len(values) - 1)]
+
+
+class AutomationPlatform:
+    """自动化平台（整合注册中心、调度器、监控）"""
+
+    def __init__(self):
+        self.registry = AgentRegistry()
+        self.scheduler = TaskScheduler()
+        self.metrics = MetricsCollector()
+        self.scheduler.set_registry(self.registry)
+
+    def deploy_agent(self, name: str, version: str, handler, description: str = "") -> str:
+        """部署 Agent 到平台。"""
+        agent_id = self.registry.register(name, version, handler, description)
+        self.metrics.record("agent.deploy", 1, {"name": name, "version": version})
+        return agent_id
+
+    async def submit_task(self, agent_id: str, payload: Any, priority: int = 1) -> str:
+        """提交任务并记录指标。"""
+        task_id = self.scheduler.add_task(agent_id, payload, priority)
+        self.metrics.record("task.submitted", 1)
+        return task_id
+
+    def get_platform_health(self) -> dict:
+        """
+        返回平台健康状态：
+        - 总 Agent 数
+        - 健康 Agent 数
+        - 队列深度
+        - 任务完成率
+        - 关键指标平均值
+        """
+        # 你的代码：
+        pass
+
+
+# 测试
+async def test():
+    platform = AutomationPlatform()
+
+    def my_agent(task: str) -> str:
+        return f"处理: {task}"
+
+    agent_id = platform.deploy_agent("my-agent", "1.0.0", my_agent, "测试 Agent")
+
+    for i in range(10):
+        await platform.submit_task(agent_id, f"任务 {i}")
+
+    health = platform.get_platform_health()
+    print(f"平台健康状态: {health}")
+
+asyncio.run(test())
+```
+
+### 验收清单
+
+- [ ] 能实现 Agent 注册和元数据管理
+- [ ] 能实现带优先级的任务调度
+- [ ] 能收集和查询监控指标
+- [ ] 能整合注册、调度、监控为统一平台
+- [ ] 理解 Agent 心跳和健康检查机制

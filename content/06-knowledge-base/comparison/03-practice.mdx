@@ -1,0 +1,173 @@
+---
+title: 知识库选型练习
+order: 3
+difficulty: intermediate
+estimated_time: 25min
+tags: [实践, 知识库, 对比]
+---
+
+## 练习
+
+### 目标
+
+通过动手练习掌握不同知识库方案的对比和选型方法。
+
+### 练习 1：需求分析
+
+```python
+# 根据以下场景，选择最合适的知识库方案
+
+scenarios = [
+    {
+        "name": "智能客服",
+        "data_size": "10 万条 FAQ",
+        "query_speed": "需要 < 200ms",
+        "update_freq": "每周更新",
+        "budget": "低",
+        "features": ["全文搜索", "语义匹配"],
+    },
+    {
+        "name": "代码助手",
+        "data_size": "100 万+ 代码片段",
+        "query_speed": "需要 < 500ms",
+        "update_freq": "实时更新",
+        "budget": "中",
+        "features": ["代码语义搜索", "多语言支持"],
+    },
+    {
+        "name": "企业文档",
+        "data_size": "50 万文档",
+        "query_speed": "需要 < 1s",
+        "update_freq": "每日更新",
+        "budget": "高",
+        "features": ["混合搜索", "权限管理", "高可用"],
+    },
+]
+
+
+def recommend_vector_db(scenario: dict) -> str:
+    """
+    根据场景推荐合适的知识库方案。
+    选项: Qdrant, Elasticsearch, Pinecone, Weaviate, Milvus
+    返回推荐方案和理由。
+    """
+    # 你的实现：分析场景需求并推荐
+    pass
+
+
+for s in scenarios:
+    print(f"场景: {s['name']}")
+    print(f"推荐: {recommend_vector_db(s)}")
+    print("---")
+```
+
+### 练习 2：性能基准测试
+
+```python
+import time
+import random
+import statistics
+
+
+class DBSimulator:
+    """模拟不同知识库方案的性能。"""
+
+    def __init__(self, name: str, base_latency: float, throughput: int):
+        self.name = name
+        self.base_latency = base_latency  # 基本延迟（ms）
+        self.throughput = throughput       # 每秒查询数
+
+    def query(self, vector_size: int = 768) -> dict:
+        """模拟一次查询。"""
+        latency = self.base_latency + random.gauss(0, self.base_latency * 0.1)
+        latency = max(0.1, latency)
+        time.sleep(latency / 1000)  # 模拟延迟
+        return {"latency_ms": latency, "status": "success"}
+
+
+def benchmark(db: DBSimulator, queries: int = 50) -> dict:
+    """
+    对知识库进行基准测试。
+    返回 p50, p95, p99 延迟和吞吐量。
+    """
+    latencies = []
+    start = time.time()
+
+    for _ in range(queries):
+        result = db.query()
+        latencies.append(result["latency_ms"])
+
+    elapsed = time.time() - start
+    latencies.sort()
+
+    return {
+        "db": db.name,
+        "p50_ms": statistics.median(latencies),
+        "p95_ms": latencies[int(len(latencies) * 0.95)],
+        "p99_ms": latencies[int(len(latencies) * 0.99)],
+        "throughput_qps": queries / elapsed,
+        "total_time": elapsed,
+    }
+
+
+# 对比测试
+dbs = [
+    DBSimulator("SQLite + vector", 5, 1000),
+    DBSimulator("Elasticsearch", 15, 500),
+    DBSimulator("Qdrant", 8, 800),
+    DBSimulator("Pinecone", 12, 600),
+]
+
+for db in dbs:
+    result = benchmark(db, 30)
+    print(f"{result['db']:20s} | p50: {result['p50_ms']:5.1f}ms | p95: {result['p95_ms']:5.1f}ms | {result['throughput_qps']:.0f} qps")
+```
+
+### 练习 3：混合搜索方案
+
+```python
+# 实现一个简单的混合搜索（全文搜索 + 向量搜索）
+
+
+def keyword_search(query: str, docs: list[str]) -> list[tuple[int, float]]:
+    """简单的关键词搜索，返回文档索引和 BM25 风格分数。"""
+    query_terms = query.lower().split()
+    scores = []
+    for i, doc in enumerate(docs):
+        doc_lower = doc.lower()
+        score = sum(1 for t in query_terms if t in doc_lower)
+        if score > 0:
+            scores.append((i, score))
+    return sorted(scores, key=lambda x: -x[1])
+
+
+def vector_search(query_vec: list[float], vectors: list[list[float]], top_k: int = 3) -> list[tuple[int, float]]:
+    """简单的余弦相似度搜索。"""
+    import math
+    def cosine_sim(a, b):
+        dot = sum(x * y for x, y in zip(a, b))
+        norm_a = math.sqrt(sum(x * x for x in a))
+        norm_b = math.sqrt(sum(x * x for x in b))
+        return dot / (norm_a * norm_b) if norm_a * norm_b > 0 else 0
+
+    scores = [(i, cosine_sim(query_vec, vec)) for i, vec in enumerate(vectors)]
+    return sorted(scores, key=lambda x: -x[1])[:top_k]
+
+
+def hybrid_search(query: str, query_vec: list[float], docs: list[str], vectors: list[list[float]],
+                  alpha: float = 0.5) -> list[tuple[int, float]]:
+    """
+    混合搜索：加权融合关键词分数和向量分数。
+    alpha 控制权重，0 = 纯向量，1 = 纯关键词。
+    """
+    # 你的实现：
+    pass
+```
+
+### 验收清单
+
+- [ ] 能根据场景需求分析并推荐知识库方案
+- [ ] 能进行基准测试并对比延迟和吞吐量
+- [ ] 理解混合搜索（关键词 + 向量）的原理
+- [ ] 能实现简单的混合搜索融合策略
+- [ ] 理解 p50/p95/p99 延迟指标的含义

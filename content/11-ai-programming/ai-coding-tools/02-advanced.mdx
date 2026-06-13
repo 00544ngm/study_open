@@ -1,0 +1,74 @@
+---
+title: AI 编程工具进阶工作流
+order: 2
+difficulty: advanced
+estimated_time: 35min
+tags: [AI编程, Claude Code, Cursor]
+---
+
+## 进阶
+
+### 多工具协作
+
+不同类型的任务用不同工具：
+
+| 工具 | 适用场景 | 优势 |
+|------|---------|------|
+| Claude Code | 终端原生、复杂重构、跨文件修改 | Agent 模式自动规划 |
+| Cursor | 浏览器内、可视化 diff、快速问答 | Tab 补全极快 |
+| Copilot | IDE 内嵌、补全驱动 | 上下文感知强 |
+| Aider | Git 原生、自动 commit | 版本管理一体化 |
+
+### Claude Code 高级模式
+
+```bash
+# 指定要修改的文件范围（缩小搜索空间）
+claude --allowed-tools="Read,Edit,Write,Grep"
+
+# 指定模型
+claude --model claude-opus-4-20250514
+
+# 从 stdin 传入 prompt
+echo "优化这个函数的性能" | claude
+
+# 非交互模式（CI 中使用）
+claude --print "解释这段代码的作用" < main.py
+```
+
+### 自定义指令文件
+
+在项目根目录创建 `.claude/settings.md` 来约束 AI 的行为：
+
+```markdown
+# 项目规范
+
+## 代码风格
+- 使用 TypeScript 严格模式
+- 所有函数必须有关联的单元测试
+- 错误消息使用中文
+
+## 约束
+- 不要修改 `src/generated/` 下的文件
+- API 响应格式必须是 `{ success, data, error }`
+- 每次修改前先读取当前文件内容
+```
+
+### 上下文文件
+
+```bash
+# 指定参考文件（提供上下文但禁止修改）
+claude --context="src/types.ts,src/config.ts"
+
+# 在 prompt 中引用多个文件
+claude -p "参照 src/user/schema.ts 的格式，
+           在 src/order/schema.ts 中，
+           添加订单验证逻辑"
+```
+
+### 最佳实践清单
+
+1. **每次对话限定范围** — 一次只做一件事，避免上下文污染
+2. **使用 `.claude/settings.md`** — 统一项目规范
+3. **频繁提交** — AI 生成后立即 `git commit`，方便回退
+4. **审查每一行 diff** — 不要盲目接受 AI 的修改
+5. **用测试兜底** — 运行测试比肉眼审查更可靠

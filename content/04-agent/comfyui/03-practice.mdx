@@ -1,0 +1,150 @@
+---
+title: ComfyUI 工作流练习
+order: 3
+difficulty: intermediate
+estimated_time: 30min
+tags: [实践, ComfyUI, 工作流]
+---
+
+## 练习
+
+### 目标
+
+通过动手练习掌握 ComfyUI 的工作流构建、节点连接和自定义节点开发。
+
+### 练习 1：理解工作流 JSON
+
+```python
+import json
+
+# ComfyUI 工作流以 JSON 格式保存
+# 以下是一个简化的工作流结构
+
+workflow = {
+    "3": {
+        "class_type": "KSampler",
+        "inputs": {
+            "seed": 42,
+            "steps": 20,
+            "cfg": 7.0,
+            "sampler_name": "euler",
+            "scheduler": "normal",
+            "denoise": 1.0,
+            "model": ["4", 0],       # 从节点 4 的输出 0 连接
+            "positive": ["6", 0],     # 从节点 6 的输出 0 连接
+            "negative": ["7", 0],     # 从节点 7 的输出 0 连接
+            "latent_image": ["5", 0],  # 从节点 5 的输出 0 连接
+        }
+    },
+    "4": {
+        "class_type": "CheckpointLoaderSimple",
+        "inputs": {"ckpt_name": "sd_xl_base.safetensors"}
+    },
+    "5": {
+        "class_type": "EmptyLatentImage",
+        "inputs": {"width": 1024, "height": 1024, "batch_size": 1}
+    },
+    "6": {
+        "class_type": "CLIPTextEncode",
+        "inputs": {"text": "a cat", "clip": ["4", 1]}
+    },
+    "7": {
+        "class_type": "CLIPTextEncode",
+        "inputs": {"text": "blurry, bad quality", "clip": ["4", 1]}
+    },
+    "8": {
+        "class_type": "VAEDecode",
+        "inputs": {"samples": ["3", 0], "vae": ["4", 2]}
+    },
+    "9": {
+        "class_type": "SaveImage",
+        "inputs": {"filename_prefix": "output", "images": ["8", 0]}
+    }
+}
+
+
+def analyze_workflow(wf: dict) -> dict:
+    """
+    分析工作流结构。
+    返回:
+    - node_count: 节点数量
+    - node_types: 每种节点类型的数量
+    - connections: 连接关系列表
+    - execution_order: 执行顺序（拓扑排序）
+    """
+    # 你的实现：
+    pass
+
+
+analysis = analyze_workflow(workflow)
+print(json.dumps(analysis, indent=2, ensure_ascii=False))
+```
+
+### 练习 2：修改工作流参数
+
+```python
+def modify_workflow(wf: dict, modifications: dict) -> dict:
+    """
+    批量修改工作流节点参数。
+    modifications 格式: {"node_id": {"field": new_value}}
+    例: {"3": {"steps": 30, "cfg": 8.0}, "6": {"text": "a beautiful dog"}}
+
+    要求：
+    - 不修改原始 wf（深拷贝）
+    - 只修改存在的节点和字段
+    - 忽略不存在的节点
+    """
+    # 你的实现：
+    pass
+
+
+# 测试
+modified = modify_workflow(workflow, {
+    "3": {"steps": 30, "cfg": 8.0},
+    "6": {"text": "a beautiful landscape"},
+    "99": {"text": "nonexistent"},  # 应被忽略
+})
+```
+
+### 练习 3：验证工作流
+
+```python
+def validate_workflow(wf: dict) -> list[str]:
+    """
+    验证工作流是否完整且可执行。
+    检查：
+    - 所有引用的节点都存在
+    - 所有节点的必需输入都已连接
+    - 没有循环依赖
+    - 至少有一个输出节点（SaveImage）
+
+    返回错误信息列表，空列表表示验证通过。
+    """
+    # 你的实现：
+    pass
+
+
+# 测试验证
+errors = validate_workflow(workflow)
+if errors:
+    print("验证失败：")
+    for e in errors:
+        print(f"  - {e}")
+else:
+    print("工作流验证通过！")
+
+# 测试一个不完整的工作流
+broken_wf = {
+    "1": {"class_type": "KSampler", "inputs": {"model": ["99", 0]}}  # 引用了不存在的节点
+}
+errors = validate_workflow(broken_wf)
+assert len(errors) > 0  # 应该报错
+```
+
+### 验收清单
+
+- [ ] 能分析 ComfyUI 工作流 JSON 的结构
+- [ ] 能理解节点之间的连接关系（节点 ID + 输出索引）
+- [ ] 能批量修改工作流参数
+- [ ] 能验证工作流的完整性
+- [ ] 理解 ComfyUI 的节点图执行机制

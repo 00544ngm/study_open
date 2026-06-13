@@ -202,6 +202,7 @@ export const stages: Stage[] = [
       { id: "testing-strategy", title: "测试策略", order: 4, prerequisites: ["01-basics/pytest"] },
       { id: "architecture-principles", title: "软件架构原则", order: 5 },
       { id: "git-advanced", title: "Git 高级工作流", order: 6, prerequisites: ["01-basics/git"] },
+      { id: "projects", title: "实战项目", order: 7, prerequisites: ["11-ai-programming/ai-coding-tools", "11-ai-programming/code-prompt"] },
     ],
   },
   {
@@ -218,6 +219,7 @@ export const stages: Stage[] = [
       { id: "context-management", title: "上下文窗口管理", order: 4, prerequisites: ["03-llm/openai-api"] },
       { id: "security-approval", title: "安全审批体系", order: 5 },
       { id: "streaming-ui", title: "流式终端 UI", order: 6, prerequisites: ["02-backend/websocket"] },
+      { id: "projects", title: "实战项目", order: 7, prerequisites: ["12-building-coding-agents/file-operations", "12-building-coding-agents/process-shell"] },
     ],
   },
 ];

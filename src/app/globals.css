@@ -41,8 +41,8 @@ html {
 }
 
 body {
-  background-color: var(--bg-main);
-  color: var(--text-primary);
+  background-color: var(--bg-main, #f8fafc);
+  color: var(--text-primary, #0f172a);
 }
 
 /* Markdown content styling */
@@ -51,8 +51,8 @@ body {
   margin-bottom: 0.75rem;
   font-size: 1.5rem;
   font-weight: 700;
-  color: var(--text-primary);
-  border-bottom: 1px solid var(--border-light);
+  color: var(--text-primary, #0f172a);
+  border-bottom: 1px solid var(--border-light, #e2e8f0);
   padding-bottom: 0.5rem;
 }
 
@@ -61,13 +61,13 @@ body {
   margin-bottom: 0.5rem;
   font-size: 1.25rem;
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--text-primary, #0f172a);
 }
 
 .prose p {
   margin-bottom: 1rem;
   line-height: 1.75;
-  color: var(--text-secondary);
+  color: var(--text-secondary, #475569);
 }
 
 .prose ul,
@@ -79,7 +79,7 @@ body {
 .prose li {
   margin-bottom: 0.25rem;
   line-height: 1.75;
-  color: var(--text-secondary);
+  color: var(--text-secondary, #475569);
 }
 
 .prose ul li {
@@ -92,7 +92,7 @@ body {
 
 .prose strong {
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--text-primary, #0f172a);
 }
 
 .prose code:not(pre code) {
@@ -118,7 +118,7 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--text-muted);
+  background: var(--text-muted, #94a3b8);
   border-radius: 3px;
 }
 

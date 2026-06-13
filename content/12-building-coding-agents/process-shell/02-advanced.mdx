@@ -1,0 +1,157 @@
+---
+title: PTY 与交互式进程控制
+order: 2
+difficulty: advanced
+estimated_time: 35min
+tags: [进程管理, PTY, 编程智能体]
+---
+
+## 进阶
+
+### PTY 伪终端
+
+子进程默认没有终端，很多程序在无 TTY 环境下行为不同：
+
+```python
+import pty
+import os
+import select
+
+def run_with_pty(command: list[str]) -> None:
+    """在伪终端中运行命令，捕获带 ANSI 的输出。"""
+    master_fd, slave_fd = pty.openpty()
+
+    pid = os.fork()
+    if pid == 0:
+        # 子进程：连接到伪终端
+        os.close(master_fd)
+        os.setsid()
+        os.dup2(slave_fd, 0)  # stdin
+        os.dup2(slave_fd, 1)  # stdout
+        os.dup2(slave_fd, 2)  # stderr
+        os.close(slave_fd)
+        os.execvp(command[0], command)
+    else:
+        # 父进程：读取输出
+        os.close(slave_fd)
+        output = b""
+        while True:
+            r, _, _ = select.select([master_fd], [], [], 0.1)
+            if r:
+                try:
+                    data = os.read(master_fd, 4096)
+                    if not data:
+                        break
+                    output += data
+                except OSError:
+                    break
+        os.close(master_fd)
+        return output.decode("utf-8", errors="replace")
+```
+
+### 交互式命令的输入注入
+
+```python
+def interactive_exec(command: list[str], inputs: list[str]):
+    """执行交互式命令并自动注入输入。"""
+    import pexpect
+
+    child = pexpect.spawn(command[0], command[1:], timeout=30)
+
+    for inp in inputs:
+        child.expect([r"[$#>]", pexpect.EOF, pexpect.TIMEOUT])
+        child.sendline(inp)
+
+    child.expect(pexpect.EOF)
+    return child.before.decode()
+```
+
+### 输出流分路
+
+同时处理 stdout/stderr，按源标记输出：
+
+```python
+import subprocess
+import threading
+
+class StreamCapture:
+    def __init__(self, process: subprocess.Popen):
+        self.process = process
+        self.outputs = {"stdout": [], "stderr": []}
+        self._start_capture()
+
+    def _reader(self, stream: str, source: str):
+        for line in iter(stream.readline, ""):
+            self.outputs[source].append(line)
+
+    def _start_capture(self):
+        t1 = threading.Thread(
+            target=self._reader,
+            args=(self.process.stdout, "stdout"),
+            daemon=True
+        )
+        t2 = threading.Thread(
+            target=self._reader,
+            args=(self.process.stderr, "stderr"),
+            daemon=True
+        )
+        t1.start()
+        t2.start()
+```
+
+### 输出缓冲区管理
+
+```python
+class BoundedBuffer:
+    """限制内存使用量的输出缓冲区。"""
+
+    def __init__(self, max_lines: int = 1000):
+        self.max_lines = max_lines
+        self.lines: list[str] = []
+
+    def append(self, line: str):
+        self.lines.append(line)
+        if len(self.lines) > self.max_lines:
+            # 丢弃最早的一半
+            self.lines = self.lines[-(self.max_lines // 2):]
+
+    def search(self, keyword: str) -> list[int]:
+        """在历史输出中搜索关键词。"""
+        return [i for i, l in enumerate(self.lines) if keyword in l]
+```
+
+### 信号处理架构
+
+```python
+import signal
+
+class ProcessManager:
+    def __init__(self):
+        self.processes: dict[int, subprocess.Popen] = {}
+
+    def start(self, cmd: list[str]) -> int:
+        proc = subprocess.Popen(cmd)
+        self.processes[proc.pid] = proc
+        return proc.pid
+
+    def stop(self, pid: int, force: bool = False):
+        if pid not in self.processes:
+            return
+        proc = self.processes[pid]
+        if force:
+            proc.kill()       # SIGKILL
+        else:
+            proc.terminate()  # SIGTERM
+
+    def stop_all(self):
+        for pid in list(self.processes.keys()):
+            self.stop(pid)
+
+    def get_status(self, pid: int) -> str:
+        proc = self.processes.get(pid)
+        if not proc:
+            return "not_found"
+        if proc.poll() is None:
+            return "running"
+        return f"exited({proc.returncode})"
+```

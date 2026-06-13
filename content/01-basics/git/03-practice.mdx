@@ -1,0 +1,90 @@
+---
+title: Git 基础练习
+order: 3
+difficulty: beginner
+estimated_time: 25min
+tags: [实践, Git, 基础]
+---
+
+## 练习
+
+### 目标
+
+通过动手操作掌握 Git 基础工作流，练习 AI 协作中的版本管理。
+
+### 练习 1：初始化与基本提交
+
+```bash
+# 1. 创建一个项目目录并初始化 Git
+mkdir my-agent-project
+cd my-agent-project
+git init
+
+# 2. 创建项目文件
+echo "# My AI Agent" > README.md
+mkdir src
+echo 'print("Hello Agent")' > src/main.py
+
+# 3. 完成以下操作
+git status          # 查看状态
+# 将两个文件加入暂存区
+# 你的命令：
+
+# 提交变更
+# 你的命令：
+
+# 验证提交记录
+git log --oneline   # 应看到 1 条提交
+```
+
+### 练习 2：分支管理
+
+```bash
+# 1. 基于当前分支创建 feature 分支
+# 你的命令：
+
+# 2. 在新分支上修改文件
+echo 'def agent_run(): pass' >> src/main.py
+git add src/main.py
+git commit -m "feat: add agent_run function"
+
+# 3. 切换回主分支，将 feature 分支合并回来
+# 你的命令：
+
+# 4. 查看合并后的提交历史
+git log --oneline --graph
+```
+
+### 练习 3：模拟冲突解决
+
+```bash
+# 1. 从 main 创建两个分支
+git checkout -b feature-a
+echo 'print("change from A")' > conflict.txt
+git add . && git commit -m "feature A change"
+
+git checkout main
+git checkout -b feature-b
+echo 'print("change from B")' > conflict.txt
+git add . && git commit -m "feature B change"
+
+# 2. 先将 feature-a 合并到 main
+git checkout main
+git merge feature-a
+
+# 3. 再合并 feature-b（应该产生冲突）
+git merge feature-b
+# 你的代码：手动编辑解决冲突
+# 你的命令：解决后标记为已解决
+
+# 4. 完成合并
+git commit --no-edit
+```
+
+### 验收清单
+
+- [ ] 能初始化仓库并进行基本提交
+- [ ] 能创建和切换分支
+- [ ] 能合并分支并解决冲突
+- [ ] 能使用 `git log` 查看提交历史
+- [ ] 理解工作区、暂存区、仓库的区别

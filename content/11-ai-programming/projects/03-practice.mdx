@@ -1,0 +1,228 @@
+---
+title: AI 编程项目练习
+order: 3
+difficulty: advanced
+estimated_time: 45min
+tags: [项目, AI编程, 实践]
+---
+
+## 练习
+
+### 目标
+
+通过动手练习掌握 AI 辅助编程的完整工作流，从项目初始化到测试覆盖。
+
+### 练习 1：AI Prompt 对比实验
+
+```python
+# 同一个任务，用不同 Prompt 风格让 AI 实现，对比结果
+
+# Prompt A：模糊指令
+prompt_a = """
+用 Python 实现一个日志分析工具。
+"""
+
+# Prompt B：结构化指令（五要素框架）
+prompt_b = """
+## 定位
+创建文件 src/log_analyzer.py
+
+## 动作
+实现一个日志分析工具
+
+## 规格
+class LogAnalyzer:
+    def __init__(self, log_dir: str):
+        pass
+
+    def count_by_level(self) -> dict[str, int]:
+        \"\"\"统计各日志级别数量。\"\"\"
+        pass
+
+    def find_errors(self, since: str | None = None) -> list[dict]:
+        \"\"\"查找错误日志。\"\"\"
+        pass
+
+    def top_n(self, n: int = 10) -> list[tuple[str, int]]:
+        \"\"\"出现最多的 N 个错误消息。\"\"\"
+        pass
+
+## 约束
+- Python 3.12+
+- 使用 pathlib 而非 os.path
+- 类型注解完整
+- 支持 .log 和 .txt 文件
+- 日志格式: "2024-01-01 12:00:00 ERROR message"
+- 不使用第三方库
+
+## 验证
+- pytest 测试覆盖所有方法
+- 测试包含：空目录、混合级别、自定义格式
+"""
+
+# 你的任务：
+# 1. 分别用 prompt_a 和 prompt_b 让 AI 生成代码
+# 2. 对比输出质量（完整性、正确性、可测试性）
+# 3. 记录差异并总结心得
+
+# 评分表格（填写你的观察）：
+comparison = {
+    "prompt_a": {
+        "completeness": 0,   # 1-5 分
+        "correctness": 0,    # 1-5 分
+        "testability": 0,    # 1-5 分
+        "notes": "",
+    },
+    "prompt_b": {
+        "completeness": 0,
+        "correctness": 0,
+        "testability": 0,
+        "notes": "",
+    },
+}
+```
+
+### 练习 2：分步迭代开发
+
+```python
+# 使用分步 Prompt 构建一个 Markdown 转 HTML 转换器
+
+# Round 1：需求分析
+round_1_prompt = """
+我需要一个 Markdown 转 HTML 的转换器。
+先帮我分析需求：
+1. 需要支持哪些 Markdown 语法？
+2. 建议的模块划分？
+3. 技术选型建议？
+
+等我确认后再开始实现。
+"""
+
+# Round 2：核心实现
+round_2_prompt = """
+按照确认的方案，实现以下模块：
+
+Step 1: 标题转换（# → <h1>）
+Step 2: 列表转换（- → <ul><li>）
+Step 3: 代码块转换（``` → <pre><code>）
+Step 4: 链接转换（[text](url) → <a>）
+
+每步完成后等待我审查。
+"""
+
+# Round 3：错误处理
+round_3_prompt = """
+为转换器添加错误处理：
+- 未闭合的代码块
+- 嵌套过深的列表（超过 6 层）
+- 非法的 URL 格式
+- 空输入
+"""
+
+# Round 4：测试覆盖
+round_4_prompt = """
+为转换器编写 pytest 测试：
+- 每种语法类型的正常情况
+- 混合内容（标题 + 列表 + 代码块）
+- 边界情况（空行、特殊字符）
+- 错误输入
+"""
+
+# 你的任务：
+# 1. 依次执行 Round 1-4
+# 2. 记录 AI 在每一步的输出
+# 3. 在 Round 之间加入你的审查和纠正
+
+# 记录模板
+session_log = {
+    "round_1": {"prompt": round_1_prompt, "ai_output": "", "review_notes": ""},
+    "round_2": {"prompt": round_2_prompt, "ai_output": "", "review_notes": ""},
+    "round_3": {"prompt": round_3_prompt, "ai_output": "", "review_notes": ""},
+    "round_4": {"prompt": round_4_prompt, "ai_output": "", "review_notes": ""},
+    "conclusion": "单次 Prompt vs 分步迭代的差异总结：",
+}
+```
+
+### 练习 3：AI 代码审查实战
+
+```python
+# 以下是一段有问题的代码，用 AI 工具审查它
+
+BUGGY_CODE = """
+import requests
+from flask import Flask, request
+
+app = Flask(__name__)
+
+def get_user_data(user_id):
+    # 查询用户数据
+    query = "SELECT * FROM users WHERE id = " + user_id
+    result = db.execute(query)
+    return result
+
+@app.route('/api/process')
+def process():
+    data = request.json
+    url = data.get('url')
+    cmd = data.get('cmd')
+
+    # 获取远程数据
+    resp = requests.get(url)
+
+    # 执行命令
+    import os
+    os.system(cmd)
+
+    # 返回结果
+    return resp.text
+
+def save_data(data, filename):
+    with open(filename, 'w') as f:
+        f.write(str(data))
+
+@app.route('/api/upload')
+def upload():
+    file = request.files['file']
+    filename = file.filename
+    file.save('/tmp/uploads/' + filename)
+    return 'ok'
+"""
+
+# 用 AI 审查上述代码，寻找：
+# 1. SQL 注入漏洞
+# 2. 命令注入漏洞
+# 3. 路径穿越漏洞
+# 4. 缺少输入验证
+# 5. 其他安全问题
+
+# Review prompt 示例：
+review_prompt = """
+审查以下 Flask 代码的安全性，逐行检查：
+1. SQL 注入
+2. 命令注入
+3. 路径穿越
+4. 缺少输入验证
+5. CSRF 保护
+6. 其他安全问题
+
+对每个问题：
+- 标出问题代码行号
+- 说明风险等级（高/中/低）
+- 给出修复建议
+
+代码：
+""" + BUGGY_CODE
+
+# 你的任务：
+# 1. 先用肉眼审查，记录发现的问题
+# 2. 再用 AI 审查，对比漏掉了什么
+# 3. 让 AI 生成修复后的代码
+```
+
+### 验收清单
+
+- [ ] 能对比不同 Prompt 风格的效果差异
+- [ ] 掌握分步迭代的开发流程
+- [ ] 能使用 AI 进行安全审查
+- [ ] 理解 AI 代码审查的局限性
+- [ ] 能在 AI 输出基础上进行人工判断和修正

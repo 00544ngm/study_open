@@ -1,0 +1,89 @@
+---
+title: 测试驱动 AI 编程练习
+order: 3
+difficulty: intermediate
+estimated_time: 35min
+tags: [实践, 测试, AI编程]
+---
+
+## 练习
+
+### 目标
+
+实践"先写测试，再让 AI 生成实现"的工作流。
+
+### 练习 1：先写测试，再让 AI 实现
+
+**Step 1**：自己写测试
+
+```python
+# tests/test_calculator.py
+import pytest
+from src.calculator import calculate_discount
+
+def test_normal_discount():
+    assert calculate_discount(100, 10) == 90
+
+def test_zero_discount():
+    assert calculate_discount(100, 0) == 100
+
+def test_full_discount():
+    assert calculate_discount(100, 100) == 0
+
+def test_negative_price():
+    with pytest.raises(ValueError):
+        calculate_discount(-1, 10)
+
+def test_invalid_percent():
+    with pytest.raises(ValueError):
+        calculate_discount(100, 150)
+```
+
+**Step 2**：让 AI 基于测试生成实现
+
+```
+"根据 tests/test_calculator.py 的测试用例，
+在 src/calculator.py 中实现 calculate_discount 函数。
+不要修改测试文件。"
+```
+
+**Step 3**：运行测试验证
+
+```bash
+pytest tests/test_calculator.py -v
+```
+
+### 练习 2：让 AI 补全测试
+
+```python
+# 下面的测试不完整，请 AI 补充缺失的测试用例
+
+def test_search_empty_query(): ...
+def test_search_special_chars(): ...
+def test_search_unicode(): ...
+def test_search_sql_injection(): ...
+def test_search_rate_limiting(): ...
+```
+
+prompt：
+```
+"为 src/search.py 的 search 函数补充测试用例，
+覆盖空查询、特殊字符、Unicode、SQL 注入、限流等场景。
+使用 pytest。"
+```
+
+### 练习 3：测试驱动重构
+
+```
+1. 找一个你项目中写得不好的函数
+2. 先给它写完整的测试（锁定当前行为）
+3. 让 AI 重构这个函数
+4. 运行测试确认重构没有破坏功能
+```
+
+### 验收清单
+
+- [ ] 能先写测试再让 AI 实现
+- [ ] 测试覆盖正常路径和错误路径
+- [ ] 能通过测试验证 AI 代码的正确性
+- [ ] 理解测试作为"可执行的 prompt"的理念

@@ -1,0 +1,80 @@
+---
+title: 代码 Prompt 实战练习
+order: 3
+difficulty: intermediate
+estimated_time: 30min
+tags: [实践, Prompt, AI编程]
+---
+
+## 练习
+
+### 目标
+
+通过对比实验，理解结构化 Prompt 对 AI 输出质量的影响。
+
+### 练习 1：模糊 vs 精确
+
+用 AI 编程工具，分别用以下两个 prompt 做同一个任务：
+
+```markdown
+❌ 模糊版本：
+"写一个函数处理用户输入"
+```
+
+```markdown
+✅ 精确版本：
+"在 src/utils/sanitize.py 中，实现函数：
+def sanitize_input(text: str, max_length: int = 100) -> str:
+    
+功能：
+- 去除首尾空格
+- 将连续多个空格替换为单个
+- 移除 HTML 标签
+- 截断到 max_length 长度
+- 如果输入为 None，返回空字符串
+```
+
+**观察结果**：哪个版本生成的代码更符合预期？哪个需要更少的修改？
+
+### 练习 2：迭代分解
+
+将一个复杂任务拆解为 3 轮 prompt：
+
+```markdown
+第 1 轮（分析）：
+"分析 src/order/processor.py 的代码结构，
+列出所有函数和它们的职责"
+
+第 2 轮（设计）：
+"基于分析结果，设计一个重构方案：
+将 order 处理拆分为验证、计算、持久化三个模块"
+
+第 3 轮（实现）：
+"按上面的方案，实现 OrderValidator 类"
+```
+
+每轮输出后，检查 AI 的回答是否正确，再继续下一轮。
+
+### 练习 3：约束对比
+
+给同一个任务提供不同程度的约束：
+
+```markdown
+无约束：
+"写一个 API 端点"
+
+有约束：
+"在 src/api/routes.py 中添加 POST /api/users 端点：
+- 使用 Pydantic 做输入校验
+- 返回 201 + { id, created_at }
+- 错误时返回 400 + { error: message }
+- 添加类型注解
+- 写 pytest 测试"
+```
+
+### 验收清单
+
+- [ ] 体验到模糊 prompt 和精确 prompt 的差异
+- [ ] 能独立写出一份结构化的代码 prompt
+- [ ] 理解迭代式 prompt 的优势
+- [ ] 能在 prompt 中有效约束 AI 的输出范围

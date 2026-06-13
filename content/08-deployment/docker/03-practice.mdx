@@ -1,0 +1,125 @@
+---
+title: Docker 练习
+order: 3
+difficulty: beginner
+estimated_time: 25min
+tags: [实践, Docker, 部署]
+---
+
+## 练习
+
+### 目标
+
+通过动手练习掌握 Dockerfile 编写、镜像构建和容器管理。
+
+### 练习 1：编写 Dockerfile
+
+```dockerfile
+# 为 AI Agent API 服务编写 Dockerfile
+# 要求：
+# - 使用 python:3.12-slim 作为基础镜像
+# - 设置工作目录为 /app
+# - 先复制 requirements.txt 安装依赖（利用缓存）
+# - 再复制源代码
+# - 暴露 8000 端口
+# - 使用 uvicorn 启动
+
+# 你的代码：补全 Dockerfile
+
+FROM python:3.12-slim
+
+# 你的代码：设置工作目录
+# 你的代码：复制 requirements.txt
+# 你的代码：安装依赖
+
+# 你的代码：复制源代码
+# 你的代码：暴露端口
+# 你的代码：启动命令
+```
+
+### 练习 2：Docker 命令操作
+
+```bash
+# 补全以下 Docker 命令
+
+# 1. 构建镜像，标签为 agent-api:v1
+# 你的代码：
+docker build ________
+
+# 2. 查看本地所有镜像
+# 你的代码：
+docker ________
+
+# 3. 运行容器，映射宿主机 8000 端口到容器 8000 端口
+# 你的代码：
+docker run ________
+
+# 4. 查看运行中的容器
+# 你的代码：
+docker ________
+
+# 5. 查看容器日志
+# 你的代码：
+docker ________ agent-api-container
+
+# 6. 进入容器的交互式 shell
+# 你的代码：
+docker ________ agent-api-container /bin/bash
+
+# 7. 停止容器
+# 你的代码：
+docker ________ agent-api-container
+
+# 8. 删除容器（强制）
+# 你的代码：
+docker ________ agent-api-container
+```
+
+### 练习 3：多阶段构建
+
+```dockerfile
+# 使用多阶段构建优化镜像大小
+# 阶段 1：构建阶段 - 安装编译依赖
+# 阶段 2：运行阶段 - 仅复制必要的产物
+
+# 阶段 1: builder
+FROM python:3.12-slim AS builder
+WORKDIR /build
+
+# 复制依赖文件
+COPY requirements.txt .
+
+# 安装依赖到 /build/venv
+RUN python -m venv /build/venv && \
+    /build/venv/bin/pip install --no-cache-dir -r requirements.txt
+
+# 复制源码
+COPY ./app ./app
+
+# 阶段 2: runtime
+FROM python:3.12-slim
+WORKDIR /app
+
+# 你的代码：从 builder 阶段复制虚拟环境
+# 提示：COPY --from=builder /build/venv /venv
+
+# 你的代码：从 builder 阶段复制 app 代码
+
+# 设置 PATH 使用虚拟环境中的 Python
+ENV PATH="/venv/bin:$PATH"
+
+# 你的代码：暴露端口并启动
+
+# 思考题：
+# 多阶段构建相比单阶段有什么好处？
+# 1. ____________________
+# 2. ____________________
+```
+
+### 验收清单
+
+- [ ] 能编写正确的 Dockerfile
+- [ ] 能使用 docker build 构建镜像
+- [ ] 能使用 docker run/ps/logs/exec 管理容器
+- [ ] 理解多阶段构建的作用
+- [ ] 理解镜像分层和缓存机制

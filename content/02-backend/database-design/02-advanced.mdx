@@ -1,0 +1,269 @@
+---
+title: 查询优化与高级模式
+order: 2
+difficulty: advanced
+estimated_time: 35min
+tags: [数据库, PostgreSQL, 查询优化, JSONB]
+---
+
+## 进阶
+
+### EXPLAIN ANALYZE
+
+理解查询计划是对 AI 生成的 SQL 进行审查优化的基础：
+
+```sql
+-- 查看查询计划
+EXPLAIN ANALYZE
+SELECT * FROM conversations
+WHERE agent_id = 'abc-123' AND status = 'active'
+ORDER BY created_at DESC
+LIMIT 10;
+
+-- 输出解读
+-- Seq Scan on conversations  (cost=0.00..1000.00 rows=1 width=100)
+--   Filter: ((agent_id = 'abc-123'::uuid) AND (status = 'active'))
+--   Planning Time: 0.5 ms
+--   Execution Time: 25.3 ms
+--   ↑ 出现 Seq Scan 说明没走索引，需要加索引
+
+-- 优化后：创建复合索引
+CREATE INDEX idx_conversations_agent_status_created
+ON conversations(agent_id, status, created_at DESC);
+
+-- 再次 EXPLAIN 应看到 Index Scan
+```
+
+### JSONB 高级查询
+
+Agent 项目的配置和事件数据大量使用 JSONB：
+
+```sql
+-- 创建测试表
+CREATE TABLE agent_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  agent_id UUID REFERENCES agents(id),
+  event_type TEXT NOT NULL,
+  payload JSONB NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- GIN 索引（加速所有 JSONB 操作符）
+CREATE INDEX idx_events_payload ON agent_events USING GIN (payload jsonb_path_ops);
+
+-- 常用查询模式
+-- 包含某个键
+SELECT * FROM agent_events WHERE payload ? 'error';
+
+-- 键值匹配
+SELECT * FROM agent_events
+WHERE payload @> '{"model": "gpt-4", "temperature": 0.1}';
+
+-- 路径访问 + 范围条件
+SELECT * FROM agent_events
+WHERE (payload->>'tokens')::int > 1000;
+
+-- JSONB 聚合统计
+SELECT
+  event_type,
+  COUNT(*) as total,
+  AVG((payload->>'duration_ms')::int) as avg_duration,
+  SUM((payload->>'tokens')::int) as total_tokens
+FROM agent_events
+GROUP BY event_type;
+```
+
+### 全文搜索
+
+为聊天记录和文档搜索添加全文检索：
+
+```sql
+-- 添加 tsvector 列
+ALTER TABLE messages ADD COLUMN search_vector tsvector;
+
+-- 生成搜索向量（中文需专用分词插件）
+UPDATE messages SET search_vector =
+  to_tsvector('english', coalesce(content, ''));
+
+-- GIN 索引加速搜索
+CREATE INDEX idx_messages_search ON messages USING GIN (search_vector);
+
+-- 搜索查询
+SELECT id, content, ts_rank(search_vector, query) AS rank
+FROM messages, to_tsquery('english', 'agent & error & timeout') query
+WHERE search_vector @@ query
+ORDER BY rank DESC
+LIMIT 20;
+
+-- 触发器：插入时自动更新
+CREATE FUNCTION messages_search_update() RETURNS trigger AS $$
+BEGIN
+  NEW.search_vector := to_tsvector('english', coalesce(NEW.content, ''));
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_messages_search
+  BEFORE INSERT OR UPDATE ON messages
+  FOR EACH ROW EXECUTE FUNCTION messages_search_update();
+```
+
+### 窗口函数
+
+Agent 运行分析中非常实用的模式：
+
+```sql
+-- 每个 Agent 的连续消息排名（按时间）
+SELECT
+  agent_id,
+  content,
+  created_at,
+  ROW_NUMBER() OVER (
+    PARTITION BY agent_id ORDER BY created_at
+  ) as msg_rank
+FROM messages;
+
+-- 会话间隔分析
+SELECT
+  conversation_id,
+  created_at,
+  LAG(created_at) OVER (
+    PARTITION BY conversation_id ORDER BY created_at
+  ) as prev_msg_at,
+  EXTRACT(EPOCH FROM created_at - LAG(created_at) OVER (
+    PARTITION BY conversation_id ORDER BY created_at
+  )) as gap_seconds
+FROM messages
+WHERE conversation_id = 'conv-123';
+```
+
+### 分区表
+
+历史消息表随着时间增长会非常大，分区是必备策略：
+
+```sql
+-- 按月分区
+CREATE TABLE messages_partitioned (
+  id UUID DEFAULT gen_random_uuid(),
+  conversation_id UUID NOT NULL,
+  content TEXT,
+  created_at TIMESTAMPTZ NOT NULL
+) PARTITION BY RANGE (created_at);
+
+-- 创建每月分区
+CREATE TABLE messages_2025_01 PARTITION OF messages_partitioned
+  FOR VALUES FROM ('2025-01-01') TO ('2025-02-01');
+
+CREATE TABLE messages_2025_02 PARTITION OF messages_partitioned
+  FOR VALUES FROM ('2025-02-01') TO ('2025-03-01');
+
+-- 查询会自动只扫描相关分区（Partition Pruning）
+EXPLAIN ANALYZE SELECT * FROM messages_partitioned
+WHERE created_at BETWEEN '2025-01-15' AND '2025-01-20';
+-- 只扫描 messages_2025_01 分区
+
+-- 自动创建新分区的函数（由 cron 调度）
+CREATE FUNCTION create_next_month_partition() RETURNS void AS $$
+DECLARE
+  next_month DATE;
+  partition_name TEXT;
+BEGIN
+  next_month := date_trunc('month', now()) + INTERVAL '1 month';
+  partition_name := 'messages_' || to_char(next_month, 'YYYY_MM');
+  EXECUTE format(
+    'CREATE TABLE %I PARTITION OF messages_partitioned '
+    'FOR VALUES FROM (%L) TO (%L)',
+    partition_name,
+    next_month,
+    next_month + INTERVAL '1 month'
+  );
+END;
+$$ LANGUAGE plpgsql;
+```
+
+### N+1 查询问题
+
+AI 生成的代码中非常常见——循环中逐条查询：
+
+```sql
+-- ❌ 错误：N+1 查询
+-- 先查 conversations，然后对每条 conversation 查 messages
+-- SELECT * FROM conversations WHERE agent_id = '...';
+-- for each conv: SELECT * FROM messages WHERE conversation_id = conv.id;
+
+-- ✅ 正确：一次 JOIN 搞定
+SELECT
+  c.id as conv_id,
+  c.title,
+  jsonb_agg(
+    jsonb_build_object('role', m.role, 'content', left(m.content, 100))
+    ORDER BY m.created_at
+  ) as messages_summary
+FROM conversations c
+LEFT JOIN messages m ON m.conversation_id = c.id
+WHERE c.agent_id = 'abc-123'
+GROUP BY c.id
+ORDER BY c.created_at DESC;
+
+-- 或者用批量预加载
+SELECT * FROM conversations WHERE agent_id = 'abc-123';
+-- 收集所有 conversation_id，然后一次 IN 查询
+SELECT * FROM messages WHERE conversation_id = ANY($1);
+-- 在应用层组装
+```
+
+### 连接池管理
+
+```python
+# 使用 asyncpg 的连接池
+import asyncpg
+
+class DatabaseManager:
+    def __init__(self, dsn: str, pool_size: int = 10):
+        self.dsn = dsn
+        self.pool_size = pool_size
+        self.pool: asyncpg.Pool | None = None
+
+    async def connect(self):
+        self.pool = await asyncpg.create_pool(
+            self.dsn,
+            min_size=2,
+            max_size=self.pool_size,
+            max_inactive_connection_lifetime=300,
+        )
+
+    async def execute(self, query: str, *args):
+        async with self.pool.acquire() as conn:
+            return await conn.execute(query, *args)
+
+    async def fetch(self, query: str, *args):
+        async with self.pool.acquire() as conn:
+            return await conn.fetch(query, *args)
+
+    async def close(self):
+        await self.pool.close()
+```
+
+### 常见反模式
+
+```sql
+-- ❌ SELECT * （尤其 JOIN 多表时）
+SELECT * FROM agents JOIN conversations ...;
+
+-- ✅ 只取需要的列
+SELECT agents.name, conversations.title, conversations.created_at
+FROM agents JOIN conversations ...;
+
+-- ❌ 在 WHERE 中对列使用函数（无法使用索引）
+SELECT * FROM messages WHERE DATE(created_at) = '2025-01-01';
+
+-- ✅ 使用范围查询（可以利用索引）
+SELECT * FROM messages
+WHERE created_at >= '2025-01-01' AND created_at < '2025-01-02';
+
+-- ❌ 没有 LIMIT 的全表扫描
+SELECT * FROM agent_events;
+
+-- ✅ 总是加 LIMIT（除非确实需要全部数据）
+SELECT * FROM agent_events ORDER BY created_at DESC LIMIT 100;
+```

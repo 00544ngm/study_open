@@ -1,0 +1,113 @@
+---
+title: AI 代码的自动化测试体系
+order: 2
+difficulty: advanced
+estimated_time: 35min
+tags: [测试, AI编程, CI/CD]
+---
+
+## 进阶
+
+### 属性基测试
+
+传统测试验证具体输入→具体输出，属性基测试验证代码的"不变性质"：
+
+```python
+from hypothesis import given, strategies as st
+
+# 测试反序列化的幂等性
+@given(st.text())
+def test_serialize_idempotent(data: str):
+    encoded = serialize(data)
+    decoded = deserialize(encoded)
+    assert decoded == data
+
+# 测试排序的稳定性
+@given(st.lists(st.integers()))
+def test_sort_stability(arr: list[int]):
+    sorted_arr = my_sort(arr)
+    assert len(sorted_arr) == len(arr)
+    assert all(sorted_arr[i] <= sorted_arr[i+1]
+               for i in range(len(sorted_arr)-1))
+```
+
+属性基测试对 AI 代码特别有效——你不需要知道具体实现，只需要定义"应该永远成立"的规则。
+
+### 模糊测试
+
+```python
+# 对 AI 生成的解析器做模糊测试
+def test_parser_never_crashes():
+    import atheris
+    import sys
+
+    @atheris.instrument_func
+    def test_one_input(data):
+        try:
+            result = ai_generated_parser(data)
+            # 即使输入无效也不该崩溃
+        except Exception as e:
+            # 只允许特定的验证异常
+            assert isinstance(e, (ValueError, TypeError))
+
+    atheris.Setup(sys.argv, test_one_input)
+    atheris.Fuzz()
+```
+
+### 回归测试套件
+
+```bash
+# 每次 AI 修改后自动运行
+# 1. 类型检查
+tsc --noEmit          # TypeScript
+mypy src/             # Python
+
+# 2. 已有的单元测试
+pytest src/tests/ -x  # 失败即停止
+
+# 3. 新增的 AI 代码测试
+pytest tests/ai_generated/ -x
+
+# 4. 快照测试（检测意外变更）
+pytest --snapshot-update
+```
+
+### 测试覆盖率门禁
+
+```yaml
+# pytest 配置，拒绝覆盖率下降
+[tool:pytest]
+addopts = """
+  --cov=src/
+  --cov-fail-under=80
+  --cov-report=term-missing
+"""
+```
+
+### 契约测试
+
+AI 经常改动接口实现，契约测试确保接口不破：
+
+```python
+# consumer-driven contract test
+def test_api_contract():
+    response = client.post("/api/users", json={
+        "name": "test",
+        "email": "test@example.com"
+    })
+    # 契约：响应必须包含这些字段
+    assert "id" in response.json
+    assert "created_at" in response.json
+    assert response.status_code == 201
+```
+
+### 分层兜底策略
+
+```
+AI 代码 → 类型检查 → 单元测试 → 契约测试 → 集成测试 → 上线
+
+          拦截~30%   拦截~50%   拦截~10%    拦截~10%
+          低级错误   逻辑错误   接口变更    系统问题
+```
+
+每层拦截不同维度的问题。AI 代码跑通全部层级才能上线。

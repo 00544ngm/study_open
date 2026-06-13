@@ -1,0 +1,143 @@
+---
+title: Embedding 技术练习
+order: 3
+difficulty: intermediate
+estimated_time: 30min
+tags: [实践, Embedding, 向量]
+---
+
+## 练习
+
+### 目标
+
+通过动手练习理解 Embedding 的生成、相似度计算和向量搜索。
+
+### 练习 1：获取 Embedding
+
+```python
+from openai import OpenAI
+import numpy as np
+
+client = OpenAI()
+
+def get_embedding(text: str, model: str = "text-embedding-3-small") -> list[float]:
+    """获取文本的 Embedding 向量。"""
+    response = client.embeddings.create(input=text, model=model)
+    return response.data[0].embedding
+
+
+# 测试
+texts = [
+    "AI Agent 是一种能自主执行任务的智能体",
+    "机器学习是人工智能的一个重要分支",
+    "今天的天气真不错",
+]
+
+embeddings = [get_embedding(t) for t in texts]
+print(f"向量维度: {len(embeddings[0])}")  # 通常是 1536
+
+# 计算同一主题文本的相似度
+# 你的代码：计算 text[0] 和 text[1] 的余弦相似度
+# 你的代码：计算 text[0] 和 text[2] 的余弦相似度
+
+# 预期：相似主题应该比不相关主题的余弦相似度更高
+```
+
+### 练习 2：相似度计算
+
+```python
+import math
+
+
+def cosine_similarity(a: list[float], b: list[float]) -> float:
+    """计算两个向量的余弦相似度。"""
+    # 你的实现：
+    pass
+
+
+def euclidean_distance(a: list[float], b: list[float]) -> float:
+    """计算欧几里得距离。"""
+    # 你的实现：
+    pass
+
+
+def find_most_similar(query_vec: list[float], vectors: list[list[float]], top_k: int = 3) -> list[tuple[int, float]]:
+    """找到与查询向量最相似的 top_k 个向量。"""
+    # 你的实现：计算所有余弦相似度，排序返回 top_k
+    pass
+
+
+# 测试
+query = "智能体如何工作"
+query_vec = get_embedding(query)
+docs = [
+    "Agent 通过感知环境并采取行动来完成任务",
+    "深度学习使用多层神经网络",
+    "Python 是一种流行的编程语言",
+    "ReAct 模式让 Agent 能推理和行动",
+]
+doc_vecs = [get_embedding(d) for d in docs]
+
+results = find_most_similar(query_vec, doc_vecs)
+for idx, score in results:
+    print(f"  [{score:.3f}] {docs[idx]}")
+```
+
+### 练习 3：文本分块策略
+
+```python
+def chunk_by_fixed_size(text: str, chunk_size: int = 200, overlap: int = 20) -> list[str]:
+    """按固定大小分块，带重叠。"""
+    # 你的实现：
+    pass
+
+
+def chunk_by_paragraph(text: str) -> list[str]:
+    """按段落分块。"""
+    # 你的实现：
+    pass
+
+
+def chunk_by_semantic(text: str, max_chars: int = 500) -> list[str]:
+    """
+    按语义分块（简单版）：
+    - 优先在句号、换行处分隔
+    - 每块不超过 max_chars
+    - 尽量保持句子完整
+    """
+    import re
+    # 你的实现：
+    pass
+
+
+# 测试
+text = """
+AI Agent 是当前人工智能领域最热门的方向之一。
+它能自主感知环境、制定计划并执行行动。
+与传统程序不同，Agent 具有自主决策能力。
+
+构建一个生产级的 Agent 系统需要考虑多个方面：
+首先是模型选择，需要根据任务复杂度选择合适的 LLM。
+其次是工具使用，Agent 需要能调用外部工具获取信息。
+最后是安全控制，确保 Agent 的行为在可控范围内。
+
+随着技术的发展，Agent 的应用场景越来越广泛。
+从代码生成到数据分析，从客服到教育，处处都有 Agent 的身影。
+"""
+
+print("=== 固定分块 ===")
+for i, chunk in enumerate(chunk_by_fixed_size(text, 80, 10)):
+    print(f"块 {i}: [{len(chunk)} chars] {chunk[:50]}...")
+
+print("\n=== 语义分块 ===")
+for i, chunk in enumerate(chunk_by_semantic(text)):
+    print(f"块 {i}: [{len(chunk)} chars] {chunk[:50]}...")
+```
+
+### 验收清单
+
+- [ ] 能通过 API 获取文本的 Embedding 向量
+- [ ] 能实现余弦相似度计算
+- [ ] 能实现向量搜索（top-k 相似）
+- [ ] 理解不同分块策略的优劣
+- [ ] 理解分块重叠（overlap）的作用
