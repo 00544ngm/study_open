@@ -5,7 +5,7 @@ WORKDIR /app
 
 # 依赖安装（利用 Docker 缓存层）
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN npm config set registry https://registry.npmmirror.com && npm ci
 
 # 复制源码并构建
 COPY . .
@@ -28,5 +28,7 @@ COPY --from=builder /app/next.config.ts ./
 COPY --from=builder /app/node_modules ./node_modules
 
 EXPOSE 3000
+
+ENV PATH="/app/node_modules/.bin:${PATH}"
 
 CMD ["next", "start"]
