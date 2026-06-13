@@ -11,14 +11,6 @@ export default function ExportProgress() {
   const handleExport = () => {
     const progress = getProgress();
     const totalTopics = stages.reduce((sum, s) => sum + s.topics.length, 0);
-    const allItems: Array<{ stage: string; topic: string; item: string }> = [];
-
-    for (const stage of stages) {
-      for (const topic of stage.topics) {
-        const stageProgress = getStageProgress(stage.id, topic.order);
-        // 检查该 topic 下哪些知识点已学完
-      }
-    }
 
     // 生成报告
     const now = new Date().toISOString().split("T")[0];

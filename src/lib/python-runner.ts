@@ -1,4 +1,3 @@
-/// <reference types="com" />
 // Pyodide 浏览器内 Python 运行管理器
 
 type PyodideModule = {
@@ -45,35 +44,43 @@ export interface RunResult {
   error: string | null;
 }
 
+let runCounter = 0;
+
+const RUN_WRAPPER = `
+import sys, io
+_run_buf = io.StringIO()
+_run_old = sys.stdout
+sys.stdout = _run_buf
+`;
+
+const RESTORE_STDOUT = `
+sys.stdout = _run_old
+`;
+
+const GET_OUTPUT = `
+sys.stdout = _run_old
+get_value = _run_buf.getvalue()
+get_value
+`;
+
 export async function runPython(code: string): Promise<RunResult> {
   const pyodide = await getPyodide();
 
-  // Capture stdout
-  let output = "";
-  const oldStdout = (pyodide as any).runPython(`
-import sys
-from io import StringIO
-_buffer = StringIO()
-_old_stdout = sys.stdout
-sys.stdout = _buffer
-  `);
-
   try {
+    // Redirect stdout
+    (pyodide as any).runPython(RUN_WRAPPER);
+
+    // Run user code
     (pyodide as any).runPython(code);
-    const captured = (pyodide as any).runPython(`
-sys.stdout = _old_stdout
-result = _buffer.getvalue()
-result
-    `);
-    output = captured || "";
+
+    // Restore stdout and get output
+    const output = (pyodide as any).runPython(GET_OUTPUT) || "";
     return { output, error: null };
   } catch (e: any) {
-    // Restore stdout even on error
-    try {
-      (pyodide as any).runPython("sys.stdout = _old_stdout");
-    } catch {}
+    // Restore stdout on error too
+    try { (pyodide as any).runPython(RESTORE_STDOUT); } catch {}
     return {
-      output,
+      output: "",
       error: e.message || String(e),
     };
   }
