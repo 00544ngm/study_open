@@ -5,12 +5,14 @@ import { ThemeProvider } from "@/lib/theme";
 import Sidebar from "@/components/Sidebar";
 import Header from "@/components/Header";
 import ReadingProgress from "@/components/ReadingProgress";
+import PwaRegister from "@/components/PwaRegister";
 
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
   title: "AI Agent 学习路线",
   description: "从零开始学习 AI Agent 开发 - 系统化学习路线",
+  manifest: "/manifest.json",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -18,6 +20,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="zh-CN" suppressHydrationWarning>
       <body className={inter.className}>
         <ThemeProvider>
+          <PwaRegister />
           <ReadingProgress />
           <div className="flex min-h-screen">
             <Sidebar />
