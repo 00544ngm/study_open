@@ -1,0 +1,34 @@
+---
+title: AI 代码审查清单
+order: 1
+difficulty: intermediate
+estimated_time: 20min
+tags: [AI编程, Code Review]
+---
+
+## 核心
+
+AI 生成的代码常见问题：
+
+### 1. 幻象 API
+
+```python
+# AI 可能生成不存在的库或方法
+from magic_library import auto_solve  # 这个库不存在！
+```
+
+审查：每次使用前确认包名和 API 签名真实存在。
+
+### 2. 边缘条件遗漏
+
+AI 倾向于只覆盖 happy path。检查：空值、超时、并发、权限不足的情况。
+
+### 3. 过度工程
+
+AI 喜欢"预判未来需求"而增加不必要的抽象。保持 YAGNI 原则。
+
+### 审查流程
+
+```
+AI 输出 → 类型检查 (tsc/mypy) → 单元测试 → 人工审查清单 → 集成测试
+```

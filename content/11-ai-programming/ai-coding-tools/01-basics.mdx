@@ -1,0 +1,31 @@
+---
+title: Claude Code 实战入门
+order: 1
+difficulty: beginner
+estimated_time: 20min
+tags: [AI编程, Claude Code]
+---
+
+## 入门
+
+Claude Code 是一个终端原生的 AI 编程智能体。核心工作流：
+
+```bash
+# 在项目目录启动
+claude
+
+# 用自然语言描述需求
+"给这个 API 端点添加输入验证"
+
+# Claude Code 会自动：
+# 1. 读取相关文件
+# 2. 理解代码结构
+# 3. 做出修改
+# 4. 显示 diff 等待确认
+```
+
+### 核心概念
+
+- **Agent 模式**：自动规划→执行→验证循环
+- **文件编辑**：精确的行级插入/替换
+- **命令执行**：在安全沙箱中运行 shell 命令

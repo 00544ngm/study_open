@@ -1,0 +1,38 @@
+---
+title: SOLID 原则在 AI 编程中的应用
+order: 1
+difficulty: intermediate
+estimated_time: 25min
+tags: [架构, AI编程]
+---
+
+## 核心
+
+AI 生成的代码如果不加引导，容易违反 SOLID 原则。
+
+### 单职责原则
+
+```python
+# ❌ AI 倾向写"全能类"
+class AgentManager:
+    def run(self): ...
+    def save(self): ...
+    def send_email(self): ...
+
+# ✅ 拆解为独立职责
+class AgentExecutor: ...
+class AgentRepository: ...
+class NotificationService: ...
+```
+
+### 告诉 AI 架构约束
+
+在 prompt 中加入架构要求：
+
+```
+遵循依赖倒置原则，通过接口注入依赖
+每个类不超过 200 行
+使用 Repository 模式封装数据访问
+```
+
+AI 编程中，**架构决策是人做的，代码是 AI 写的**。

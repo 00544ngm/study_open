@@ -1,0 +1,48 @@
+---
+title: 子进程管理与流式输出
+order: 1
+difficulty: advanced
+estimated_time: 30min
+tags: [进程管理, Shell, 编程智能体]
+---
+
+## 核心
+
+### 子进程创建
+
+```python
+import subprocess
+
+# 执行命令并实时捕获输出
+process = subprocess.Popen(
+    ["npm", "test"],
+    stdout=subprocess.PIPE,
+    stderr=subprocess.STDOUT,
+    text=True
+)
+
+# 流式读取
+for line in process.stdout:
+    print(f"[test] {line}", end="")
+    # 可以在这里检测特定输出并作出反应
+
+process.wait(timeout=30)
+```
+
+### 超时与信号
+
+```python
+import signal
+
+class TimeoutError(Exception): pass
+
+def run_with_timeout(cmd: list[str], timeout: int = 10):
+    proc = subprocess.Popen(cmd)
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()  # 或 proc.send_signal(signal.SIGTERM)
+        raise TimeoutError(f"Command timed out after {timeout}s")
+```
+
+PTY（伪终端）用于需要交互式输入的命令，是编程智能体执行复杂命令的关键技术。

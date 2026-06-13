@@ -1,0 +1,43 @@
+---
+title: 流式渲染与终端控制
+order: 1
+difficulty: advanced
+estimated_time: 30min
+tags: [UI, 终端, 编程智能体]
+---
+
+## 核心
+
+### SSE 流式传输
+
+```python
+from fastapi import StreamingResponse
+
+async def agent_stream():
+    for chunk in llm_response():
+        yield f"data: {chunk}\n\n"
+    yield "data: [DONE]\n\n"
+
+@app.get("/chat/stream")
+async def stream():
+    return StreamingResponse(agent_stream(),
+                             media_type="text/event-stream")
+```
+
+### 终端中的流式展示
+
+```typescript
+// 逐字符渲染，支持用户中断
+async function streamToTerminal(reader: ReadableStreamDefaultReader) {
+  const decoder = new TextDecoder();
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    process.stdout.write(decoder.decode(value));
+  }
+}
+```
+
+### 多路复用
+
+同时显示 LLM 输出 + 命令执行日志 + 文件修改 diff，互不干扰。这需要设计合理的 UI 分区和输出优先级策略。

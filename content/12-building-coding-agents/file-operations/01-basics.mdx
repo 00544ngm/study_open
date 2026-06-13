@@ -1,0 +1,42 @@
+---
+title: 文件读取与行级编辑
+order: 1
+difficulty: advanced
+estimated_time: 30min
+tags: [文件系统, 编程智能体]
+---
+
+## 核心
+
+AI 编程智能体需要能够精确地读取和修改文件。核心操作包括：
+
+### 文件读取策略
+
+```python
+# 大文件分段读取
+def read_file_lines(path: str, start: int, end: int) -> list[str]:
+    with open(path, "r") as f:
+        return f.readlines()[start:end]
+
+# 智能上下文：只读取相关区域
+def read_context(file: str, target_line: int, context: int = 10):
+    lines = read_file_lines(file, max(0, target_line - context),
+                            target_line + context)
+    return "".join(lines)
+```
+
+### 精确编辑
+
+```python
+# 行级替换
+def edit_lines(path: str, edits: list[tuple[int, str]]):
+    """edits: [(行号, 新内容), ...]"""
+    lines = read_file_lines(path, 0, -1)
+    for lineno, new_content in edits:
+        lines[lineno] = new_content
+    write_file(path, "".join(lines))
+```
+
+### 回退机制
+
+每次编辑前备份文件，编辑失败自动回滚。这是编程智能体安全性的基础。

@@ -1,0 +1,45 @@
+---
+title: 权限分级与审批流
+order: 1
+difficulty: advanced
+estimated_time: 25min
+tags: [安全, 编程智能体]
+---
+
+## 核心
+
+### 危险操作分级
+
+```
+安全等级  | 操作示例              | 策略
+auto      | 读文件、搜索代码      | 自动执行
+confirm   | 写文件、安装包        | 需要用户确认
+reject    | rm -rf /、修改 .env   | 直接拒绝
+```
+
+### 权限检查实现
+
+```python
+class SecurityPolicy:
+    SAFE_PATTERNS = [
+        r"^git (status|diff|log)",
+        r"^npm (test|run build)",
+        r"^cat\s",
+    ]
+    DANGEROUS_PATTERNS = [
+        r"rm -rf",
+        r">\s*/dev/",
+        r"DROP TABLE",
+    ]
+
+    def check(self, command: str) -> str:
+        for pat in self.DANGEROUS_PATTERNS:
+            if re.search(pat, command):
+                return "reject"
+        for pat in self.SAFE_PATTERNS:
+            if re.match(pat, command):
+                return "auto"
+        return "confirm"
+```
+
+每次执行前展示 diff 或命令预览，让用户有机会中断，是安全体系的核心体验。

@@ -1,0 +1,35 @@
+---
+title: 结构化代码 Prompt
+order: 1
+difficulty: intermediate
+estimated_time: 25min
+tags: [AI编程, Prompt]
+---
+
+## 核心
+
+好的代码 Prompt = 上下文 + 精确指令 + 约束条件
+
+### 模板
+
+```
+在 [文件路径] 中，[做什么改动]。
+
+要求：
+- 使用 [具体模式/库]
+- 输入/输出签名：[接口定义]
+- 处理边界情况：[列举]
+- 添加单元测试
+```
+
+### 反例 vs 正例
+
+```
+❌ "给这个函数加错误处理"
+✅ "在 src/api/handler.ts 的 processRequest 函数中，
+    添加 try-catch 包裹 HTTP 调用，
+    捕获 NetworkError 和 TimeoutError，
+    返回 { success: false, error: message } 格式"
+```
+
+AI 编程中，**prompt 越精确，生成质量越高**。

@@ -22,6 +22,8 @@ const GRADIENT_MAP: Record<string, [string, string]> = {
   "from-slate-600 to-slate-800":    ["#475569", "#1e293b"],
   "from-green-500 to-lime-500":     ["#22c55e", "#84cc16"],
   "from-teal-500 to-cyan-600":      ["#14b8a6", "#0891b2"],
+  "from-fuchsia-500 to-pink-500":   ["#d946ef", "#ec4899"],
+  "from-rose-500 to-pink-500":      ["#f43f5e", "#ec4899"],
 };
 
 const DIFFICULTY_COLORS = {

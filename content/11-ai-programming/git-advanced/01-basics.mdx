@@ -1,0 +1,37 @@
+---
+title: AI 协作中的 Git 工作流
+order: 1
+difficulty: intermediate
+estimated_time: 25min
+tags: [Git, AI编程]
+---
+
+## 核心
+
+AI 修改代码按文件维度，这会导致大量的细粒度变更。需要合适的 Git 策略来管理。
+
+### 推荐工作流
+
+```
+feature 分支 (AI 生成)
+    │
+    ├── 提交 1: AI 生成核心逻辑
+    ├── 提交 2: 人工审查 + 修复
+    ├── 提交 3: 添加测试
+    │
+    ├── rebase main（解决冲突）
+    └── squash merge（保持历史干净）
+```
+
+### 关键操作
+
+```bash
+# 审查 AI 的修改
+git diff --cached
+
+# 分块暂存（只接受部分 AI 修改）
+git add -p
+
+# 交互式 rebase 整理 AI 的提交
+git rebase -i HEAD~5
+```

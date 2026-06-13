@@ -1,0 +1,42 @@
+---
+title: 上下文窗口管理策略
+order: 1
+difficulty: advanced
+estimated_time: 35min
+tags: [上下文管理, LLM, 编程智能体]
+---
+
+## 核心
+
+### Token 计数
+
+```python
+def estimate_tokens(text: str) -> int:
+    return len(text) // 3  # 粗略估算
+```
+
+### 滑动窗口
+
+每次对话只保留最近的 N 条消息，将早期的历史摘要化：
+
+```python
+class ContextWindow:
+    def __init__(self, max_tokens: int = 100_000):
+        self.max_tokens = max_tokens
+        self.messages: list[dict] = []
+
+    def add(self, msg: dict):
+        self.messages.append(msg)
+        self._trim()
+
+    def _trim(self):
+        # 超过限制时，丢弃最早的消息
+        while estimate_tokens(str(self.messages)) > self.max_tokens:
+            self.messages.pop(0)
+```
+
+### Prompt Caching
+
+利用 Claude API 的 Prompt Caching 功能，将系统提示和常用上下文缓存起来，降低延迟和成本。
+
+每次交互都重新评估：这个信息这次对话还需要吗？

@@ -1,0 +1,43 @@
+---
+title: 代码搜索引
+order: 1
+difficulty: advanced
+estimated_time: 35min
+tags: [代码搜索, 编程智能体]
+---
+
+## 核心
+
+### 关键词搜索 (ripgrep)
+
+```bash
+# 多行匹配
+rg -U "function\s+\w+\s*\(" src/
+
+# 文件类型过滤
+rg -t py "def agent_" --no-filename
+```
+
+### AST 解析 (Tree-sitter)
+
+比正则更精确的代码理解：
+
+```python
+# 用 Tree-sitter 解析函数定义
+tree = parser.parse(source_bytes)
+query = tree_sitter.Language(lang).query(
+    "(function_definition name: (identifier) @name)"
+)
+captures = query.captures(tree.root_node)
+```
+
+### 代码图谱
+
+建立项目的 import/export 依赖关系图：
+
+```
+agent.py → tool_use.py → api_client.py
+         → memory.py
+```
+
+帮助智能体理解"改这个文件会影响哪些其他文件"。

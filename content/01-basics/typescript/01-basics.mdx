@@ -1,0 +1,44 @@
+---
+title: TypeScript 基础类型
+order: 1
+difficulty: beginner
+estimated_time: 20min
+tags: [TypeScript, 基础]
+---
+
+## 入门
+
+TypeScript 是 JavaScript 的超集，添加了类型系统。AI 编程工具在 TS 下的代码生成质量远高于纯 JS。
+
+```typescript
+// 基础类型
+let name: string = "Agent";
+let version: number = 1.0;
+let isActive: boolean = true;
+```
+
+## 核心
+
+### 接口与类型别名
+
+```typescript
+interface AgentConfig {
+  model: string;
+  temperature: number;
+  tools?: string[];
+}
+
+type Status = "idle" | "running" | "error";
+```
+
+## 进阶
+
+### 泛型在 Agent 开发中的应用
+
+```typescript
+interface ToolResult<T> {
+  success: boolean;
+  data: T;
+  error?: string;
+}
+```

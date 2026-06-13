@@ -1,0 +1,47 @@
+---
+title: Schema 设计与迁移
+order: 1
+difficulty: intermediate
+estimated_time: 25min
+tags: [数据库, PostgreSQL]
+---
+
+## 核心
+
+### 设计原则
+
+```sql
+-- 规范化设计
+CREATE TABLE agents (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT NOT NULL,
+  config JSONB,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE conversations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  agent_id UUID REFERENCES agents(id),
+  messages JSONB[],
+  status TEXT DEFAULT 'active'
+);
+```
+
+### 迁移策略 (Alembic)
+
+```bash
+alembic init migrations
+alembic revision --autogenerate -m "add agents table"
+alembic upgrade head
+```
+
+## 进阶
+
+### 查询优化
+
+```sql
+EXPLAIN ANALYZE SELECT * FROM conversations
+WHERE agent_id = '...' AND status = 'active';
+```
+
+理解索引类型（B-tree、GIN、GiST）和查询计划对 AI 生成的 SQL 进行审查优化。
