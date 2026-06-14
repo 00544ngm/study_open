@@ -1,0 +1,368 @@
+---
+title: 高级网络配置
+order: 2
+difficulty: advanced
+estimated_time: 45min
+tags: [网络, 域名, HTTPS, CDN, 部署]
+---
+
+## 入门
+
+```bash
+# DNS 查询
+nslookup example.com
+dig example.com
+
+# 查看域名解析到的 IP
+host example.com
+```
+
+```bash
+# 测试域名到服务器的连通性
+ping -c 4 yourdomain.com
+curl -sI https://yourdomain.com
+```
+
+## 核心
+
+### 域名解析 DNS
+
+#### 记录类型
+
+| 类型 | 用途 | 示例 |
+|------|------|------|
+| A | 域名指向 IPv4 | `agent.example.com → 114.55.111.133` |
+| AAAA | 域名指向 IPv6 | `agent.example.com → 2408:...` |
+| CNAME | 域名别名 | `www.example.com → example.com` |
+| MX | 邮件交换 | 邮件服务器指向 |
+| TXT | 文本记录 | 域名验证、SPF、DKIM |
+
+#### 配置步骤（以阿里云 DNS 为例）
+
+```
+1. 购买域名（如 example.com）
+2. 进入阿里云控制台 → 域名解析
+3. 添加 A 记录：
+   - 记录类型: A
+   - 主机记录: www / api / @（根域名）
+   - 记录值: 你的服务器公网 IP
+   - TTL: 600（10分钟，调试期可以设小）
+4. 等待生效（通常 1-10 分钟）
+```
+
+#### 验证解析
+
+```bash
+# 确认域名已指向你的服务器
+dig +short www.example.com
+# 应该输出: 114.55.111.133
+
+# 用域名访问服务
+curl -s http://www.example.com:3000
+```
+
+### HTTPS 证书配置
+
+部署到生产环境必须配置 HTTPS，原因：
+
+- 用户数据加密传输
+- 浏览器安全警告（非 HTTPS 页面标记为"不安全"）
+- AI API 调用需要加密传输 API Key
+- 某些浏览器 API（如 navigator.clipboard）要求安全上下文（HTTPS）
+
+#### 方案一：Certbot + Let's Encrypt（推荐）
+
+```bash
+# 安装 Certbot
+apt install -y certbot python3-certbot-nginx
+
+# 获取并自动配置证书
+certbot --nginx -d www.example.com -d api.example.com
+
+# 证书自动续期（Let's Encrypt 有效期 90 天）
+certbot renew --dry-run
+
+# 查看证书状态
+certbot certificates
+```
+
+#### 方案二：Nginx 手动配置 HTTPS
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name www.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/www.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/www.example.com/privkey.pem;
+
+    # 安全配置
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+
+    # HSTS（强制 HTTPS）
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
+    location / {
+        proxy_pass http://localhost:3000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+
+# HTTP → HTTPS 重定向
+server {
+    listen 80;
+    server_name www.example.com;
+    return 301 https://$server_name$request_uri;
+}
+```
+
+#### 方案三：反向代理 Docker + Nginx
+
+```yaml
+# docker-compose.yml
+services:
+  app:
+    image: your-app:latest
+    expose:
+      - "3000"    # 只在 Docker 网络内暴露，不映射到宿主机
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf
+      - ./ssl:/etc/letsencrypt
+    depends_on:
+      - app
+```
+
+### CDN 加速
+
+CDN（Content Delivery Network）将静态资源缓存到全球边缘节点，用户从最近的节点获取内容。
+
+#### 适用场景
+
+| 资源类型 | 是否适合 CDN | 说明 |
+|----------|-------------|------|
+| 图片/视频 | 非常适合 | 体积大，缓存命中率高 |
+| CSS/JS 文件 | 非常适合 | 版本化文件可长期缓存 |
+| API 响应 | 不适合 | 动态内容，需要实时数据 |
+| HTML 页面 | 看情况 | SSG 页面适合，SSR 不适合 |
+| WebSocket | 不适合 | 长连接，CDN 不支持 |
+
+#### 阿里云 CDN 配置
+
+```
+1. 阿里云控制台 → CDN → 添加域名
+2. 加速域名: static.example.com
+3. 源站类型: 你的服务器 IP
+4. 配置缓存规则：
+   - 图片: 30 天
+   - CSS/JS: 1 年（带 hash）
+   - HTML: 不缓存
+5. 将加速域名的 CNAME 指向 CDN 分配的域名
+```
+
+```bash
+# 验证 CDN 是否生效
+curl -sI http://static.example.com/style.css | grep -i x-cache
+# 响应头包含 X-Cache: HIT 说明 CDN 缓存命中
+```
+
+### 负载均衡
+
+多台服务器分担流量，提高可用性。
+
+#### Nginx 负载均衡
+
+```nginx
+upstream agent_backend {
+    # 负载均衡策略
+    least_conn;          # 最少连接（推荐）
+    # ip_hash;           # IP 哈希（会话保持）
+    # random;            # 随机
+
+    server 10.0.0.1:3000 weight=3;   # weight 越高，分配流量越多
+    server 10.0.0.2:3000 weight=2;
+    server 10.0.0.3:3000 backup;     # 备份节点，其他挂了才启用
+}
+
+server {
+    listen 80;
+    server_name api.example.com;
+
+    location / {
+        proxy_pass http://agent_backend;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+```
+
+#### 健康检查
+
+```nginx
+upstream agent_backend {
+    server 10.0.0.1:3000 max_fails=3 fail_timeout=30s;
+    server 10.0.0.2:3000 max_fails=3 fail_timeout=30s;
+}
+```
+
+`max_fails=3` 表示连续失败 3 次后标记为不可用，`fail_timeout=30s` 表示 30 秒后重新尝试。
+
+### Docker 网络模式
+
+| 模式 | 说明 | 适用场景 |
+|------|------|---------|
+| bridge | 默认，容器间通过虚拟网桥通信 | 单机多容器 |
+| host | 容器使用宿主机网络栈，无隔离 | 性能敏感场景 |
+| overlay | 跨主机容器通信 | Swarm/K8s 集群 |
+| macvlan | 容器分配独立 MAC 地址 | 需要直接接入物理网络 |
+
+```bash
+# 创建自定义 bridge 网络（推荐）
+docker network create agent-network
+
+# 容器加入指定网络
+docker run --network agent-network --name api my-api
+docker run --network agent-network --name redis redis:7
+
+# 容器间通过容器名通信
+# api 容器里连接 redis：redis://redis:6379
+```
+
+#### docker-compose 网络
+
+```yaml
+services:
+  api:
+    build: .
+    networks:
+      - app-network
+    ports:
+      - "3000:3000"
+
+  redis:
+    image: redis:7-alpine
+    networks:
+      - app-network
+    # 不需要暴露端口到宿主机
+
+  nginx:
+    image: nginx:alpine
+    networks:
+      - app-network
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - api
+
+networks:
+  app-network:
+    driver: bridge
+```
+
+### 正向代理与反向代理
+
+#### 反向代理（部署常用）
+
+客户端不知道目标服务器的存在，请求由代理服务器转发。
+
+```
+用户 → Nginx（代理）→ 应用服务器
+```
+
+用途：负载均衡、SSL 终止、缓存、日志、安全防护。
+
+#### 正向代理（开发常用）
+
+客户端知道目标服务器，通过代理访问受限资源。
+
+```
+用户 → 代理服务器 → 目标API（如 OpenAI）
+```
+
+```bash
+# 设置 HTTP 代理
+export HTTP_PROXY=http://127.0.0.1:7890
+export HTTPS_PROXY=http://127.0.0.1:7890
+export NO_PROXY=localhost,127.0.0.1,.local
+
+# 测试代理是否生效
+curl -s https://api.openai.com -I
+```
+
+```python
+# Python 中使用代理调用 OpenAI API
+import os
+from openai import OpenAI
+
+client = OpenAI(
+    http_client=httpx.Client(
+        proxies=os.getenv("HTTPS_PROXY")
+    )
+)
+```
+
+### 网络性能优化
+
+#### TCP 参数调优
+
+```bash
+# 查看当前 TCP 参数
+sysctl net.ipv4.tcp_tw_reuse
+sysctl net.core.somaxconn
+
+# 优化参数（写入 /etc/sysctl.conf）
+cat >> /etc/sysctl.conf << 'EOF'
+# 允许 TIME_WAIT 状态的 socket 用于新连接
+net.ipv4.tcp_tw_reuse = 1
+
+# 最大连接队列长度
+net.core.somaxconn = 65535
+
+# TCP 连接队列溢出时自动增长
+net.ipv4.tcp_abort_on_overflow = 0
+
+# 保持时间（检测死连接）
+net.ipv4.tcp_keepalive_time = 300
+
+# 本地端口范围
+net.ipv4.ip_local_port_range = 1024 65535
+EOF
+
+# 立即生效
+sysctl -p
+```
+
+#### 内核参数调整
+
+```bash
+# 查看网络缓冲区大小
+sysctl net.core.rmem_max
+sysctl net.core.wmem_max
+
+# 优化网络缓冲区
+cat >> /etc/sysctl.conf << 'EOF'
+net.core.rmem_max = 16777216
+net.core.wmem_max = 16777216
+net.ipv4.tcp_rmem = 4096 87380 16777216
+net.ipv4.tcp_wmem = 4096 65536 16777216
+EOF
+```
+
+## 练习
+
+1. 在阿里云上注册一个域名，配置 A 记录指向你的服务器 IP，用 `dig` 验证解析
+2. 使用 Certbot 为域名申请 Let's Encrypt 证书，配置 Nginx 实现 HTTPS 访问
+3. 用 docker-compose 部署一个包含 app + nginx（SSL 终止）的完整方案
+4. 在服务器上执行 `sysctl net.ipv4.tcp_tw_reuse` 等参数，记录当前值并尝试优化
+5. 模拟多服务部署：启动 3 个 Nginx 容器作为后端，用另一个 Nginx 做负载均衡
