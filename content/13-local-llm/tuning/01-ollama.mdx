@@ -1,0 +1,61 @@
+---
+title: Ollama 性能调优
+order: 1
+difficulty: intermediate
+estimated_time: 15min
+tags: [Ollama, 调优, GPU]
+---
+
+Ollama 的参数通过**环境变量**设置，在启动 `ollama serve` 之前配好。
+
+## 常用环境变量
+
+| 环境变量 | 作用 | 建议值 |
+|----------|------|--------|
+| `OLLAMA_NUM_PARALLEL` | 并行处理请求数 | `1`（普通用户）；`4`（多用户场景） |
+| `OLLAMA_MAX_LOADED_MODELS` | 同时加载的模型数 | `1` |
+| `OLLAMA_KEEP_ALIVE` | 模型在内存保留时间（秒） | `300`（5分钟）；`-1`（一直保留） |
+| `OLLAMA_DEBUG` | 输出详细日志（含 GPU 信息） | `1`（开启） |
+
+**示例：配置最优性能**
+
+```cmd
+set OLLAMA_NUM_PARALLEL=1
+set OLLAMA_MAX_LOADED_MODELS=1
+set OLLAMA_KEEP_ALIVE=-1
+set OLLAMA_DEBUG=1
+
+:: 然后启动
+ollama serve
+```
+
+## 确认 GPU 是否在工作
+
+```cmd
+set OLLAMA_DEBUG=1
+ollama serve
+```
+
+日志中出现以下内容表示 GPU 正常：
+
+```
+CUDA detected
+ggml_cuda_init: found 1 CUDA devices: Device 0: NVIDIA RTX 4060 Ti
+```
+
+如果只有 CPU 相关日志，没有 `CUDA detected`，说明 GPU 没被识别。
+
+## 性能排查
+
+```cmd
+:: 查看正在运行的模型和资源占用
+ollama ps
+
+:: 测试推理速度
+ollama run deepseek-r1:14b --verbose
+
+:: 输出中会显示速度：
+:: eval rate: 15.32 tokens/s
+```
+
+> Ollama 会自动管理 GPU 层分配，不需要手动设置 `-ngl`。如果速度低于 5 token/s，检查：驱动版本 → CUDA 是否识别 → 是否有其他程序占显存。

@@ -1,0 +1,122 @@
+---
+title: llama.cpp 性能调优
+order: 2
+difficulty: intermediate
+estimated_time: 20min
+tags: [llama.cpp, 调优, GPU]
+---
+
+llama.cpp 通过**命令行参数**精确控制 GPU/CPU 分配。
+
+## 核心参数
+
+| 参数 | 作用 | 建议值 |
+|------|------|--------|
+| `-ngl <N>` | 把 N 层卸载到 GPU，越大 GPU 参与越多 | `-ngl 999`（全部扔 GPU） |
+| `-t <N>` | CPU 线程数 | `-t 8`（或 CPU 核心数） |
+| `-c <N>` | 上下文长度（最大 token 数） | `-c 4096` 或 `-c 8192` |
+| `-b <N>` | 批处理大小，越大 GPU 利用率越高 | `-b 512` |
+| `--mlock` | 锁定内存，防止被交换到磁盘 | 建议加上 |
+
+## 确认 GPU 是否在工作
+
+```cmd
+llama-cli.exe -m models\DeepSeek-R1-Distill-Qwen-14B-Q4_K_M.gguf -ngl 999 -p "你好" -n 10
+```
+
+日志中出现：
+
+```
+llm_load_tensors: offloaded 48/48 layers to GPU
+```
+
+`offloaded 48/48 layers to GPU` = 全部 48 层都在显卡上。如果显示 `offloaded 0/48 layers`，说明 GPU 没生效。
+
+## 实际场景示例
+
+### 场景 1：RTX 4060 Ti 16GB（推荐配置）
+
+```cmd
+:: 全部放 GPU，速度拉满，预计 15-20 token/s
+llama-cli.exe -m models\DeepSeek-R1-Distill-Qwen-14B-Q4_K_M.gguf ^
+  -ngl 999 -t 8 -c 8192 -b 1024 --mlock ^
+  -p "用Python写一个快速排序" -n 512
+```
+
+### 场景 2：RTX 3060 12GB（显存偏紧）
+
+```cmd
+:: 先试试全放 GPU，爆显存就减半
+llama-cli.exe -m models\DeepSeek-R1-Distill-Qwen-14B-Q4_K_M.gguf ^
+  -ngl 999 -c 4096 -b 512 -p "你好" -n 50
+
+:: 如果 OOM（显存溢出），减少到 24 层：
+llama-cli.exe -m models\DeepSeek-R1-Distill-Qwen-14B-Q4_K_M.gguf ^
+  -ngl 24 -t 12 -c 4096 -b 256 -p "你好" -n 50
+```
+
+### 场景 3：只有 CPU / 集显
+
+```cmd
+:: 不设 -ngl，纯 CPU 运算，预计 1-3 token/s
+llama-cli.exe -m models\DeepSeek-R1-Distill-Qwen-14B-Q4_K_M.gguf ^
+  -t 16 -c 2048 -p "你好" -n 256
+```
+
+### 场景 4：服务器模式（长期运行）
+
+```cmd
+:: 后台跑 API 服务，32K 上下文
+llama-server.exe -m models\DeepSeek-R1-Distill-Qwen-14B-Q4_K_M.gguf ^
+  -ngl 999 -c 32768 -b 1024 --mlock ^
+  --port 8080 --host 0.0.0.0
+```
+
+### 场景 5：内存不足（16GB 系统内存）
+
+```cmd
+:: 限制上下文 + 不加 --mlock，减少内存占用
+llama-cli.exe -m models\DeepSeek-R1-Distill-Qwen-14B-Q4_K_M.gguf ^
+  -ngl 999 -c 2048 -b 128 -p "你好" -n 128
+```
+
+## 显存不够怎么办
+
+14B Q4_K_M 模型大约需要 **8-10GB 显存**。如果显卡显存不够：
+
+**方案 1：减少 GPU 层数，让 CPU 分担**
+
+```cmd
+:: 只放 24 层到 GPU（一半），另一半 CPU 算
+llama-cli.exe -m models\DeepSeek-R1-Distill-Qwen-14B-Q4_K_M.gguf -ngl 24 -p "你好"
+```
+
+**方案 2：换更小的量化版本**
+
+```cmd
+:: Q3_K_M 约 6GB，Q2_K 约 4.5GB
+ollama pull deepseek-r1:7b   :: 或者直接用 7B 版本
+```
+
+**方案 3：加 `-b N` 限制 batch 大小**
+
+```cmd
+llama-cli.exe -m models\DeepSeek-R1-Distill-Qwen-14B-Q4_K_M.gguf -ngl 999 -b 256
+```
+
+## 性能监控
+
+运行结束后会输出 tokens/秒：
+
+```
+llama_print_timings:        load time =    1200.45 ms
+llama_print_timings:     sample time =       5.23 ms
+llama_print_timings:  prompt eval time =    3200.12 ms /    10 tokens (  320.01 ms per token)
+llama_print_timings:        eval time =   15000.34 ms /   100 tokens (  150.00 ms per token)
+llama_print_timings:       total time =   18200.57 ms
+```
+
+重点关注：
+- **prompt eval time / token** — 首 token 延迟（越小越好）
+- **eval time / token** — 生成速度（RTX 4060 Ti 通常在 **50-80 ms/token**，即每秒 12-20 token）
+- 如果速度低于 5 token/s，说明 GPU 没跑满，检查 `-ngl` 参数

@@ -1,0 +1,71 @@
+---
+title: Python 与 Git 安装
+order: 2
+difficulty: beginner
+estimated_time: 10min
+tags: [Python, Git, 环境准备]
+---
+
+## 安装 Python
+
+**推荐版本：** Python 3.11.x
+
+### 方式一：winget 安装（推荐）
+
+```cmd
+winget install Python.Python.3.11
+```
+
+### 方式二：手动下载安装
+
+**下载链接：**
+- https://www.python.org/downloads/release/python-31111/
+- 直接下载（64位）：https://www.python.org/ftp/python/3.11.11/python-3.11.11-amd64.exe
+
+**PowerShell 一键下载：**
+
+```powershell
+Invoke-WebRequest -Uri https://www.python.org/ftp/python/3.11.11/python-3.11.11-amd64.exe -OutFile python-3.11.11-amd64.exe
+```
+
+安装时**务必勾选**：
+- ✅ `Add Python to PATH`
+
+**验证：**
+
+```cmd
+python --version
+pip --version
+```
+
+## 安装 Git
+
+### 方式一：winget 安装（推荐）
+
+```cmd
+winget install Git.Git
+```
+
+### 方式二：手动下载安装
+
+**下载链接：**
+- https://git-scm.com/download/win
+- 直接下载（64位）：https://github.com/git-for-windows/git/releases/download/v2.47.1.windows.1/Git-2.47.1-64-bit.exe
+
+**PowerShell 下载：**
+
+```powershell
+Invoke-WebRequest -Uri https://github.com/git-for-windows/git/releases/download/v2.47.1.windows.1/Git-2.47.1-64-bit.exe -OutFile Git-2.47.1-64-bit.exe
+```
+
+**静默安装（不弹窗）：**
+
+```cmd
+Git-2.47.1-64-bit.exe /SILENT
+```
+
+**验证：**
+
+```cmd
+git --version
+```

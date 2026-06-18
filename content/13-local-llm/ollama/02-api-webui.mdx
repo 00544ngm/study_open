@@ -1,0 +1,61 @@
+---
+title: API 模式与 Open WebUI
+order: 2
+difficulty: intermediate
+estimated_time: 20min
+tags: [Ollama, API, Open WebUI, Docker]
+---
+
+## API 模式
+
+启动 API 服务：
+
+```cmd
+ollama serve
+```
+
+**测试 API：**
+
+```cmd
+curl http://localhost:11434/api/tags
+```
+
+返回：
+
+```json
+{
+  "models": []
+}
+```
+
+即可。
+
+## Open WebUI 图形界面
+
+推荐给客户使用图形界面。
+
+```cmd
+mkdir open-webui
+cd open-webui
+```
+
+**Docker 运行命令（需要先安装 Docker Desktop）：**
+
+Docker Desktop 下载：https://www.docker.com/products/docker-desktop/
+
+```cmd
+docker run -d ^
+  -p 3000:8080 ^
+  --add-host=host.docker.internal:host-gateway ^
+  -v open-webui:/app/backend/data ^
+  ghcr.io/open-webui/open-webui:main
+```
+
+**访问：**
+- http://localhost:3000
+
+**PowerShell 版命令（单行）：**
+
+```powershell
+docker run -d -p 3000:8080 --add-host=host.docker.internal:host-gateway -v open-webui:/app/backend/data ghcr.io/open-webui/open-webui:main
+```

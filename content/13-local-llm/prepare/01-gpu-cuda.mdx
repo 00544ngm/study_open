@@ -1,0 +1,53 @@
+---
+title: 显卡检查与 CUDA 驱动
+order: 1
+difficulty: beginner
+estimated_time: 15min
+tags: [GPU, CUDA, NVIDIA, 环境准备]
+---
+
+## 检查显卡
+
+打开 CMD（Win + R → 输入 `cmd` → 回车）：
+
+```cmd
+nvidia-smi
+```
+
+正常会显示：
+
+```
+NVIDIA-SMI 576.xx
+GPU Name
+RTX 4060 Ti
+```
+
+如果报错：
+
+```
+'nvidia-smi' 不是内部命令
+```
+
+说明驱动没装好。
+
+## 安装 CUDA 驱动
+
+**下载链接（官方最新驱动）：**
+- https://www.nvidia.com/Download/index.aspx
+
+**直接下载（适用于 RTX 40 系列笔记本/桌面）：**
+- https://us.download.nvidia.com/Windows/DriverLibrary/Latest/NVIDIA-Setup.exe
+
+**CMD 静默安装命令：**
+
+```cmd
+NVIDIA-Setup.exe -s -n
+```
+
+**验证：**
+
+```cmd
+nvidia-smi
+```
+
+必须成功。

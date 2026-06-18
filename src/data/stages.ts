@@ -222,6 +222,20 @@ export const stages: Stage[] = [
       { id: "projects", title: "实战项目", order: 7, prerequisites: ["12-building-coding-agents/file-operations", "12-building-coding-agents/process-shell"] },
     ],
   },
+  {
+    id: "13-local-llm",
+    number: 13,
+    title: "本地大模型部署",
+    subtitle: "Local LLM",
+    description: "在客户环境中部署本地大模型。从显卡检查到 Ollama/llama.cpp 部署，从 CUDA 加速到性能调优，完整覆盖本地 LLM 部署的全流程。",
+    color: "from-blue-600 to-indigo-600",
+    topics: [
+      { id: "prepare", title: "环境准备", order: 1 },
+      { id: "ollama", title: "Ollama 部署", order: 2, prerequisites: ["13-local-llm/prepare"] },
+      { id: "llamacpp", title: "llama.cpp 部署", order: 3, prerequisites: ["13-local-llm/prepare"] },
+      { id: "tuning", title: "性能调优", order: 4, prerequisites: ["13-local-llm/ollama", "13-local-llm/llamacpp"] },
+    ],
+  },
 ];
 
 export function getStage(slug: string): Stage | undefined {

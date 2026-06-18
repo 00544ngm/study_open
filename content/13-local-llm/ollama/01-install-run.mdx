@@ -1,0 +1,75 @@
+---
+title: 安装 Ollama 与运行模型
+order: 1
+difficulty: beginner
+estimated_time: 30min
+tags: [Ollama, DeepSeek, 模型部署]
+---
+
+## 安装 Ollama
+
+**下载链接：**
+- https://ollama.com/download/windows
+- 直接下载：https://ollama.com/download/OllamaSetup.exe
+
+**PowerShell 一键下载：**
+
+```powershell
+Invoke-WebRequest -Uri https://ollama.com/download/OllamaSetup.exe -OutFile OllamaSetup.exe
+```
+
+**安装完成后验证：**
+
+```cmd
+ollama --version
+```
+
+## 查看 GPU 是否被识别
+
+启动 Ollama 服务：
+
+```cmd
+ollama serve
+```
+
+日志中会出现：
+
+```
+CUDA detected
+```
+
+或者：
+
+```
+using CUDA backend
+```
+
+说明 GPU 可用。
+
+## 下载模型
+
+**推荐（完整版，约 9GB）：**
+
+```cmd
+ollama pull deepseek-r1:14b
+```
+
+**指定量化（更小更快，约 7GB）：**
+
+```cmd
+ollama pull deepseek-r1:14b-q4_K_M
+```
+
+## 启动模型
+
+```cmd
+ollama run deepseek-r1:14b
+```
+
+**测试：**
+
+```
+>>> 你好
+```
+
+输出正常即可。
